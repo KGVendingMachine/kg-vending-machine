@@ -19,6 +19,20 @@ class Settings(BaseSettings):
     POSTGRES_PORT: int = 5432
     POSTGRES_DB: str = "kg_vending"
 
+    BIZINFO_API_KEY: str = ""
+    BIZINFO_API_URL: str = "https://www.bizinfo.go.kr/uss/rss/bizinfoApi.do"
+    BIZINFO_PAGE_SIZE: int = 100
+    BIZINFO_REQUEST_TIMEOUT_SECONDS: int = 15
+    BIZINFO_MAX_RETRIES: int = 3
+
+    KSTARTUP_API_KEY: str = ""
+    KSTARTUP_API_URL: str = (
+        "https://apis.data.go.kr/B552735/kisedKstartupService01/getAnnouncementInformation01"
+    )
+    KSTARTUP_PAGE_SIZE: int = 100
+    KSTARTUP_REQUEST_TIMEOUT_SECONDS: int = 15
+    KSTARTUP_MAX_RETRIES: int = 3
+
     @property
     def DATABASE_URL(self) -> str:
         return (
