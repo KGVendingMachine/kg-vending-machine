@@ -6,6 +6,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    PROJECT_NAME: str = "KG Vending Machine"
+    API_V1_PREFIX: str = "/api/v1"
+    ENVIRONMENT: str = "local"
+    DEBUG: bool = True
+
+    CORS_ORIGINS: list[str] = ["http://localhost:5173"]
+
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "postgres"
     POSTGRES_HOST: str = "localhost"
