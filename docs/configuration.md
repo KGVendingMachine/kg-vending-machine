@@ -15,6 +15,17 @@
 | `POSTGRES_PORT` | `5432` | DB 포트 |
 | `POSTGRES_DB` | `kg_vending` | DB 이름 |
 
+## 예약된 환경변수 (아직 Settings에 미연결)
+
+`backend/.env.example`에는 위 표에 없는 변수도 있다. OCR/크롤링 기능(기업마당·K-Startup API 수집, Naver CLOVA OCR)이 실제로 구현되기 전까지는 이름만 미리 정해둔 상태이며, 지금은 `Settings` 클래스가 이 값을 읽지 않는다.
+
+- `BIZINFO_*` — 기업마당 공고 수집 API
+- `KSTARTUP_*` — K-Startup 공고 수집 API
+- `CLOVA_OCR_*` — Naver CLOVA OCR
+- `STORAGE_ROOT`, `MAX_UPLOAD_SIZE_BYTES`, `PDF_OCR_TEXT_THRESHOLD`, `PPTX_OCR_TEXT_THRESHOLD` — 사업계획서 업로드/OCR 판별 기준
+
+해당 기능을 실제로 구현하는 시점에 담당자가 자신의 모듈(`app/crawler/`, `app/ai/` 등)에 맞는 Settings(또는 별도 설정 클래스)를 만들어 이 값을 읽도록 연결하면 된다.
+
 ## 주의할 점
 
 - **새 프론트엔드 배포 주소가 생기면 `CORS_ORIGINS`에 반드시 추가해야 한다.** 안 그러면 배포된 프론트에서 API 호출 시 브라우저가 차단한다.
