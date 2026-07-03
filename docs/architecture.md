@@ -49,7 +49,7 @@ kg-vending-machine/
 
 | 역할 | 담당자 | 소유 폴더 |
 | --- | --- | --- |
-| Backend | 김동민 | `backend/app/api`, `core`, `db`, `models`, `repositories`, `schemas`, `services`, `utils` |
+| Backend | - | `backend/app/api`, `core`, `db`, `models`, `repositories`, `schemas`, `services`, `utils` |
 | AI | - | `backend/app/ai/` |
 | OCR/크롤링 | - | `backend/app/crawler/` |
 | Frontend | - | `frontend/` 전체 |
