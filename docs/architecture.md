@@ -55,3 +55,19 @@ kg-vending-machine/
 | Frontend | - | `frontend/` 전체 |
 
 AI, OCR/크롤링 담당자의 코드도 하나의 FastAPI 앱(`backend/app`) 안에 모듈로 포함된다. 별도 서비스로 분리하지 않는 이유는, 현재 단계에서는 하나의 백엔드 프로세스 안에서 함수 호출로 연동하는 것이 가장 단순하기 때문이다. 이후 트래픽/배포 구조가 커지면 별도 서비스 분리를 재검토할 수 있다.
+
+## 새 라우터 등록 방법
+
+`app/main.py`는 `app/api/v1/router.py`의 빈 `api_router`를 `/api/v1` prefix로 이미 마운트해뒀다. 새 기능의 라우터를 추가할 때는 `main.py`를 건드리지 않고 `router.py`에만 등록하면 된다.
+
+```python
+# app/api/v1/router.py
+from fastapi import APIRouter
+
+from app.api.v1 import business_plans  # 담당자가 새로 만든 라우터 모듈
+
+api_router = APIRouter()
+api_router.include_router(business_plans.router, prefix="/business-plans", tags=["business-plans"])
+```
+
+이렇게 등록하면 최종 경로는 자동으로 `/api/v1/business-plans/...`가 된다. Swagger 문서(`/docs`)에도 자동으로 반영된다.
