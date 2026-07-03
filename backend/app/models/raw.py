@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -11,7 +11,7 @@ class KstartupRaw(Base):
 
     key: Mapped[str] = mapped_column("Key", String(255), primary_key=True)
     """k_startup ID"""
-    field: Mapped[str | None] = mapped_column("Field", String(255))
+    field: Mapped[str | None] = mapped_column("Field", Text)
     """json 원문"""
     notice_id: Mapped[int] = mapped_column(
         "id", ForeignKey("notice.id"), nullable=False
@@ -26,7 +26,7 @@ class BizinfoRaw(Base):
 
     key: Mapped[str] = mapped_column("Key", String(255), primary_key=True)
     """기업마당ID"""
-    field: Mapped[str | None] = mapped_column("Field", String(255))
+    field: Mapped[str | None] = mapped_column("Field", Text)
     """json 원문"""
     notice_id: Mapped[int] = mapped_column(
         "id", ForeignKey("notice.id"), nullable=False
@@ -41,7 +41,7 @@ class RefinedColumn(Base):
 
     key: Mapped[str] = mapped_column("Key", String(255), primary_key=True)
     """ID"""
-    field: Mapped[str | None] = mapped_column("Field", String(255))
+    field: Mapped[str | None] = mapped_column("Field", Text)
     """json 원문"""
     notice_id: Mapped[int] = mapped_column(
         "id", ForeignKey("notice.id"), nullable=False
