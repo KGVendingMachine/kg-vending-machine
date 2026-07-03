@@ -5,7 +5,7 @@
 | 필드 | 기본값 | 설명 |
 | --- | --- | --- |
 | `PROJECT_NAME` | `KG Vending Machine` | Swagger 문서 제목 등에 사용 |
-| `API_V1_PREFIX` | `/api/v1` | 모든 API 라우터의 공통 prefix |
+| `API_PREFIX` | `/api` | 모든 API 라우터의 공통 prefix. 버전 번호(v1) 없이 도메인명으로 구분한다 |
 | `ENVIRONMENT` | `local` | 실행 환경 구분자 (local/dev/prod 등) |
 | `DEBUG` | `true` | 디버그 모드 여부 |
 | `CORS_ORIGINS` | `["http://localhost:5173"]` | CORS 허용 출처 목록. Frontend 배포 주소가 늘어나면(Vercel 등) 이 목록에 추가해야 한다 |

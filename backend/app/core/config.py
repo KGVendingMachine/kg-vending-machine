@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     PROJECT_NAME: str = "KG Vending Machine"
-    API_V1_PREFIX: str = "/api/v1"
+    API_PREFIX: str = "/api"
     ENVIRONMENT: str = "local"
     DEBUG: bool = True
 
