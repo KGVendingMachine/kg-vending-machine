@@ -1,6 +1,17 @@
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Identity, Integer, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Identity,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -8,6 +19,7 @@ from app.db.base import Base
 
 class Notice(Base):
     __tablename__ = "notice"
+    __table_args__ = (UniqueConstraint("source_id", "external_id"),)
 
     id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
     source_id: Mapped[int] = mapped_column(
