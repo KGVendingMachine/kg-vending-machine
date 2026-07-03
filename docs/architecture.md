@@ -51,7 +51,7 @@ kg-vending-machine/
 | --- | --- | --- |
 | Backend | - | `backend/app/api`, `core`, `db`, `models`, `repositories`, `schemas`, `services`, `utils` |
 | AI | - | `backend/app/ai/` |
-| OCR/크롤링 | - | `backend/app/crawler/` |
+| OCR/크롤링 | 김동민 | `backend/app/crawler/` |
 | Frontend | - | `frontend/` 전체 |
 
 AI, OCR/크롤링 담당자의 코드도 하나의 FastAPI 앱(`backend/app`) 안에 모듈로 포함된다. 별도 서비스로 분리하지 않는 이유는, 현재 단계에서는 하나의 백엔드 프로세스 안에서 함수 호출로 연동하는 것이 가장 단순하기 때문이다. 이후 트래픽/배포 구조가 커지면 별도 서비스 분리를 재검토할 수 있다.
