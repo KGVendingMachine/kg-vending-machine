@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "KG Vending Machine backend (FastAPI)"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.18.5",
     "asyncpg>=0.31.0",
     "fastapi>=0.139.0",
     "pydantic-settings>=2.14.2",
