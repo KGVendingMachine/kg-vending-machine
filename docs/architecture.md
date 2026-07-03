@@ -64,10 +64,12 @@ AI, OCR/크롤링 담당자의 코드도 하나의 FastAPI 앱(`backend/app`) �
 # app/api/v1/router.py
 from fastapi import APIRouter
 
-from app.api.v1 import business_plans  # 담당자가 새로 만든 라우터 모듈
+from app.api.v1 import business_plan  # 담당자가 새로 만든 라우터 모듈
 
 api_router = APIRouter()
-api_router.include_router(business_plans.router, prefix="/business-plans", tags=["business-plans"])
+api_router.include_router(business_plan.router, prefix="/business-plan", tags=["business-plan"])
 ```
 
-이렇게 등록하면 최종 경로는 자동으로 `/api/business-plans/...`가 된다. Swagger 문서(`/docs`)에도 자동으로 반영된다.
+이렇게 등록하면 최종 경로는 자동으로 `/api/business-plan/...`가 된다. Swagger 문서(`/docs`)에도 자동으로 반영된다.
+
+URL 자원명은 **단수형**을 사용한다 (`/api/business-plan`, `/api/company`, `/api/notice`).
