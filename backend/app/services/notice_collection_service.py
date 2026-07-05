@@ -48,7 +48,11 @@ def _derive_status_from_end_date(end_date: date | None) -> tuple[str, bool]:
 
 
 async def collect_bizinfo_notices(session: AsyncSession, page: int = 1) -> int:
-    """기업마당 공고를 한 페이지 수집해 notice/bizinfo_raw에 저장하고 건수를 반환한다."""
+    """기업마당 공고를 한 페이지 수집해 notice/bizinfo_raw에 저장하고 저장된 건수를 반환한다.
+
+    API가 돌려준 개수(len(items))가 아니라, external_id가 없어 skip된
+    항목을 뺀 실제 저장 건수를 반환한다.
+    """
     source = await get_or_create_source(
         session,
         source_name=BIZINFO_SOURCE_NAME,
@@ -57,6 +61,7 @@ async def collect_bizinfo_notices(session: AsyncSession, page: int = 1) -> int:
     )
     items = await fetch_bizinfo_notices(page=page)
 
+    saved_count = 0
     for item in items:
         external_id = item.get("pblancId")
         if not external_id:
@@ -85,13 +90,18 @@ async def collect_bizinfo_notices(session: AsyncSession, page: int = 1) -> int:
             field=json.dumps(item, ensure_ascii=False),
             notice_id=notice_id,
         )
+        saved_count += 1
 
     await session.commit()
-    return len(items)
+    return saved_count
 
 
 async def collect_kstartup_notices(session: AsyncSession, page: int = 1) -> int:
-    """K-Startup 공고를 한 페이지 수집해 notice/kstartup_raw에 저장하고 건수를 반환한다."""
+    """K-Startup 공고를 한 페이지 수집해 notice/kstartup_raw에 저장하고 저장된 건수를 반환한다.
+
+    API가 돌려준 개수(len(items))가 아니라, pbanc_sn이 없어 skip된
+    항목을 뺀 실제 저장 건수를 반환한다.
+    """
     source = await get_or_create_source(
         session,
         source_name=KSTARTUP_SOURCE_NAME,
@@ -100,6 +110,7 @@ async def collect_kstartup_notices(session: AsyncSession, page: int = 1) -> int:
     )
     items = await fetch_kstartup_notices(page=page)
 
+    saved_count = 0
     for item in items:
         pbanc_sn = item.get("pbanc_sn")
         if pbanc_sn is None:
@@ -132,6 +143,7 @@ async def collect_kstartup_notices(session: AsyncSession, page: int = 1) -> int:
             field=json.dumps(item, ensure_ascii=False),
             notice_id=notice_id,
         )
+        saved_count += 1
 
     await session.commit()
-    return len(items)
+    return saved_count
