@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,6 +71,7 @@ async def upsert_notice(
                 "source_url": source_url,
                 "apply_url": apply_url,
                 "summary_text": summary_text,
+                "updated_at": func.now(),
             },
         )
         .returning(Notice.id)
