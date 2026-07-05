@@ -63,6 +63,8 @@ async def collect_bizinfo_notices(session: AsyncSession, page: int = 1) -> int:
 
     saved_count = 0
     for item in items:
+        if not isinstance(item, dict):
+            continue
         external_id = item.get("pblancId")
         if not external_id:
             continue
@@ -112,6 +114,8 @@ async def collect_kstartup_notices(session: AsyncSession, page: int = 1) -> int:
 
     saved_count = 0
     for item in items:
+        if not isinstance(item, dict):
+            continue
         pbanc_sn = item.get("pbanc_sn")
         if pbanc_sn is None:
             continue
