@@ -5,12 +5,12 @@
 | 필드 | 기본값 | 설명 |
 | --- | --- | --- |
 | `PROJECT_NAME` | `KG Vending Machine` | Swagger 문서 제목 등에 사용 |
-| `API_V1_PREFIX` | `/api/v1` | 모든 API 라우터의 공통 prefix |
+| `API_PREFIX` | `/api` | 모든 API 라우터의 공통 prefix. 버전 번호(v1) 없이 도메인명으로 구분한다 |
 | `ENVIRONMENT` | `local` | 실행 환경 구분자 (local/dev/prod 등) |
 | `DEBUG` | `true` | 디버그 모드 여부 |
 | `CORS_ORIGINS` | `["http://localhost:5173"]` | CORS 허용 출처 목록. Frontend 배포 주소가 늘어나면(Vercel 등) 이 목록에 추가해야 한다 |
-| `POSTGRES_USER` | `postgres` | DB 계정 |
-| `POSTGRES_PASSWORD` | `postgres` | DB 비밀번호 |
+| `POSTGRES_USER` | `kg_vending` | DB 계정 |
+| `POSTGRES_PASSWORD` | `1234` | DB 비밀번호 |
 | `POSTGRES_HOST` | `localhost` | DB 호스트 |
 | `POSTGRES_PORT` | `5432` | DB 포트 |
 | `POSTGRES_DB` | `kg_vending` | DB 이름 |
@@ -42,6 +42,7 @@
 ## 주의할 점
 
 - **새 프론트엔드 배포 주소가 생기면 `CORS_ORIGINS`에 반드시 추가해야 한다.** 안 그러면 배포된 프론트에서 API 호출 시 브라우저가 차단한다.
-- 위 기본값은 전부 **로컬 개발용**이다. 실제 배포 환경에서는 `.env`로 덮어써야 하며, 절대 기본값(`postgres`/`postgres`)을 그대로 쓰면 안 된다.
+- 위 기본값은 전부 **로컬 개발용**이다. 실제 배포 환경에서는 `.env`로 덮어써야 하며, 절대 기본값(`kg_vending`/`1234`)을 그대로 쓰면 안 된다.
 - 환경변수 이름은 `.env.example`(14단계에서 작성)과 반드시 동일하게 유지한다.
 - DB 접속 계정을 `postgres`가 아닌 별도 계정(예: `kg_vending`)으로 바꾸는 경우, 그 계정에게 테이블 DML 권한(GRANT)만 주는 것으로는 부족하다. `alembic`으로 `ALTER TABLE`(제약 추가 등)을 실행하려면 **테이블 소유주(owner)**여야 하므로, 기존에 `postgres`로 만들어둔 테이블은 `ALTER TABLE ... OWNER TO kg_vending;`으로 소유권을 넘겨줘야 한다. 안 그러면 `InsufficientPrivilegeError`가 난다.
+- 로컬 PostgreSQL에는 `postgres` 슈퍼유저 계정 외에 `kg_vending` 계정을 별도로 만들어 `kg_vending` DB에 대한 전체 권한을 부여해야 한다 (`CREATE ROLE kg_vending WITH LOGIN PASSWORD '1234';` 후 DB/스키마/테이블/시퀀스 권한 GRANT).
