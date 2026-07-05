@@ -7,14 +7,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     PROJECT_NAME: str = "KG Vending Machine"
-    API_V1_PREFIX: str = "/api/v1"
+    API_PREFIX: str = "/api"
     ENVIRONMENT: str = "local"
     DEBUG: bool = True
 
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]
 
-    POSTGRES_USER: str = "postgres"
-    POSTGRES_PASSWORD: str = "postgres"
+    POSTGRES_USER: str = "kg_vending"
+    POSTGRES_PASSWORD: str = "1234"
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
     POSTGRES_DB: str = "kg_vending"
