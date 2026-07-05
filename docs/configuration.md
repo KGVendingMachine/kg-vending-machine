@@ -44,3 +44,4 @@
 - **새 프론트엔드 배포 주소가 생기면 `CORS_ORIGINS`에 반드시 추가해야 한다.** 안 그러면 배포된 프론트에서 API 호출 시 브라우저가 차단한다.
 - 위 기본값은 전부 **로컬 개발용**이다. 실제 배포 환경에서는 `.env`로 덮어써야 하며, 절대 기본값(`postgres`/`postgres`)을 그대로 쓰면 안 된다.
 - 환경변수 이름은 `.env.example`(14단계에서 작성)과 반드시 동일하게 유지한다.
+- DB 접속 계정을 `postgres`가 아닌 별도 계정(예: `kg_vending`)으로 바꾸는 경우, 그 계정에게 테이블 DML 권한(GRANT)만 주는 것으로는 부족하다. `alembic`으로 `ALTER TABLE`(제약 추가 등)을 실행하려면 **테이블 소유주(owner)**여야 하므로, 기존에 `postgres`로 만들어둔 테이블은 `ALTER TABLE ... OWNER TO kg_vending;`으로 소유권을 넘겨줘야 한다. 안 그러면 `InsufficientPrivilegeError`가 난다.
