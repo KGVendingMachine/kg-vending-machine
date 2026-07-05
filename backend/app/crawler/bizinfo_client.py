@@ -35,7 +35,17 @@ async def fetch_bizinfo_notices(page: int = 1) -> list[dict]:
                 response = await client.get(settings.BIZINFO_API_URL, params=params)
                 response.raise_for_status()
                 payload = response.json()
-                return payload.get("jsonArray", [])
+                # HTTP 200이어도 요청 파라미터가 잘못되면 {"reqErr": "..."}
+                # 같은 오류 응답을 줄 수 있다(실제로 겪음). jsonArray가 없는
+                # 응답을 "공고 0개"로 오인하지 않도록 명시적으로 에러 처리한다.
+                if "jsonArray" not in payload:
+                    raise RuntimeError(f"BizInfo API가 오류를 반환했습니다: {payload}")
+                items = payload["jsonArray"]
+                if not isinstance(items, list):
+                    raise RuntimeError(
+                        f"BizInfo API 응답의 jsonArray가 list가 아닙니다: {type(items).__name__}"
+                    )
+                return items
             except (httpx.HTTPError, ValueError) as exc:
                 last_error = exc
                 if attempt < settings.BIZINFO_MAX_RETRIES:

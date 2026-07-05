@@ -29,7 +29,16 @@ async def fetch_kstartup_notices(page: int = 1) -> list[dict]:
                 response = await client.get(settings.KSTARTUP_API_URL, params=params)
                 response.raise_for_status()
                 payload = response.json()
-                return payload.get("data", [])
+                # HTTP 200이어도 오류 응답을 줄 수 있어, data가 없는 응답을
+                # "공고 0개"로 오인하지 않도록 명시적으로 에러 처리한다.
+                if "data" not in payload:
+                    raise RuntimeError(f"K-Startup API가 오류를 반환했습니다: {payload}")
+                items = payload["data"]
+                if not isinstance(items, list):
+                    raise RuntimeError(
+                        f"K-Startup API 응답의 data가 list가 아닙니다: {type(items).__name__}"
+                    )
+                return items
             except (httpx.HTTPError, ValueError) as exc:
                 last_error = exc
                 if attempt < settings.KSTARTUP_MAX_RETRIES:
