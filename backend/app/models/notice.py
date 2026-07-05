@@ -26,9 +26,7 @@ class Notice(Base):
         ForeignKey("notice_source.id"), nullable=False
     )
     """공고 출처 ID"""
-    organization_id: Mapped[int | None] = mapped_column(
-        ForeignKey("organization.id")
-    )
+    organization_id: Mapped[int | None] = mapped_column(ForeignKey("organization.id"))
     """주관 기관 ID"""
     external_id: Mapped[str | None] = mapped_column(String(100))
     """외부 사이트 원본 ID (pblancId 등)"""

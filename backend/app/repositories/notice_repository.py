@@ -97,7 +97,9 @@ async def upsert_notice(
     return result.scalar_one()
 
 
-async def save_raw(session: AsyncSession, raw_model_cls, key: str, field: str, notice_id: int) -> None:
+async def save_raw(
+    session: AsyncSession, raw_model_cls, key: str, field: str, notice_id: int
+) -> None:
     """원본 API 응답(JSON 문자열)을 raw 테이블에 upsert한다.
 
     BizinfoRaw/KstartupRaw는 실제 DB 컬럼명이 "Key"/"Field"/"id"로,

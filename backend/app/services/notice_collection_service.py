@@ -6,14 +6,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.crawler.bizinfo_client import fetch_bizinfo_notices
 from app.crawler.kstartup_client import fetch_kstartup_notices
 from app.models.raw import BizinfoRaw, KstartupRaw
-from app.repositories.notice_repository import get_or_create_source, save_raw, upsert_notice
+from app.repositories.notice_repository import (
+    get_or_create_source,
+    save_raw,
+    upsert_notice,
+)
 
 BIZINFO_SOURCE_NAME = "기업마당"
 KSTARTUP_SOURCE_NAME = "K-Startup"
 
 
 def _parse_bizinfo_date_range(value: str | None) -> tuple[date | None, date | None]:
-    """"2026-07-27 ~ 2026-07-30" 형식 문자열을 (시작일, 종료일)로 변환한다."""
+    """ "2026-07-27 ~ 2026-07-30" 형식 문자열을 (시작일, 종료일)로 변환한다."""
     if not value or "~" not in value:
         return None, None
     start_raw, end_raw = (part.strip() for part in value.split("~", 1))
@@ -26,7 +30,7 @@ def _parse_bizinfo_date_range(value: str | None) -> tuple[date | None, date | No
 
 
 def _parse_kstartup_date(value: str | None) -> date | None:
-    """"YYYYMMDD" 형식 문자열을 date로 변환한다."""
+    """ "YYYYMMDD" 형식 문자열을 date로 변환한다."""
     if not value:
         return None
     try:
