@@ -100,20 +100,13 @@ async def upsert_notice(
 async def save_raw(
     session: AsyncSession, raw_model_cls, key: str, field: str, notice_id: int
 ) -> None:
-    """원본 API 응답(JSON 문자열)을 raw 테이블에 upsert한다.
-
-    BizinfoRaw/KstartupRaw는 실제 DB 컬럼명이 "Key"/"Field"/"id"로,
-    파이썬 속성명(key/field/notice_id)과 다르게 매핑되어 있다. ORM 클래스로
-    on_conflict_do_update를 만들면 SET절이 속성명 기준으로 잘못 렌더링되므로,
-    실제 컬럼명을 아는 Core Table(__table__)을 직접 사용한다.
-    """
-    table = raw_model_cls.__table__
+    """원본 API 응답(JSON 문자열)을 raw 테이블에 upsert한다."""
     stmt = (
-        pg_insert(table)
-        .values(**{"Key": key, "Field": field, "id": notice_id})
+        pg_insert(raw_model_cls)
+        .values(key=key, field=field, notice_id=notice_id)
         .on_conflict_do_update(
-            index_elements=["Key"],
-            set_={"Field": field, "id": notice_id},
+            index_elements=[raw_model_cls.key],
+            set_={"field": field, "notice_id": notice_id},
         )
     )
     await session.execute(stmt)
