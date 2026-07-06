@@ -7,9 +7,12 @@ from app.crawler.bizinfo_client import fetch_bizinfo_notices
 from app.crawler.kstartup_client import fetch_kstartup_notices
 from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
+    get_or_create_organization,
     get_or_create_source,
     save_raw,
     upsert_notice,
+    upsert_notice_region,
+    upsert_notice_target_type,
 )
 
 BIZINFO_SOURCE_NAME = "기업마당"
@@ -37,6 +40,19 @@ def _parse_kstartup_date(value: str | None) -> date | None:
         return datetime.strptime(value, "%Y%m%d").date()
     except ValueError:
         return None
+
+
+def _region_code_from_name(region_name: str) -> str:
+    """지역명을 region_code로 변환한다.
+
+    K-Startup 응답(supt_regin)은 지역명만 주고 실제 행정표준코드를
+    주지 않는다. "전국"은 모델 주석대로 "ALL"로 매핑하고, 그 외
+    지역은 정식 코드 테이블이 없어 지역명 자체를 임시 코드로 쓴다.
+    정확한 행정표준코드 매핑은 별도 이슈로 남긴다.
+    """
+    if region_name == "전국":
+        return "ALL"
+    return region_name
 
 
 def _derive_status_from_end_date(end_date: date | None) -> tuple[str, bool]:
@@ -76,11 +92,22 @@ async def collect_bizinfo_notices(session: AsyncSession, page: int = 1) -> int:
         start_date, end_date = _parse_bizinfo_date_range(item.get("reqstBeginEndDe"))
         status, is_actionable = _derive_status_from_end_date(end_date)
 
+        organization_id = None
+        organization_name = item.get("jrsdInsttNm")
+        if organization_name:
+            organization = await get_or_create_organization(session, organization_name)
+            organization_id = organization.id
+
         notice_id = await upsert_notice(
             session,
             source_id=source.id,
             external_id=external_id,
             title=item.get("pblancNm"),
+            organization_id=organization_id,
+            # 기업마당 응답에는 재공고/연장공고를 나타내는 필드가 확인되지
+            # 않아 notice_group_key는 비워둔다 (K-Startup의 intg_pbanc_yn과
+            # 달리 별도 이슈로 조사 필요).
+            notice_group_key=None,
             application_start_date=start_date,
             application_end_date=end_date,
             status=status,
@@ -96,6 +123,13 @@ async def collect_bizinfo_notices(session: AsyncSession, page: int = 1) -> int:
             field=json.dumps(item, ensure_ascii=False),
             notice_id=notice_id,
         )
+
+        target_type = item.get("trgetNm")
+        if target_type:
+            await upsert_notice_target_type(session, notice_id, target_type)
+        # 기업마당 응답에서 지원지역을 나타내는 필드가 확인되지 않아
+        # notice_region은 채우지 않는다 (별도 이슈로 조사 필요).
+
         saved_count += 1
 
     await session.commit()
@@ -131,11 +165,26 @@ async def collect_kstartup_notices(session: AsyncSession, page: int = 1) -> int:
         status = "모집중" if is_actionable else "마감"
         apply_url = item.get("biz_aply_url") or item.get("aply_mthd_onli_rcpt_istc")
 
+        organization_id = None
+        organization_name = item.get("sprv_inst")
+        if organization_name:
+            organization = await get_or_create_organization(session, organization_name)
+            organization_id = organization.id
+
+        # intg_pbanc_yn(통합공고여부)이 "Y"면 intg_pbanc_biz_nm(통합공고
+        # 사업명)이 재공고/연장공고를 묶는 상위 이름 역할을 한다. 이 값을
+        # notice_group_key로 써서 같은 통합공고 아래 공고들을 묶는다.
+        notice_group_key = None
+        if item.get("intg_pbanc_yn") == "Y":
+            notice_group_key = item.get("intg_pbanc_biz_nm")
+
         notice_id = await upsert_notice(
             session,
             source_id=source.id,
             external_id=external_id,
             title=item.get("biz_pbanc_nm"),
+            organization_id=organization_id,
+            notice_group_key=notice_group_key,
             application_start_date=start_date,
             application_end_date=end_date,
             status=status,
@@ -151,6 +200,16 @@ async def collect_kstartup_notices(session: AsyncSession, page: int = 1) -> int:
             field=json.dumps(item, ensure_ascii=False),
             notice_id=notice_id,
         )
+
+        target_type = item.get("aply_trgt")
+        if target_type:
+            await upsert_notice_target_type(session, notice_id, target_type)
+
+        region_name = item.get("supt_regin")
+        if region_name:
+            region_code = _region_code_from_name(region_name)
+            await upsert_notice_region(session, notice_id, region_code, region_name)
+
         saved_count += 1
 
     await session.commit()

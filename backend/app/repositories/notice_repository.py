@@ -4,8 +4,9 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.notice import Notice
+from app.models.notice import Notice, NoticeRegion, NoticeTargetType
 from app.models.notice_source import NoticeSource
+from app.models.organization import Organization
 
 
 async def get_or_create_source(
@@ -36,12 +37,38 @@ async def get_or_create_source(
     return await session.get_one(NoticeSource, source_id)
 
 
+async def get_or_create_organization(session: AsyncSession, name: str) -> Organization:
+    """기관명으로 Organization을 찾고, 없으면 새로 만든다.
+
+    get_or_create_source와 동일한 이유로 조회 후 삽입 대신 원자적
+    upsert 패턴을 쓴다.
+    """
+    stmt = (
+        pg_insert(Organization)
+        .values(name=name)
+        .on_conflict_do_nothing(index_elements=[Organization.name])
+        .returning(Organization.id)
+    )
+    result = await session.execute(stmt)
+    org_id = result.scalar_one_or_none()
+
+    if org_id is None:
+        result = await session.execute(
+            select(Organization).where(Organization.name == name)
+        )
+        return result.scalar_one()
+
+    return await session.get_one(Organization, org_id)
+
+
 async def upsert_notice(
     session: AsyncSession,
     *,
     source_id: int,
     external_id: str,
     title: str | None,
+    organization_id: int | None = None,
+    notice_group_key: str | None = None,
     application_start_date: date | None,
     application_end_date: date | None,
     status: str | None,
@@ -69,6 +96,8 @@ async def upsert_notice(
             source_id=source_id,
             external_id=external_id,
             title=title,
+            organization_id=organization_id,
+            notice_group_key=notice_group_key,
             application_start_date=application_start_date,
             application_end_date=application_end_date,
             status=status,
@@ -81,6 +110,8 @@ async def upsert_notice(
             index_elements=[Notice.source_id, Notice.external_id],
             set_={
                 "title": title,
+                "organization_id": organization_id,
+                "notice_group_key": notice_group_key,
                 "application_start_date": application_start_date,
                 "application_end_date": application_end_date,
                 "status": status,
@@ -95,6 +126,38 @@ async def upsert_notice(
     )
     result = await session.execute(stmt)
     return result.scalar_one()
+
+
+async def upsert_notice_target_type(
+    session: AsyncSession, notice_id: int, target_type: str
+) -> None:
+    """공고의 신청대상 유형을 추가한다. 이미 있으면 아무것도 하지 않는다.
+
+    재수집 시 같은 (notice_id, target_type) 조합이 중복으로 쌓이지
+    않도록 notice_target_type의 유니크 제약을 이용한다.
+    """
+    stmt = (
+        pg_insert(NoticeTargetType)
+        .values(notice_id=notice_id, target_type=target_type)
+        .on_conflict_do_nothing(
+            index_elements=[NoticeTargetType.notice_id, NoticeTargetType.target_type]
+        )
+    )
+    await session.execute(stmt)
+
+
+async def upsert_notice_region(
+    session: AsyncSession, notice_id: int, region_code: str, region_name: str | None
+) -> None:
+    """공고의 지원지역을 추가한다. 이미 있으면 아무것도 하지 않는다."""
+    stmt = (
+        pg_insert(NoticeRegion)
+        .values(notice_id=notice_id, region_code=region_code, region_name=region_name)
+        .on_conflict_do_nothing(
+            index_elements=[NoticeRegion.notice_id, NoticeRegion.region_code]
+        )
+    )
+    await session.execute(stmt)
 
 
 async def save_raw(
