@@ -1,0 +1,108 @@
+.page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.card {
+  width: 520px;
+  max-width: 100%;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  padding: 44px;
+}
+
+.heading {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+
+.subheading {
+  font-size: 14px;
+  color: var(--color-muted);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+.formFields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 28px;
+}
+
+.field label {
+  display: block;
+  font-size: 12px;
+  color: var(--color-muted);
+  margin-bottom: 6px;
+}
+
+.field select,
+.field input {
+  height: 42px;
+  width: 100%;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  padding: 0 12px;
+  font-size: 14px;
+  color: var(--color-text);
+  background: #fff;
+}
+
+.fieldRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--color-faint);
+  line-height: 1.6;
+  background: var(--color-bg-subtle);
+  border-radius: 4px;
+  padding: 12px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 32px;
+}
+
+.secondaryButton {
+  height: 46px;
+  padding: 0 22px;
+  border: 1px solid var(--color-border-strong);
+  background: #fff;
+  border-radius: 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.primaryButton {
+  height: 46px;
+  padding: 0 28px;
+  border: none;
+  background: var(--color-primary);
+  border-radius: 4px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+}

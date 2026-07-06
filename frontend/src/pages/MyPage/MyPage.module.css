@@ -1,0 +1,91 @@
+.page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.body {
+  padding: 40px;
+  max-width: 480px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+.profile {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+
+.avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #e9edf2;
+  flex-shrink: 0;
+}
+
+.name {
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.subtext {
+  font-size: 13px;
+  color: var(--color-muted);
+  margin-top: 2px;
+}
+
+.infoList {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+
+.infoRow {
+  display: flex;
+  justify-content: space-between;
+  padding: 14px 16px;
+  font-size: 14px;
+}
+
+.infoRow + .infoRow {
+  border-top: 1px solid var(--color-border);
+}
+
+.infoLabel {
+  color: var(--color-muted);
+}
+
+.infoValue {
+  font-weight: 600;
+}
+
+.editLink {
+  display: block;
+  text-align: center;
+  font-size: 14px;
+  color: var(--color-primary);
+  font-weight: 600;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 12px;
+  width: 100%;
+}
+
+.logoutButton {
+  width: 100%;
+  height: 46px;
+  margin-top: 24px;
+  border: 1px solid var(--color-border-strong);
+  background: #fff;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-muted);
+  cursor: pointer;
+}
