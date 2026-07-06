@@ -6,6 +6,7 @@ export const PATHS = {
   ANALYSIS: '/analysis',
   RESULTS: '/results',
   RESULT_DETAIL: '/results/:noticeId',
+  BOOKMARKS: '/bookmarks',
   MYPAGE: '/mypage',
 } as const
 

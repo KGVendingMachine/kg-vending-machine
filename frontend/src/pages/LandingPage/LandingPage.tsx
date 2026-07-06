@@ -50,8 +50,8 @@ export function LandingPage() {
     <div className={styles.page}>
       <nav className={styles.nav}>
         <div className={styles.logo}>
-          <span className={styles.logoMark}>핏</span>
-          <span className={styles.logoText}>지원핏</span>
+          <span className={styles.logoMark}>K</span>
+          <span className={styles.logoText}>KGVendingMachine</span>
         </div>
         <div className={styles.navLinks}>
           {NAV_LINKS.map((link) => (
@@ -319,12 +319,12 @@ export function LandingPage() {
       </section>
 
       <footer className={styles.footer}>
-        <span className={styles.footerLogo}>지원핏</span>
+        <span className={styles.footerLogo}>KGVendingMachine</span>
         <span className={styles.footerLinks}>
           이용약관 · 개인정보처리방침 · 고객문의
         </span>
         <span className={styles.footerCopyright}>
-          © 2026 지원핏. 공공데이터 기반 정부지원사업 매칭 서비스
+          © 2026 KGVendingMachine. 공공데이터 기반 정부지원사업 매칭 서비스
         </span>
       </footer>
     </div>

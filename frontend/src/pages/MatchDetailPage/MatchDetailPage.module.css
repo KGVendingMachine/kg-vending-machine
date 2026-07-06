@@ -29,6 +29,24 @@
   font-size: 15px;
 }
 
+.bookmarkButton {
+  margin-left: auto;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.bookmarkButton.bookmarked {
+  border-color: #f5a623;
+  color: #f5a623;
+}
+
 .banner {
   padding: 28px 40px;
   border-bottom: 1px solid #eef0f2;
@@ -67,14 +85,11 @@
   color: var(--color-faint);
 }
 
-.diagnosisSummary {
+.summaryOverview {
   font-size: 13px;
-  font-weight: 700;
-  color: var(--color-muted);
-}
-
-.diagnosisSummary span {
-  color: var(--color-primary);
+  color: #374151;
+  line-height: 1.6;
+  margin-bottom: 16px;
 }
 
 .diagnosisGrid {
@@ -83,16 +98,11 @@
   gap: 12px;
 }
 
-.diagnosisCard {
-  border-left: 3px solid var(--color-success);
-  background: var(--color-success-bg);
+.summaryCard {
+  border-left: 3px solid var(--color-primary);
+  background: var(--color-primary-bg);
   border-radius: 0 6px 6px 0;
   padding: 12px 14px;
-}
-
-.diagnosisCard.incomplete {
-  border-left-color: var(--color-warning);
-  background: var(--color-warning-bg);
 }
 
 .diagnosisCardHeader {
@@ -100,16 +110,6 @@
   align-items: center;
   gap: 7px;
   margin-bottom: 5px;
-}
-
-.diagnosisIcon {
-  font-weight: 800;
-  font-size: 12px;
-  color: var(--color-success);
-}
-
-.diagnosisCard.incomplete .diagnosisIcon {
-  color: var(--color-warning);
 }
 
 .diagnosisLabel {

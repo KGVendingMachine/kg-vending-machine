@@ -6,10 +6,14 @@ import styles from './CompanyProfilePage.module.css'
 
 export function CompanyProfilePage() {
   const navigate = useNavigate()
+  const [representativeName, setRepresentativeName] = useState('')
+  const [businessRegistrationNumber, setBusinessRegistrationNumber] = useState('')
   const [industry, setIndustry] = useState('')
   const [region, setRegion] = useState('')
   const [foundedYear, setFoundedYear] = useState('')
   const [companySize, setCompanySize] = useState('')
+  const [employeeCount, setEmployeeCount] = useState('')
+  const [annualRevenue, setAnnualRevenue] = useState('')
 
   function goToUpload() {
     navigate(PATHS.UPLOAD)
@@ -26,6 +30,26 @@ export function CompanyProfilePage() {
           </div>
 
           <div className={styles.formFields}>
+            <div className={styles.fieldRow}>
+              <div className={styles.field}>
+                <label>대표자명</label>
+                <input
+                  value={representativeName}
+                  placeholder="예: 홍길동"
+                  onChange={(event) => setRepresentativeName(event.target.value)}
+                />
+              </div>
+              <div className={styles.field}>
+                <label>사업자등록번호</label>
+                <input
+                  value={businessRegistrationNumber}
+                  placeholder="예: 000-00-00000"
+                  onChange={(event) =>
+                    setBusinessRegistrationNumber(event.target.value)
+                  }
+                />
+              </div>
+            </div>
             <div className={styles.field}>
               <label>업종 / 분야</label>
               <select
@@ -73,6 +97,24 @@ export function CompanyProfilePage() {
                   <option value="중기업">중기업</option>
                   <option value="중견기업">중견기업</option>
                 </select>
+              </div>
+            </div>
+            <div className={styles.fieldRow}>
+              <div className={styles.field}>
+                <label>상시근로자 수</label>
+                <input
+                  value={employeeCount}
+                  placeholder="예: 15"
+                  onChange={(event) => setEmployeeCount(event.target.value)}
+                />
+              </div>
+              <div className={styles.field}>
+                <label>매출액 (억원)</label>
+                <input
+                  value={annualRevenue}
+                  placeholder="예: 12"
+                  onChange={(event) => setAnnualRevenue(event.target.value)}
+                />
               </div>
             </div>
             <div className={styles.hint}>

@@ -1,7 +1,12 @@
 import { AppRoutes } from './routes/AppRoutes'
+import { BookmarkProvider } from './store/BookmarkContext'
 
 function App() {
-  return <AppRoutes />
+  return (
+    <BookmarkProvider>
+      <AppRoutes />
+    </BookmarkProvider>
+  )
 }
 
 export default App

@@ -19,6 +19,11 @@ export interface RequirementCheck {
   status: 'ok' | 'warn'
 }
 
+export interface NoticeSummaryPoint {
+  label: string
+  detail: string
+}
+
 export interface Notice {
   id: string
   category: string
@@ -31,6 +36,8 @@ export interface Notice {
   score: number
   scoreLevel: 'high' | 'medium'
   matchReasonShort: string
+  summary: string
+  summaryPoints: NoticeSummaryPoint[]
   scoreBreakdown: ScoreBreakdownItem[]
   reasons: ReasonItem[]
   requirements: RequirementCheck[]
