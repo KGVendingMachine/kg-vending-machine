@@ -72,5 +72,33 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DELETE FROM category_mapping")
-    op.execute("DELETE FROM kg_category")
+    """이 마이그레이션이 넣은 행만 정확히 지운다.
+
+    DELETE FROM category_mapping/kg_category로 전체를 지우면, 이후
+    다른 사람이 추가한 매핑까지 같이 삭제되는 문제가 있었다.
+    """
+    conn = op.get_bind()
+
+    kg_category = sa.table(
+        "kg_category",
+        sa.column("id", sa.Integer),
+        sa.column("name", sa.Enum(name="category_name")),
+    )
+    category_mapping = sa.table(
+        "category_mapping",
+        sa.column("id", sa.Integer),
+        sa.column("raw_category", sa.String),
+        sa.column("category_id", sa.Integer),
+    )
+
+    all_raw_categories = [raw for raws in CATEGORY_MAPPING.values() for raw in raws]
+    conn.execute(
+        category_mapping.delete().where(
+            category_mapping.c.raw_category.in_(all_raw_categories)
+        )
+    )
+    conn.execute(
+        kg_category.delete().where(
+            kg_category.c.name.in_(list(CATEGORY_MAPPING.keys()))
+        )
+    )
