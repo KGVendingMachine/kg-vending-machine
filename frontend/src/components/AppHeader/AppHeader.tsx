@@ -10,15 +10,12 @@ function tabClassName({ isActive }: { isActive: boolean }): string {
 export function AppHeader() {
   return (
     <header className={styles.header}>
-      <span className={styles.logo}>KGVendingMachine</span>
+      <span className={styles.logo}>지원핏</span>
       <NavLink to={PATHS.UPLOAD} className={tabClassName}>
         새 분석
       </NavLink>
       <NavLink to={PATHS.RESULTS} className={tabClassName}>
         추천 결과
-      </NavLink>
-      <NavLink to={PATHS.BOOKMARKS} className={tabClassName}>
-        북마크
       </NavLink>
       <NavLink to={PATHS.MYPAGE} className={styles.right}>
         <span className={styles.company}>{mockCompany.name}</span>
@@ -27,3 +24,5 @@ export function AppHeader() {
     </header>
   )
 }
+
+
