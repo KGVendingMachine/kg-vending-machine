@@ -10,7 +10,7 @@ class NoticeSource(Base):
     __tablename__ = "notice_source"
 
     id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
-    source_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     """기업마당/K-Startup 등"""
     base_url: Mapped[str | None] = mapped_column(String(255))
     """기본URL"""
