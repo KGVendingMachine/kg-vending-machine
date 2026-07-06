@@ -65,7 +65,7 @@ class NoticeTargetType(Base):
     id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
     notice_id: Mapped[int] = mapped_column(ForeignKey("notice.id"), nullable=False)
     """공고아이디"""
-    target_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(255), nullable=False)
     """청소년/대학생/일반인/대학/기업/창업/소상공인 등"""
 
 

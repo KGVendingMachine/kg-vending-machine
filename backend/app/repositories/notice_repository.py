@@ -133,9 +133,9 @@ async def upsert_notice(
 
 
 async def replace_notice_target_type(
-    session: AsyncSession, notice_id: int, target_type: str | None
+    session: AsyncSession, notice_id: int, target_types: list[str]
 ) -> None:
-    """공고의 신청대상 유형을 최신 값으로 교체한다.
+    """공고의 신청대상 유형들을 최신 값으로 교체한다.
 
     ON CONFLICT DO NOTHING으로 추가만 하면, 공고를 재수집했을 때
     신청대상이 바뀌거나 없어져도 예전 값이 계속 남아있는 문제가 있었다.
@@ -148,19 +148,20 @@ async def replace_notice_target_type(
     await session.execute(
         delete(NoticeTargetType).where(NoticeTargetType.notice_id == notice_id)
     )
-    if target_type:
+    if target_types:
         await session.execute(
-            pg_insert(NoticeTargetType).values(
-                notice_id=notice_id, target_type=target_type
-            )
+            pg_insert(NoticeTargetType),
+            [
+                {"notice_id": notice_id, "target_type": target_type}
+                for target_type in target_types
+            ],
         )
 
 
 async def replace_notice_region(
     session: AsyncSession,
     notice_id: int,
-    region_code: str | None,
-    region_name: str | None,
+    regions: list[tuple[str, str]],
 ) -> None:
     """공고의 지원지역을 최신 값으로 교체한다. (delete를 항상 실행하는 이유는
     replace_notice_target_type과 동일)
@@ -168,11 +169,17 @@ async def replace_notice_region(
     await session.execute(
         delete(NoticeRegion).where(NoticeRegion.notice_id == notice_id)
     )
-    if region_code:
+    if regions:
         await session.execute(
-            pg_insert(NoticeRegion).values(
-                notice_id=notice_id, region_code=region_code, region_name=region_name
-            )
+            pg_insert(NoticeRegion),
+            [
+                {
+                    "notice_id": notice_id,
+                    "region_code": region_code,
+                    "region_name": region_name,
+                }
+                for region_code, region_name in regions
+            ],
         )
 
 

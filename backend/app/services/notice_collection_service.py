@@ -1,5 +1,7 @@
 import json
 import logging
+import re
+from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +22,62 @@ logger = logging.getLogger(__name__)
 
 BIZINFO_SOURCE_NAME = "기업마당"
 KSTARTUP_SOURCE_NAME = "K-Startup"
+
+REGION_CODE_BY_NAME = {
+    "전국": "ALL",
+    "서울": "11",
+    "서울특별시": "11",
+    "부산": "26",
+    "부산광역시": "26",
+    "대구": "27",
+    "대구광역시": "27",
+    "인천": "28",
+    "인천광역시": "28",
+    "광주": "29",
+    "광주광역시": "29",
+    "대전": "30",
+    "대전광역시": "30",
+    "울산": "31",
+    "울산광역시": "31",
+    "세종": "36",
+    "세종특별자치시": "36",
+    "경기": "41",
+    "경기도": "41",
+    "충북": "43",
+    "충청북도": "43",
+    "충남": "44",
+    "충청남도": "44",
+    "전남": "46",
+    "전라남도": "46",
+    "경북": "47",
+    "경상북도": "47",
+    "경남": "48",
+    "경상남도": "48",
+    "제주": "50",
+    "제주특별자치도": "50",
+    "강원": "51",
+    "강원특별자치도": "51",
+    "전북": "52",
+    "전북특별자치도": "52",
+}
+
+
+@dataclass
+class CollectionResult:
+    saved_count: int = 0
+    failed_count: int = 0
+    failed_ids: list[str] = field(default_factory=list)
+
+
+def _split_multi_value(value: str | None) -> list[str]:
+    """API의 쉼표/세미콜론/줄바꿈/파이프 구분 문자열을 중복 없는 값으로 나눈다."""
+    if not value:
+        return []
+    return list(
+        dict.fromkeys(
+            part.strip() for part in re.split(r"[,;|\r\n]+", value) if part.strip()
+        )
+    )
 
 
 def _parse_bizinfo_date_range(value: str | None) -> tuple[date | None, date | None]:
@@ -49,36 +107,46 @@ def _parse_kstartup_date(value: str | None) -> date | None:
         return None
 
 
-def _region_code_from_name(region_name: str) -> str:
-    """지역명을 region_code로 변환한다.
+def _parse_regions(value: str | None) -> list[tuple[str, str]]:
+    """지역명들을 광역자치단체 코드와 이름의 목록으로 변환한다."""
+    regions: list[tuple[str, str]] = []
+    seen_codes: set[str] = set()
+    for region_name in _split_multi_value(value):
+        region_code = REGION_CODE_BY_NAME.get(region_name)
+        if region_code is None:
+            logger.warning("지원지역 코드를 찾지 못했습니다: %r", region_name)
+            continue
+        if region_code in seen_codes:
+            continue
+        seen_codes.add(region_code)
+        regions.append((region_code, region_name))
+    return regions
 
-    K-Startup 응답(supt_regin)은 지역명만 주고 실제 행정표준코드를
-    주지 않는다. "전국"은 모델 주석대로 "ALL"로 매핑하고, 그 외
-    지역은 정식 코드 테이블이 없어 지역명 자체를 임시 코드로 쓴다.
-    정확한 행정표준코드 매핑은 별도 이슈로 남긴다.
-    """
-    if region_name == "전국":
-        return "ALL"
-    return region_name
 
-
-def _derive_status_from_end_date(end_date: date | None) -> tuple[str, bool]:
-    """기업마당 응답에는 모집 상태 플래그가 없어 마감일 기준으로 추정한다.
+def _derive_status_from_dates(
+    start_date: date | None, end_date: date | None
+) -> tuple[str, bool]:
+    """기업마당 모집 상태를 신청 시작일과 종료일 기준으로 추정한다.
 
     실제 상태 플래그가 존재하는지는 COL-002(정규화) 단계에서 원본 raw
     데이터를 보며 다시 검토가 필요할 수 있다. 지금은 수집·적재만 다룬다.
     """
-    if end_date is None:
-        return "확인필요", False
-    is_open = end_date >= date.today()
-    return ("모집중" if is_open else "마감"), is_open
+    today = date.today()
+    if start_date is not None and start_date > today:
+        return "예정", False
+    if end_date is not None and end_date < today:
+        return "마감", False
+    if start_date is not None and end_date is not None:
+        return "모집중", True
+    return "확인필요", False
 
 
-async def collect_bizinfo_notices(session: AsyncSession, page: int = 1) -> int:
-    """기업마당 공고를 한 페이지 수집해 notice/bizinfo_raw에 저장하고 저장된 건수를 반환한다.
+async def collect_bizinfo_notices(
+    session: AsyncSession, page: int = 1
+) -> CollectionResult:
+    """기업마당 공고를 한 페이지 수집하고 성공·실패 결과를 반환한다.
 
-    API가 돌려준 개수(len(items))가 아니라, external_id가 없어 skip된
-    항목을 뺀 실제 저장 건수를 반환한다.
+    external_id가 없어 건너뛴 항목은 성공·실패 건수에서 제외한다.
     """
     source = await get_or_create_source(
         session,
@@ -88,20 +156,21 @@ async def collect_bizinfo_notices(session: AsyncSession, page: int = 1) -> int:
     )
     items = await fetch_bizinfo_notices(page=page)
 
-    saved_count = 0
+    collection_result = CollectionResult()
     for item in items:
         if not isinstance(item, dict):
             continue
-        external_id = item.get("pblancId")
-        if not external_id:
+        pblanc_id = item.get("pblancId")
+        if not pblanc_id:
             continue
+        external_id = str(pblanc_id)
 
         try:
             async with session.begin_nested():
                 start_date, end_date = _parse_bizinfo_date_range(
                     item.get("reqstBeginEndDe")
                 )
-                status, is_actionable = _derive_status_from_end_date(end_date)
+                status, is_actionable = _derive_status_from_dates(start_date, end_date)
 
                 organization_id = None
                 organization_name = item.get("jrsdInsttNm")
@@ -141,26 +210,29 @@ async def collect_bizinfo_notices(session: AsyncSession, page: int = 1) -> int:
                 # 무조건 호출한다. 기업마당은 지원지역 필드가 확인되지
                 # 않아 notice_region은 호출하지 않는다.
                 await replace_notice_target_type(
-                    session, notice_id, item.get("trgetNm")
+                    session, notice_id, _split_multi_value(item.get("trgetNm"))
                 )
         except Exception:
             # 이 항목만 SAVEPOINT 단위로 롤백되고, 나머지 항목 처리와
             # 페이지 전체 커밋은 영향받지 않는다. 컬럼 길이 초과 같은
             # 개별 데이터 문제로 페이지 전체가 날아가는 것을 막기 위함.
             logger.exception("기업마당 공고 저장 실패 (external_id=%s)", external_id)
+            collection_result.failed_count += 1
+            collection_result.failed_ids.append(external_id)
             continue
 
-        saved_count += 1
+        collection_result.saved_count += 1
 
     await session.commit()
-    return saved_count
+    return collection_result
 
 
-async def collect_kstartup_notices(session: AsyncSession, page: int = 1) -> int:
-    """K-Startup 공고를 한 페이지 수집해 notice/kstartup_raw에 저장하고 저장된 건수를 반환한다.
+async def collect_kstartup_notices(
+    session: AsyncSession, page: int = 1
+) -> CollectionResult:
+    """K-Startup 공고를 한 페이지 수집하고 성공·실패 결과를 반환한다.
 
-    API가 돌려준 개수(len(items))가 아니라, pbanc_sn이 없어 skip된
-    항목을 뺀 실제 저장 건수를 반환한다.
+    pbanc_sn이 없어 건너뛴 항목은 성공·실패 건수에서 제외한다.
     """
     source = await get_or_create_source(
         session,
@@ -170,7 +242,7 @@ async def collect_kstartup_notices(session: AsyncSession, page: int = 1) -> int:
     )
     items = await fetch_kstartup_notices(page=page)
 
-    saved_count = 0
+    collection_result = CollectionResult()
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -237,20 +309,18 @@ async def collect_kstartup_notices(session: AsyncSession, page: int = 1) -> int:
                 # delete는 값이 없어도 항상 실행돼야 하므로(예전 값 정리),
                 # 값이 falsy여도 무조건 호출한다.
                 await replace_notice_target_type(
-                    session, notice_id, item.get("aply_trgt")
-                )
-                region_name = item.get("supt_regin")
-                region_code = (
-                    _region_code_from_name(region_name) if region_name else None
+                    session, notice_id, _split_multi_value(item.get("aply_trgt"))
                 )
                 await replace_notice_region(
-                    session, notice_id, region_code, region_name
+                    session, notice_id, _parse_regions(item.get("supt_regin"))
                 )
         except Exception:
             logger.exception("K-Startup 공고 저장 실패 (external_id=%s)", external_id)
+            collection_result.failed_count += 1
+            collection_result.failed_ids.append(external_id)
             continue
 
-        saved_count += 1
+        collection_result.saved_count += 1
 
     await session.commit()
-    return saved_count
+    return collection_result
