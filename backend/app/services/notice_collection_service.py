@@ -9,10 +9,10 @@ from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
     get_or_create_organization,
     get_or_create_source,
+    replace_notice_region,
+    replace_notice_target_type,
     save_raw,
     upsert_notice,
-    upsert_notice_region,
-    upsert_notice_target_type,
 )
 
 BIZINFO_SOURCE_NAME = "기업마당"
@@ -126,7 +126,7 @@ async def collect_bizinfo_notices(session: AsyncSession, page: int = 1) -> int:
 
         target_type = item.get("trgetNm")
         if target_type:
-            await upsert_notice_target_type(session, notice_id, target_type)
+            await replace_notice_target_type(session, notice_id, target_type)
         # 기업마당 응답에서 지원지역을 나타내는 필드가 확인되지 않아
         # notice_region은 채우지 않는다 (별도 이슈로 조사 필요).
 
@@ -155,14 +155,20 @@ async def collect_kstartup_notices(session: AsyncSession, page: int = 1) -> int:
         if not isinstance(item, dict):
             continue
         pbanc_sn = item.get("pbanc_sn")
-        if pbanc_sn is None:
+        if not pbanc_sn:
             continue
         external_id = str(pbanc_sn)
 
         start_date = _parse_kstartup_date(item.get("pbanc_rcpt_bgng_dt"))
         end_date = _parse_kstartup_date(item.get("pbanc_rcpt_end_dt"))
-        is_actionable = item.get("rcrt_prgs_yn") == "Y"
-        status = "모집중" if is_actionable else "마감"
+        rcrt_prgs_yn = item.get("rcrt_prgs_yn")
+        if rcrt_prgs_yn == "Y":
+            status, is_actionable = "모집중", True
+        elif rcrt_prgs_yn == "N":
+            status, is_actionable = "마감", False
+        else:
+            # 값이 없거나 Y/N이 아닌 경우 마감으로 단정하지 않는다.
+            status, is_actionable = "확인필요", False
         apply_url = item.get("biz_aply_url") or item.get("aply_mthd_onli_rcpt_istc")
 
         organization_id = None
@@ -203,12 +209,12 @@ async def collect_kstartup_notices(session: AsyncSession, page: int = 1) -> int:
 
         target_type = item.get("aply_trgt")
         if target_type:
-            await upsert_notice_target_type(session, notice_id, target_type)
+            await replace_notice_target_type(session, notice_id, target_type)
 
         region_name = item.get("supt_regin")
         if region_name:
             region_code = _region_code_from_name(region_name)
-            await upsert_notice_region(session, notice_id, region_code, region_name)
+            await replace_notice_region(session, notice_id, region_code, region_name)
 
         saved_count += 1
 

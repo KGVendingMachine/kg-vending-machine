@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,28 +12,32 @@ from app.models.organization import Organization
 async def get_or_create_source(
     session: AsyncSession, source_name: str, base_url: str, collect_type: str
 ) -> NoticeSource:
-    """공고 출처(기업마당/K-Startup)를 이름 기준으로 찾고, 없으면 새로 만든다.
+    """공고 출처(기업마당/K-Startup)를 이름 기준으로 찾아 upsert한다.
 
     조회 후 삽입(select-then-insert) 방식은 두 수집 작업이 동시에 실행되면
     둘 다 "출처 없음"으로 판단해 같은 출처를 각각 생성하는 경쟁 상태가
     있었다. notice_source.source_name의 유니크 제약을 이용한
-    INSERT ... ON CONFLICT DO NOTHING으로 원자적으로 처리한다.
+    INSERT ... ON CONFLICT로 원자적으로 처리한다.
+
+    DO NOTHING이 아니라 DO UPDATE를 쓰는 이유: DO NOTHING이면 이미 있는
+    출처의 base_url/collect_type이 바뀌어도 호출자가 넘긴 최신 값이
+    무시되고 예전 값이 그대로 남았다.
     """
     stmt = (
         pg_insert(NoticeSource)
         .values(source_name=source_name, base_url=base_url, collect_type=collect_type)
-        .on_conflict_do_nothing(index_elements=[NoticeSource.source_name])
+        .on_conflict_do_update(
+            index_elements=[NoticeSource.source_name],
+            set_={
+                "base_url": base_url,
+                "collect_type": collect_type,
+                "updated_at": func.now(),
+            },
+        )
         .returning(NoticeSource.id)
     )
     result = await session.execute(stmt)
-    source_id = result.scalar_one_or_none()
-
-    if source_id is None:
-        result = await session.execute(
-            select(NoticeSource).where(NoticeSource.source_name == source_name)
-        )
-        return result.scalar_one()
-
+    source_id = result.scalar_one()
     return await session.get_one(NoticeSource, source_id)
 
 
@@ -128,36 +132,35 @@ async def upsert_notice(
     return result.scalar_one()
 
 
-async def upsert_notice_target_type(
+async def replace_notice_target_type(
     session: AsyncSession, notice_id: int, target_type: str
 ) -> None:
-    """공고의 신청대상 유형을 추가한다. 이미 있으면 아무것도 하지 않는다.
+    """공고의 신청대상 유형을 최신 값으로 교체한다.
 
-    재수집 시 같은 (notice_id, target_type) 조합이 중복으로 쌓이지
-    않도록 notice_target_type의 유니크 제약을 이용한다.
+    ON CONFLICT DO NOTHING으로 추가만 하면, 공고를 재수집했을 때
+    신청대상이 바뀌거나 없어져도 예전 값이 계속 남아있는 문제가 있었다.
+    해당 공고의 기존 값을 지우고 이번에 수집한 값으로 다시 넣는다.
     """
-    stmt = (
-        pg_insert(NoticeTargetType)
-        .values(notice_id=notice_id, target_type=target_type)
-        .on_conflict_do_nothing(
-            index_elements=[NoticeTargetType.notice_id, NoticeTargetType.target_type]
-        )
+    await session.execute(
+        delete(NoticeTargetType).where(NoticeTargetType.notice_id == notice_id)
     )
-    await session.execute(stmt)
+    await session.execute(
+        pg_insert(NoticeTargetType).values(notice_id=notice_id, target_type=target_type)
+    )
 
 
-async def upsert_notice_region(
+async def replace_notice_region(
     session: AsyncSession, notice_id: int, region_code: str, region_name: str | None
 ) -> None:
-    """공고의 지원지역을 추가한다. 이미 있으면 아무것도 하지 않는다."""
-    stmt = (
-        pg_insert(NoticeRegion)
-        .values(notice_id=notice_id, region_code=region_code, region_name=region_name)
-        .on_conflict_do_nothing(
-            index_elements=[NoticeRegion.notice_id, NoticeRegion.region_code]
+    """공고의 지원지역을 최신 값으로 교체한다. (이유는 replace_notice_target_type과 동일)"""
+    await session.execute(
+        delete(NoticeRegion).where(NoticeRegion.notice_id == notice_id)
+    )
+    await session.execute(
+        pg_insert(NoticeRegion).values(
+            notice_id=notice_id, region_code=region_code, region_name=region_name
         )
     )
-    await session.execute(stmt)
 
 
 async def save_raw(
