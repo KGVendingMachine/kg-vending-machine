@@ -60,6 +60,7 @@ class Notice(Base):
 
 class NoticeTargetType(Base):
     __tablename__ = "notice_target_type"
+    __table_args__ = (UniqueConstraint("notice_id", "target_type"),)
 
     id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
     notice_id: Mapped[int] = mapped_column(ForeignKey("notice.id"), nullable=False)
@@ -70,6 +71,7 @@ class NoticeTargetType(Base):
 
 class NoticeRegion(Base):
     __tablename__ = "notice_region"
+    __table_args__ = (UniqueConstraint("notice_id", "region_code"),)
 
     id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
     notice_id: Mapped[int] = mapped_column(ForeignKey("notice.id"), nullable=False)
