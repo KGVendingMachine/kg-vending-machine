@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import date, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +16,8 @@ from app.repositories.notice_repository import (
     upsert_notice,
 )
 
+logger = logging.getLogger(__name__)
+
 BIZINFO_SOURCE_NAME = "기업마당"
 KSTARTUP_SOURCE_NAME = "K-Startup"
 
@@ -29,6 +32,9 @@ def _parse_bizinfo_date_range(value: str | None) -> tuple[date | None, date | No
         end = datetime.strptime(end_raw, "%Y-%m-%d").date()
         return start, end
     except ValueError:
+        # 조용히 None을 반환하면 API 응답 형식이 바뀌어도 알아챌 방법이
+        # 없어서, 형식이 안 맞을 때는 경고 로그를 남긴다.
+        logger.warning("기업마당 신청기간 형식을 해석하지 못했습니다: %r", value)
         return None, None
 
 
@@ -39,6 +45,7 @@ def _parse_kstartup_date(value: str | None) -> date | None:
     try:
         return datetime.strptime(value, "%Y%m%d").date()
     except ValueError:
+        logger.warning("K-Startup 날짜 형식을 해석하지 못했습니다: %r", value)
         return None
 
 
@@ -89,46 +96,59 @@ async def collect_bizinfo_notices(session: AsyncSession, page: int = 1) -> int:
         if not external_id:
             continue
 
-        start_date, end_date = _parse_bizinfo_date_range(item.get("reqstBeginEndDe"))
-        status, is_actionable = _derive_status_from_end_date(end_date)
+        try:
+            async with session.begin_nested():
+                start_date, end_date = _parse_bizinfo_date_range(
+                    item.get("reqstBeginEndDe")
+                )
+                status, is_actionable = _derive_status_from_end_date(end_date)
 
-        organization_id = None
-        organization_name = item.get("jrsdInsttNm")
-        if organization_name:
-            organization = await get_or_create_organization(session, organization_name)
-            organization_id = organization.id
+                organization_id = None
+                organization_name = item.get("jrsdInsttNm")
+                if organization_name:
+                    organization = await get_or_create_organization(
+                        session, organization_name
+                    )
+                    organization_id = organization.id
 
-        notice_id = await upsert_notice(
-            session,
-            source_id=source.id,
-            external_id=external_id,
-            title=item.get("pblancNm"),
-            organization_id=organization_id,
-            # 기업마당 응답에는 재공고/연장공고를 나타내는 필드가 확인되지
-            # 않아 notice_group_key는 비워둔다 (K-Startup의 intg_pbanc_yn과
-            # 달리 별도 이슈로 조사 필요).
-            notice_group_key=None,
-            application_start_date=start_date,
-            application_end_date=end_date,
-            status=status,
-            is_actionable=is_actionable,
-            source_url=item.get("pblancUrl"),
-            apply_url=item.get("rceptEngnHmpgUrl"),
-            summary_text=item.get("bsnsSumryCn"),
-        )
-        await save_raw(
-            session,
-            BizinfoRaw,
-            key=external_id,
-            field=json.dumps(item, ensure_ascii=False),
-            notice_id=notice_id,
-        )
-
-        target_type = item.get("trgetNm")
-        if target_type:
-            await replace_notice_target_type(session, notice_id, target_type)
-        # 기업마당 응답에서 지원지역을 나타내는 필드가 확인되지 않아
-        # notice_region은 채우지 않는다 (별도 이슈로 조사 필요).
+                notice_id = await upsert_notice(
+                    session,
+                    source_id=source.id,
+                    external_id=external_id,
+                    title=item.get("pblancNm"),
+                    organization_id=organization_id,
+                    # 기업마당 응답에는 재공고/연장공고를 나타내는 필드가
+                    # 확인되지 않아 notice_group_key는 비워둔다
+                    # (K-Startup의 intg_pbanc_yn과 달리 별도 이슈로 조사 필요).
+                    notice_group_key=None,
+                    application_start_date=start_date,
+                    application_end_date=end_date,
+                    status=status,
+                    is_actionable=is_actionable,
+                    source_url=item.get("pblancUrl"),
+                    apply_url=item.get("rceptEngnHmpgUrl"),
+                    summary_text=item.get("bsnsSumryCn"),
+                )
+                await save_raw(
+                    session,
+                    BizinfoRaw,
+                    key=external_id,
+                    field=json.dumps(item, ensure_ascii=False),
+                    notice_id=notice_id,
+                )
+                # delete는 값이 없어도 항상 실행돼야 하므로(예전 값 정리),
+                # target_type이 falsy여도 replace_notice_target_type을
+                # 무조건 호출한다. 기업마당은 지원지역 필드가 확인되지
+                # 않아 notice_region은 호출하지 않는다.
+                await replace_notice_target_type(
+                    session, notice_id, item.get("trgetNm")
+                )
+        except Exception:
+            # 이 항목만 SAVEPOINT 단위로 롤백되고, 나머지 항목 처리와
+            # 페이지 전체 커밋은 영향받지 않는다. 컬럼 길이 초과 같은
+            # 개별 데이터 문제로 페이지 전체가 날아가는 것을 막기 위함.
+            logger.exception("기업마당 공고 저장 실패 (external_id=%s)", external_id)
+            continue
 
         saved_count += 1
 
@@ -159,62 +179,76 @@ async def collect_kstartup_notices(session: AsyncSession, page: int = 1) -> int:
             continue
         external_id = str(pbanc_sn)
 
-        start_date = _parse_kstartup_date(item.get("pbanc_rcpt_bgng_dt"))
-        end_date = _parse_kstartup_date(item.get("pbanc_rcpt_end_dt"))
-        rcrt_prgs_yn = item.get("rcrt_prgs_yn")
-        if rcrt_prgs_yn == "Y":
-            status, is_actionable = "모집중", True
-        elif rcrt_prgs_yn == "N":
-            status, is_actionable = "마감", False
-        else:
-            # 값이 없거나 Y/N이 아닌 경우 마감으로 단정하지 않는다.
-            status, is_actionable = "확인필요", False
-        apply_url = item.get("biz_aply_url") or item.get("aply_mthd_onli_rcpt_istc")
+        try:
+            async with session.begin_nested():
+                start_date = _parse_kstartup_date(item.get("pbanc_rcpt_bgng_dt"))
+                end_date = _parse_kstartup_date(item.get("pbanc_rcpt_end_dt"))
+                rcrt_prgs_yn = item.get("rcrt_prgs_yn")
+                if rcrt_prgs_yn == "Y":
+                    status, is_actionable = "모집중", True
+                elif rcrt_prgs_yn == "N":
+                    status, is_actionable = "마감", False
+                else:
+                    # 값이 없거나 Y/N이 아닌 경우 마감으로 단정하지 않는다.
+                    status, is_actionable = "확인필요", False
+                apply_url = item.get("biz_aply_url") or item.get(
+                    "aply_mthd_onli_rcpt_istc"
+                )
 
-        organization_id = None
-        organization_name = item.get("sprv_inst")
-        if organization_name:
-            organization = await get_or_create_organization(session, organization_name)
-            organization_id = organization.id
+                organization_id = None
+                organization_name = item.get("sprv_inst")
+                if organization_name:
+                    organization = await get_or_create_organization(
+                        session, organization_name
+                    )
+                    organization_id = organization.id
 
-        # intg_pbanc_yn(통합공고여부)이 "Y"면 intg_pbanc_biz_nm(통합공고
-        # 사업명)이 재공고/연장공고를 묶는 상위 이름 역할을 한다. 이 값을
-        # notice_group_key로 써서 같은 통합공고 아래 공고들을 묶는다.
-        notice_group_key = None
-        if item.get("intg_pbanc_yn") == "Y":
-            notice_group_key = item.get("intg_pbanc_biz_nm")
+                # intg_pbanc_yn(통합공고여부)이 "Y"면 intg_pbanc_biz_nm(통합공고
+                # 사업명)이 재공고/연장공고를 묶는 상위 이름 역할을 한다. 이
+                # 값을 notice_group_key로 써서 같은 통합공고 아래 공고들을
+                # 묶는다.
+                notice_group_key = None
+                if item.get("intg_pbanc_yn") == "Y":
+                    notice_group_key = item.get("intg_pbanc_biz_nm")
 
-        notice_id = await upsert_notice(
-            session,
-            source_id=source.id,
-            external_id=external_id,
-            title=item.get("biz_pbanc_nm"),
-            organization_id=organization_id,
-            notice_group_key=notice_group_key,
-            application_start_date=start_date,
-            application_end_date=end_date,
-            status=status,
-            is_actionable=is_actionable,
-            source_url=item.get("detl_pg_url"),
-            apply_url=apply_url,
-            summary_text=item.get("pbanc_ctnt"),
-        )
-        await save_raw(
-            session,
-            KstartupRaw,
-            key=external_id,
-            field=json.dumps(item, ensure_ascii=False),
-            notice_id=notice_id,
-        )
+                notice_id = await upsert_notice(
+                    session,
+                    source_id=source.id,
+                    external_id=external_id,
+                    title=item.get("biz_pbanc_nm"),
+                    organization_id=organization_id,
+                    notice_group_key=notice_group_key,
+                    application_start_date=start_date,
+                    application_end_date=end_date,
+                    status=status,
+                    is_actionable=is_actionable,
+                    source_url=item.get("detl_pg_url"),
+                    apply_url=apply_url,
+                    summary_text=item.get("pbanc_ctnt"),
+                )
+                await save_raw(
+                    session,
+                    KstartupRaw,
+                    key=external_id,
+                    field=json.dumps(item, ensure_ascii=False),
+                    notice_id=notice_id,
+                )
 
-        target_type = item.get("aply_trgt")
-        if target_type:
-            await replace_notice_target_type(session, notice_id, target_type)
-
-        region_name = item.get("supt_regin")
-        if region_name:
-            region_code = _region_code_from_name(region_name)
-            await replace_notice_region(session, notice_id, region_code, region_name)
+                # delete는 값이 없어도 항상 실행돼야 하므로(예전 값 정리),
+                # 값이 falsy여도 무조건 호출한다.
+                await replace_notice_target_type(
+                    session, notice_id, item.get("aply_trgt")
+                )
+                region_name = item.get("supt_regin")
+                region_code = (
+                    _region_code_from_name(region_name) if region_name else None
+                )
+                await replace_notice_region(
+                    session, notice_id, region_code, region_name
+                )
+        except Exception:
+            logger.exception("K-Startup 공고 저장 실패 (external_id=%s)", external_id)
+            continue
 
         saved_count += 1
 

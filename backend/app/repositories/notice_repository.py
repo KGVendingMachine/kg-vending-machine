@@ -133,34 +133,47 @@ async def upsert_notice(
 
 
 async def replace_notice_target_type(
-    session: AsyncSession, notice_id: int, target_type: str
+    session: AsyncSession, notice_id: int, target_type: str | None
 ) -> None:
     """공고의 신청대상 유형을 최신 값으로 교체한다.
 
     ON CONFLICT DO NOTHING으로 추가만 하면, 공고를 재수집했을 때
     신청대상이 바뀌거나 없어져도 예전 값이 계속 남아있는 문제가 있었다.
     해당 공고의 기존 값을 지우고 이번에 수집한 값으로 다시 넣는다.
+
+    delete는 target_type이 비어 있어도(이번 응답에 값이 없는 경우) 항상
+    실행해야 한다. 호출자가 값이 있을 때만 이 함수를 호출하면, 응답에서
+    값이 사라진 경우 예전 값이 지워지지 않고 그대로 남기 때문이다.
     """
     await session.execute(
         delete(NoticeTargetType).where(NoticeTargetType.notice_id == notice_id)
     )
-    await session.execute(
-        pg_insert(NoticeTargetType).values(notice_id=notice_id, target_type=target_type)
-    )
+    if target_type:
+        await session.execute(
+            pg_insert(NoticeTargetType).values(
+                notice_id=notice_id, target_type=target_type
+            )
+        )
 
 
 async def replace_notice_region(
-    session: AsyncSession, notice_id: int, region_code: str, region_name: str | None
+    session: AsyncSession,
+    notice_id: int,
+    region_code: str | None,
+    region_name: str | None,
 ) -> None:
-    """공고의 지원지역을 최신 값으로 교체한다. (이유는 replace_notice_target_type과 동일)"""
+    """공고의 지원지역을 최신 값으로 교체한다. (delete를 항상 실행하는 이유는
+    replace_notice_target_type과 동일)
+    """
     await session.execute(
         delete(NoticeRegion).where(NoticeRegion.notice_id == notice_id)
     )
-    await session.execute(
-        pg_insert(NoticeRegion).values(
-            notice_id=notice_id, region_code=region_code, region_name=region_name
+    if region_code:
+        await session.execute(
+            pg_insert(NoticeRegion).values(
+                notice_id=notice_id, region_code=region_code, region_name=region_name
+            )
         )
-    )
 
 
 async def save_raw(
