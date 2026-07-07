@@ -8,8 +8,8 @@ export function LoginPage() {
   return (
     <div className={styles.page}>
       <div className={styles.card}>
-        <div className={styles.mark}>핏</div>
-        <div className={styles.title}>지원핏</div>
+        <div className={styles.mark}>K</div>
+        <div className={styles.title}>KGVendingMachine</div>
         <div className={styles.tagline}>
           사업계획서 한 장이면
           <br />

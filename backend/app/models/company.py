@@ -44,6 +44,12 @@ class CompanyProfile(Base):
     """상시근로자 수"""
     annual_revenue: Mapped[int | None] = mapped_column(BigInteger)
     """연매출 (원)"""
+    representative_name: Mapped[str | None] = mapped_column(String(100))
+    """대표자명"""
+    business_registration_number: Mapped[str | None] = mapped_column(String(20))
+    """사업자등록번호"""
+    company_size: Mapped[str | None] = mapped_column(String(20))
+    """기업 규모 (소기업/중기업/중견기업)"""
     is_primary: Mapped[bool] = mapped_column(
         Boolean, server_default=false(), nullable=False
     )

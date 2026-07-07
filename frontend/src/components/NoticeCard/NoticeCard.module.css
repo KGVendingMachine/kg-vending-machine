@@ -16,6 +16,24 @@
   border: 1.5px solid var(--color-primary);
 }
 
+.bookmarkButton {
+  flex-shrink: 0;
+  align-self: flex-start;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--color-faint);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.bookmarkButton.bookmarked {
+  color: #f5a623;
+}
+
 .row {
   display: flex;
   justify-content: space-between;

@@ -14,6 +14,16 @@ export const notices: Notice[] = [
     scoreLevel: 'high',
     matchReasonShort:
       "근거: 제조업·소기업 요건 충족, 계획서의 '설비 자동화' 목표가 사업 취지와 일치",
+    summary:
+      '제조 중소기업의 스마트공장 구축(설비 자동화·데이터 수집 체계)을 지원해 생산성과 품질을 높이는 사업입니다.',
+    summaryPoints: [
+      { label: '지원대상', detail: '제조업을 영위하는 중소기업 (업력 제한 없음)' },
+      { label: '지원내용', detail: '스마트공장 구축비의 최대 70%(자부담 30%) 지원' },
+      { label: '지원한도', detail: '기업당 최대 1.2억원' },
+      { label: '신청기간', detail: '~2025.07.18까지 (D-6)' },
+      { label: '신청방법', detail: '스마트제조혁신추진단 온라인 접수' },
+      { label: '제출서류', detail: '사업계획서, 사업자등록증, 중소기업 확인서' },
+    ],
     scoreBreakdown: [
       {
         label: '분야 적합',
@@ -92,6 +102,16 @@ export const notices: Notice[] = [
     scoreLevel: 'high',
     matchReasonShort:
       '근거: R&D 역량 강화 목표와 부합하나, 기술성 평가 준비가 추가로 필요합니다.',
+    summary:
+      '중소기업의 혁신형 기술개발 과제를 지원해 R&D 역량과 기술경쟁력을 강화하는 사업입니다.',
+    summaryPoints: [
+      { label: '지원대상', detail: '기술혁신형 중소기업 (벤처·이노비즈 우대)' },
+      { label: '지원내용', detail: '신제품·신기술 개발에 필요한 R&D 비용 지원' },
+      { label: '지원한도', detail: '과제당 최대 4억원 (최대 2년)' },
+      { label: '신청기간', detail: '~2025.08.02까지 (D-21)' },
+      { label: '신청방법', detail: '중소기업기술정보진흥원 온라인 접수' },
+      { label: '제출서류', detail: '사업계획서, 기술신용평가서, 사업자등록증' },
+    ],
     scoreBreakdown: [
       {
         label: '분야 적합',
@@ -152,6 +172,16 @@ export const notices: Notice[] = [
     score: 76,
     scoreLevel: 'medium',
     matchReasonShort: '근거: 수출 실적이 아직 없어 초기 단계 항목만 부분 충족합니다.',
+    summary:
+      '중견·중소기업의 해외 마케팅·수출 활동에 필요한 서비스를 바우처 형태로 자유롭게 선택해 지원하는 사업입니다.',
+    summaryPoints: [
+      { label: '지원대상', detail: '수출 실적 무관, 중견·중소기업' },
+      { label: '지원내용', detail: '해외인증·통번역·마케팅 등 수출지원서비스 바우처' },
+      { label: '지원한도', detail: '기업당 최대 1억원 (자부담 30~50%)' },
+      { label: '신청기간', detail: '상시 모집 (예산 소진 시 마감)' },
+      { label: '신청방법', detail: '수출바우처 홈페이지 온라인 접수' },
+      { label: '제출서류', detail: '사업계획서, 사업자등록증, 수출실적증빙(선택)' },
+    ],
     scoreBreakdown: [
       {
         label: '분야 적합',

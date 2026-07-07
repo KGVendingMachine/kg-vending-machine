@@ -1,4 +1,5 @@
 import type { Notice } from '../../types/notice'
+import { useBookmarks } from '../../store/BookmarkContext'
 import styles from './NoticeCard.module.css'
 
 interface NoticeCardProps {
@@ -8,11 +9,21 @@ interface NoticeCardProps {
 }
 
 export function NoticeCard({ notice, selected, onClick }: NoticeCardProps) {
+  const { isBookmarked, toggleBookmark } = useBookmarks()
+  const bookmarked = isBookmarked(notice.id)
+
   return (
-    <button
-      type="button"
+    <div
       className={selected ? `${styles.card} ${styles.selected}` : styles.card}
       onClick={onClick}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onClick()
+        }
+      }}
+      role="button"
+      tabIndex={0}
     >
       <div className={styles.row}>
         <div className={styles.main}>
@@ -43,8 +54,23 @@ export function NoticeCard({ notice, selected, onClick }: NoticeCardProps) {
           </div>
           <div className={styles.scoreLabel}>적합도</div>
         </div>
+        <button
+          type="button"
+          className={
+            bookmarked
+              ? `${styles.bookmarkButton} ${styles.bookmarked}`
+              : styles.bookmarkButton
+          }
+          aria-label={bookmarked ? '북마크 해제' : '북마크 추가'}
+          onClick={(event) => {
+            event.stopPropagation()
+            toggleBookmark(notice.id)
+          }}
+        >
+          {bookmarked ? '★' : '☆'}
+        </button>
       </div>
       {selected ? <div className={styles.reason}>{notice.matchReasonShort}</div> : null}
-    </button>
+    </div>
   )
 }

@@ -1,9 +1,9 @@
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { ScoreGauge } from '../../components/ScoreGauge/ScoreGauge'
-import { businessPlanDiagnosis } from '../../mock/businessPlanDiagnosis'
 import { findNoticeById, notices } from '../../mock/notices'
 import { PATHS } from '../../routes/paths'
+import { useBookmarks } from '../../store/BookmarkContext'
 import styles from './MatchDetailPage.module.css'
 
 const APPLICATION_CHECKLIST = [
@@ -17,15 +17,14 @@ export function MatchDetailPage() {
   const { noticeId } = useParams<{ noticeId: string }>()
   const navigate = useNavigate()
   const notice = noticeId ? findNoticeById(noticeId) : undefined
+  const { isBookmarked, toggleBookmark } = useBookmarks()
 
   if (!notice) {
     return <Navigate to={PATHS.RESULTS} replace />
   }
 
   const otherNotices = notices.filter((item) => item.id !== notice.id)
-  const completeCount = businessPlanDiagnosis.filter(
-    (group) => group.status === 'complete',
-  ).length
+  const bookmarked = isBookmarked(notice.id)
 
   return (
     <div className={styles.page}>
@@ -40,6 +39,18 @@ export function MatchDetailPage() {
           ← 추천 결과
         </button>
         <div className={styles.subnavTitle}>매칭 상세 분석</div>
+        <button
+          type="button"
+          className={
+            bookmarked
+              ? `${styles.bookmarkButton} ${styles.bookmarked}`
+              : styles.bookmarkButton
+          }
+          aria-label={bookmarked ? '북마크 해제' : '북마크 추가'}
+          onClick={() => toggleBookmark(notice.id)}
+        >
+          {bookmarked ? '★ 북마크됨' : '☆ 북마크'}
+        </button>
       </div>
 
       <div className={styles.banner}>
@@ -70,33 +81,20 @@ export function MatchDetailPage() {
       <div className={styles.diagnosis}>
         <div className={styles.diagnosisHeader}>
           <div className={styles.diagnosisHeading}>
-            <span className={styles.diagnosisTitle}>사업계획서 진단</span>
+            <span className={styles.diagnosisTitle}>공고 요약</span>
             <span className={styles.diagnosisSubtitle}>
-              PSST 기준으로 계획서 완성도를 확인했어요
+              공고 원문에서 핵심 내용만 정리했어요
             </span>
           </div>
-          <div className={styles.diagnosisSummary}>
-            <span>{completeCount}</span>/{businessPlanDiagnosis.length}개 항목
-            충족
-          </div>
         </div>
+        <div className={styles.summaryOverview}>{notice.summary}</div>
         <div className={styles.diagnosisGrid}>
-          {businessPlanDiagnosis.map((group) => (
-            <div
-              className={
-                group.status === 'incomplete'
-                  ? `${styles.diagnosisCard} ${styles.incomplete}`
-                  : styles.diagnosisCard
-              }
-              key={group.key}
-            >
+          {notice.summaryPoints.map((point) => (
+            <div className={styles.summaryCard} key={point.label}>
               <div className={styles.diagnosisCardHeader}>
-                <span className={styles.diagnosisIcon}>
-                  {group.status === 'complete' ? '✓' : '!'}
-                </span>
-                <span className={styles.diagnosisLabel}>{group.label}</span>
+                <span className={styles.diagnosisLabel}>{point.label}</span>
               </div>
-              <div className={styles.diagnosisMessage}>{group.message}</div>
+              <div className={styles.diagnosisMessage}>{point.detail}</div>
             </div>
           ))}
         </div>
