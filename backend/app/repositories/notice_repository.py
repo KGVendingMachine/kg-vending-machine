@@ -250,9 +250,12 @@ async def save_attachment(
 ) -> None:
     """공고 첨부파일 메타데이터(URL/파일명)를 notice_attachment에 upsert한다.
 
-    parsed_text(OCR 결과)는 여기서 채우지 않는다 — 전체 공고를 다 OCR하면
-    비용이 커서, 매칭 후보로 좁혀진 공고만 그때 필요할 때 별도로 채운다
-    (docs/matching-pipeline.md 4단계 참고).
+    DO NOTHING을 쓰면 재수집 시 원본 파일명이 바뀌어도 예전 값이 그대로
+    남는다 (get_or_create_source에서 이미 겪은 것과 같은 문제라
+    DO UPDATE로 처리). 단, parsed_text(OCR 결과)는 SET 대상에서 빼서,
+    이미 OCR을 돌려둔 첨부파일의 결과가 재수집 때 지워지지 않게 한다
+    (전체 공고를 다 OCR하면 비용이 커서, 매칭 후보로 좁혀진 공고만
+    그때 필요할 때 별도로 채우는 구조 — docs/matching-pipeline.md 4단계).
     """
     stmt = (
         pg_insert(NoticeAttachment)
@@ -262,8 +265,9 @@ async def save_attachment(
             file_url=file_url,
             file_type=file_type,
         )
-        .on_conflict_do_nothing(
-            index_elements=[NoticeAttachment.notice_id, NoticeAttachment.file_url]
+        .on_conflict_do_update(
+            index_elements=[NoticeAttachment.notice_id, NoticeAttachment.file_url],
+            set_={"file_name": file_name, "file_type": file_type},
         )
     )
     await session.execute(stmt)
