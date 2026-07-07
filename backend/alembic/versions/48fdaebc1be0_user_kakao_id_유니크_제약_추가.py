@@ -1,7 +1,7 @@
 """user kakao_id 유니크 제약 추가
 
 Revision ID: 48fdaebc1be0
-Revises: 8d3fb3c72989
+Revises: f42111cd547f
 Create Date: 2026-07-06 18:46:47.530298
 
 """
@@ -12,7 +12,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "48fdaebc1be0"
-down_revision: Union[str, Sequence[str], None] = "8d3fb3c72989"
+down_revision: Union[str, Sequence[str], None] = "f42111cd547f"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
