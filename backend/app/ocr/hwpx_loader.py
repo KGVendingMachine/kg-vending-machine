@@ -1,9 +1,18 @@
+import re
 import zipfile
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
+
+_SECTION_NUMBER_RE = re.compile(r"section(\d+)\.xml$")
+
+
+def _section_number(name: str) -> int:
+    match = _SECTION_NUMBER_RE.search(name)
+    return int(match.group(1)) if match else 0
+
 
 _IMAGE_EXTENSIONS = (".bmp", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff")
 
@@ -43,10 +52,16 @@ class HWPXLoader(BaseLoader):
         try:
             with zipfile.ZipFile(self.file_path, "r") as zf:
                 # HWPX 내부 본문 XML 파일 목록 (Contents/section0.xml, section1.xml ...)
+                # 문자열로 그냥 정렬하면 section10.xml이 section2.xml보다
+                # 앞에 와서 섹션이 10개 넘는 문서는 본문 순서가 뒤섞인다
+                # (실제로 재현해서 확인함) — 번호를 뽑아 숫자로 정렬한다.
                 section_files = sorted(
-                    name
-                    for name in zf.namelist()
-                    if name.startswith("Contents/section") and name.endswith(".xml")
+                    (
+                        name
+                        for name in zf.namelist()
+                        if name.startswith("Contents/section") and name.endswith(".xml")
+                    ),
+                    key=_section_number,
                 )
 
                 for section_file in section_files:
