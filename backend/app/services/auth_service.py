@@ -41,7 +41,7 @@ async def login_with_kakao(session: AsyncSession, code: str) -> dict[str, str]:
     await session.commit()
 
     return {
-        "access_token": create_access_token(user.id),
+        "access_token": create_access_token(user.id, role=user.role),
         "refresh_token": create_refresh_token(user.id),
         "token_type": "bearer",
     }

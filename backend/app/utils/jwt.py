@@ -16,7 +16,12 @@ ACCESS_TOKEN_TYPE = "access"
 REFRESH_TOKEN_TYPE = "refresh"
 
 
-def _create_token(subject: str, expires_delta: timedelta, token_type: str) -> str:
+def _create_token(
+    subject: str,
+    expires_delta: timedelta,
+    token_type: str,
+    extra_claims: dict | None = None,
+) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": subject,
@@ -24,15 +29,24 @@ def _create_token(subject: str, expires_delta: timedelta, token_type: str) -> st
         "iat": now,
         "exp": now + expires_delta,
     }
+    if extra_claims:
+        payload.update(extra_claims)
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
-def create_access_token(subject: str | int) -> str:
-    """subject(보통 user.id)를 담은 access token을 발급한다."""
+def create_access_token(subject: str | int, role: str | None = None) -> str:
+    """subject(보통 user.id)와 역할(role)을 담은 access token을 발급한다.
+
+    role은 인가(권한) 판단에 쓰려고 클레임에 실어둔다. 매 요청마다 DB를
+    다시 조회하지 않고 토큰만으로 역할을 알 수 있다(대신 역할이 바뀌면
+    새 토큰을 받기 전까지는 이전 역할이 유지된다).
+    """
+    extra = {"role": role} if role is not None else None
     return _create_token(
         str(subject),
         timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES),
         ACCESS_TOKEN_TYPE,
+        extra,
     )
 
 
