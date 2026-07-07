@@ -33,6 +33,7 @@ from app.utils.jwt import ACCESS_TOKEN_TYPE, decode_token
 bearer_scheme = HTTPBearer()
 
 ADMIN_ROLE = "ADMIN"
+ACTIVE_STATUS = "ACTIVE"
 
 
 async def get_current_user(
@@ -42,7 +43,8 @@ async def get_current_user(
     """access token을 검증하고 해당 유저를 반환한다.
 
     토큰이 없거나(문지기 단계) 서명·만료가 잘못됐거나, refresh 토큰을
-    잘못 보냈거나, 유저가 존재하지 않으면 401.
+    잘못 보냈거나, 유저가 존재하지 않으면 401. 유저는 있지만 탈퇴/차단
+    (status != ACTIVE) 상태면 403 — 유효한 토큰을 들고 있어도 접근을 막는다.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -66,6 +68,13 @@ async def get_current_user(
     user = await get_by_id(session, int(subject))
     if user is None:
         raise credentials_exception
+
+    # 탈퇴(WITHDRAWN)·차단(BLOCKED) 계정은 유효한 토큰이 있어도 막는다.
+    if user.status != ACTIVE_STATUS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="비활성화된 계정입니다",
+        )
     return user
 
 

@@ -22,6 +22,13 @@ class RefreshTokenError(Exception):
     """refresh token이 유효하지 않을 때. 라우터에서 401로 변환한다."""
 
 
+class InactiveAccountError(Exception):
+    """탈퇴(WITHDRAWN)·차단(BLOCKED) 계정. 라우터에서 403으로 변환한다."""
+
+
+ACTIVE_STATUS = "ACTIVE"
+
+
 def _extract_profile(user_info: dict) -> dict:
     """카카오 사용자 정보 응답에서 우리가 저장할 필드만 뽑아낸다.
 
@@ -48,6 +55,10 @@ async def login_with_kakao(session: AsyncSession, code: str) -> dict[str, str]:
     fields = _extract_profile(user_info)
 
     user = await upsert_on_login(session, **fields)
+    # 탈퇴/차단 계정은 로그인 자체를 거부한다. commit 전에 막아 프로필/
+    # last_login 갱신도 롤백되게 한다.
+    if user.status != ACTIVE_STATUS:
+        raise InactiveAccountError("비활성화된 계정입니다")
     await session.commit()
 
     return {
@@ -82,6 +93,8 @@ async def refresh_access_token(
     user = await get_by_id(session, int(subject))
     if user is None:
         raise RefreshTokenError("사용자를 찾을 수 없습니다")
+    if user.status != ACTIVE_STATUS:
+        raise InactiveAccountError("비활성화된 계정입니다")
 
     return {
         "access_token": create_access_token(user.id, role=user.role),

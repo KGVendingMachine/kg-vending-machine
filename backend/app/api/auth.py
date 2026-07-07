@@ -14,6 +14,7 @@ from app.schemas.auth import (
     TokenResponse,
 )
 from app.services.auth_service import (
+    InactiveAccountError,
     RefreshTokenError,
     login_with_kakao,
     refresh_access_token,
@@ -35,6 +36,10 @@ async def kakao_login(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
         ) from exc
+    except InactiveAccountError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        ) from exc
     return TokenResponse(**tokens)
 
 
@@ -49,5 +54,9 @@ async def refresh(
     except RefreshTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
+        ) from exc
+    except InactiveAccountError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
         ) from exc
     return AccessTokenResponse(**result)
