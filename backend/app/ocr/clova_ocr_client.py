@@ -111,6 +111,8 @@ def _fields_to_text(fields: list[dict]) -> str:
     """
     parts = []
     for field in fields:
-        parts.append(field.get("inferText", ""))
+        # get(..., "")은 키가 아예 없을 때만 기본값을 쓰므로, "inferText": null처럼
+        # 키는 있고 값이 None인 경우까지 막으려면 or ""로 한 번 더 감싸야 한다.
+        parts.append(field.get("inferText") or "")
         parts.append("\n" if field.get("lineBreak") else " ")
     return "".join(parts).strip()
