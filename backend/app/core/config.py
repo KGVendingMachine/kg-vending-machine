@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     KSTARTUP_REQUEST_TIMEOUT_SECONDS: int = 15
     KSTARTUP_MAX_RETRIES: int = 3
 
+    CLOVA_OCR_INVOKE_URL: str = ""
+    CLOVA_OCR_SECRET_KEY: str = ""
+    CLOVA_OCR_TIMEOUT_SECONDS: int = 30
+    CLOVA_OCR_MAX_RETRIES: int = 3
+    CLOVA_OCR_LANGUAGE: str = "ko"
+
     @property
     def DATABASE_URL(self) -> str:
         return (
