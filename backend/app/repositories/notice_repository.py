@@ -4,7 +4,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.notice import Notice, NoticeRegion, NoticeTargetType
+from app.models.notice import Notice, NoticeAttachment, NoticeRegion, NoticeTargetType
 from app.models.notice_source import NoticeSource
 from app.models.organization import Organization
 from app.models.raw import BizinfoRaw, KstartupRaw
@@ -219,6 +219,9 @@ async def delete_notice(session: AsyncSession, notice_id: int) -> None:
     )
     await session.execute(delete(BizinfoRaw).where(BizinfoRaw.notice_id == notice_id))
     await session.execute(delete(KstartupRaw).where(KstartupRaw.notice_id == notice_id))
+    await session.execute(
+        delete(NoticeAttachment).where(NoticeAttachment.notice_id == notice_id)
+    )
     await session.execute(delete(Notice).where(Notice.id == notice_id))
 
 
@@ -232,6 +235,34 @@ async def save_raw(
         .on_conflict_do_update(
             index_elements=[raw_model_cls.key],
             set_={"field": field, "notice_id": notice_id},
+        )
+    )
+    await session.execute(stmt)
+
+
+async def save_attachment(
+    session: AsyncSession,
+    notice_id: int,
+    file_name: str | None,
+    file_url: str,
+    file_type: str | None,
+) -> None:
+    """공고 첨부파일 메타데이터(URL/파일명)를 notice_attachment에 upsert한다.
+
+    parsed_text(OCR 결과)는 여기서 채우지 않는다 — 전체 공고를 다 OCR하면
+    비용이 커서, 매칭 후보로 좁혀진 공고만 그때 필요할 때 별도로 채운다
+    (docs/matching-pipeline.md 4단계 참고).
+    """
+    stmt = (
+        pg_insert(NoticeAttachment)
+        .values(
+            notice_id=notice_id,
+            file_name=file_name,
+            file_url=file_url,
+            file_type=file_type,
+        )
+        .on_conflict_do_nothing(
+            index_elements=[NoticeAttachment.notice_id, NoticeAttachment.file_url]
         )
     )
     await session.execute(stmt)
