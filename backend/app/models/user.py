@@ -20,7 +20,8 @@ class User(Base):
         String(20), server_default="ACTIVE", nullable=False
     )
     """ACTIVE/WITHDRAWN/BLOCKED"""
-    role: Mapped[str | None] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20), server_default="USER", nullable=False)
+    """USER/ADMIN"""
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
     """최종로그인일시"""
     created_at: Mapped[datetime] = mapped_column(
