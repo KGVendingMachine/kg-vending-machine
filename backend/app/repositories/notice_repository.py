@@ -1,9 +1,10 @@
 from datetime import date
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.category import CategoryMapping
 from app.models.notice import Notice, NoticeAttachment, NoticeRegion, NoticeTargetType
 from app.models.notice_source import NoticeSource
 from app.models.organization import Organization
@@ -266,3 +267,23 @@ async def save_attachment(
         )
     )
     await session.execute(stmt)
+
+
+async def get_category_mapping(session: AsyncSession) -> dict[str, int]:
+    """원본 카테고리 키(예: "BIZINFO:금융") → kg_category.id 딕셔너리를 반환한다.
+
+    (docs/notice-category-mapping.md, alembic 0756e6c105fe 시드 데이터 참고)
+    """
+    result = await session.execute(
+        select(CategoryMapping.raw_category, CategoryMapping.category_id)
+    )
+    return dict(result.all())
+
+
+async def set_notice_category(
+    session: AsyncSession, notice_id: int, category_id: int
+) -> None:
+    """공고의 통합 카테고리를 지정한다."""
+    await session.execute(
+        update(Notice).where(Notice.id == notice_id).values(category_id=category_id)
+    )
