@@ -12,6 +12,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -28,6 +29,8 @@ class Notice(Base):
     """공고 출처 ID"""
     organization_id: Mapped[int | None] = mapped_column(ForeignKey("organization.id"))
     """주관 기관 ID"""
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("kg_category.id"))
+    """kg밴딩머신용카테고리 (공고당 1개로 고정)"""
     external_id: Mapped[str | None] = mapped_column(String(100))
     """외부 사이트 원본 ID (pblancId 등)"""
     notice_group_key: Mapped[str | None] = mapped_column(String(100))
@@ -50,6 +53,10 @@ class Notice(Base):
     """신청 페이지 URL (구글폼 로그인 리다이렉트 등 500자 넘는 URL이 실제로 있어 Text로 둠)"""
     summary_text: Mapped[str | None] = mapped_column(Text)
     """요약내용"""
+    amount_label: Mapped[str | None] = mapped_column(String(100))
+    """지원금액 표시용 라벨 (예: "최대 1.2억원")"""
+    summary_points_json: Mapped[list | None] = mapped_column(JSONB)
+    """공고 요약 구조화 항목 (지원대상/지원내용/지원한도/신청기간/신청방법/제출서류 등)"""
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

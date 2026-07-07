@@ -1,0 +1,180 @@
+.page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.body {
+  padding: 48px 60px;
+  max-width: 1000px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+.heading {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+
+.subheading {
+  font-size: 14px;
+  color: var(--color-muted);
+  margin-top: 6px;
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  margin-top: 44px;
+}
+
+.step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 140px;
+  flex-shrink: 0;
+}
+
+.circle {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+}
+
+.circle.done {
+  background: var(--color-success);
+  color: #fff;
+}
+
+.circle.active {
+  border: 3px solid var(--color-primary);
+  border-top-color: transparent;
+  animation: spin 0.9s linear infinite;
+}
+
+.circle.pending {
+  border: 2px solid var(--color-border-strong);
+  color: #c8cdd3;
+}
+
+.stepLabel {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.stepLabel.activeLabel {
+  color: var(--color-primary);
+}
+
+.stepLabel.pendingLabel {
+  color: var(--color-faint);
+}
+
+.stepStatus {
+  font-size: 11px;
+}
+
+.stepStatus.done {
+  color: var(--color-success);
+}
+
+.stepStatus.active {
+  color: var(--color-primary);
+}
+
+.stepStatus.pending {
+  color: #b0b5bb;
+}
+
+.connector {
+  flex: 1;
+  height: 2px;
+  background: var(--color-border);
+}
+
+.connector.done {
+  background: var(--color-success);
+}
+
+.log {
+  margin-top: 44px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-subtle);
+  padding: 20px 24px;
+}
+
+.logHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.logTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-muted);
+}
+
+.logPercent {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.progressBar {
+  height: 6px;
+  background: var(--color-border);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--color-primary);
+  transition: width 0.2s linear;
+}
+
+.logText {
+  font-size: 13px;
+  color: var(--color-muted);
+}
+
+.logLine {
+  padding: 2px 0;
+}
+
+.logLineActive {
+  padding: 2px 0;
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.logFootnote {
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--color-faint);
+}
+
+.resultButton {
+  margin-top: 28px;
+  height: 48px;
+  padding: 0 28px;
+  border: none;
+  background: var(--color-primary);
+  border-radius: 4px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+}
