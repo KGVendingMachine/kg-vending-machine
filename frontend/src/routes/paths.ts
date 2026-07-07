@@ -1,6 +1,7 @@
 export const PATHS = {
   LANDING: '/',
   LOGIN: '/login',
+  AUTH_CALLBACK: '/auth/callback',
   COMPANY_PROFILE: '/company-profile',
   UPLOAD: '/upload',
   ANALYSIS: '/analysis',

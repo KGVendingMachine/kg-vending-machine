@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AnalysisProgressPage } from "../pages/AnalysisProgressPage/AnalysisProgressPage";
+import { AuthCallbackPage } from "../pages/AuthCallbackPage/AuthCallbackPage";
 import { BookmarksPage } from "../pages/BookmarksPage/BookmarksPage";
 import { CompanyProfilePage } from "../pages/CompanyProfilePage/CompanyProfilePage";
 import { LandingPage } from "../pages/LandingPage/LandingPage";
@@ -15,6 +16,7 @@ export function AppRoutes() {
     <Routes>
       <Route path={PATHS.LANDING} element={<LandingPage />} />
       <Route path={PATHS.LOGIN} element={<LoginPage />} />
+      <Route path={PATHS.AUTH_CALLBACK} element={<AuthCallbackPage />} />
       <Route path={PATHS.COMPANY_PROFILE} element={<CompanyProfilePage />} />
       <Route path={PATHS.UPLOAD} element={<UploadPage />} />
       <Route path={PATHS.ANALYSIS} element={<AnalysisProgressPage />} />

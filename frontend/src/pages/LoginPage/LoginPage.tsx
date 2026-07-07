@@ -1,10 +1,7 @@
-import { useNavigate } from 'react-router-dom'
-import { PATHS } from '../../routes/paths'
+import { redirectToKakaoLogin } from '../../utils/kakaoAuth'
 import styles from './LoginPage.module.css'
 
 export function LoginPage() {
-  const navigate = useNavigate()
-
   return (
     <div className={styles.page}>
       <div className={styles.card}>
@@ -21,7 +18,7 @@ export function LoginPage() {
         <button
           type="button"
           className={styles.kakaoButton}
-          onClick={() => navigate(PATHS.COMPANY_PROFILE)}
+          onClick={redirectToKakaoLogin}
         >
           <span className={styles.kakaoDot} />
           카카오로 시작하기
