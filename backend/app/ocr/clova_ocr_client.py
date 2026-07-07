@@ -36,7 +36,7 @@ async def fetch_clova_ocr_text(file_path: str) -> str:
 
     if suffix != ".pdf":
         with open(file_path, "rb") as f:
-            return await _call_clova_ocr(
+            return await call_clova_ocr_bytes(
                 f.read(), _SUPPORTED_FORMATS[suffix], Path(file_path).stem
             )
 
@@ -54,13 +54,13 @@ async def fetch_clova_ocr_text(file_path: str) -> str:
         buffer = io.BytesIO()
         writer.write(buffer)
         texts.append(
-            await _call_clova_ocr(buffer.getvalue(), "pdf", Path(file_path).stem)
+            await call_clova_ocr_bytes(buffer.getvalue(), "pdf", Path(file_path).stem)
         )
 
     return "\n".join(texts)
 
 
-async def _call_clova_ocr(file_bytes: bytes, image_format: str, name: str) -> str:
+async def call_clova_ocr_bytes(file_bytes: bytes, image_format: str, name: str) -> str:
     settings = get_settings()
     request_body = {
         "version": "V2",

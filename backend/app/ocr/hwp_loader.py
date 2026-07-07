@@ -9,6 +9,48 @@ import olefile
 from langchain_core.document_loaders.base import BaseLoader
 from langchain_core.documents import Document
 
+_IMAGE_EXTENSIONS = (".bmp", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff")
+
+
+def _is_compressed(load_file: olefile.OleFileIO) -> bool:
+    with load_file.openstream("FileHeader") as header:
+        header_data = header.read()
+        return bool(header_data[36] & 1)
+
+
+def extract_embedded_images(file_path: str) -> list[tuple[bytes, str]]:
+    """HWP 안에 그림으로 삽입된 표/차트 등의 원본 이미지를 꺼낸다.
+
+    BinData 스토리지의 각 스트림은 스트림 이름 끝의 확장자로 원본 포맷을
+    알 수 있다. 압축 여부는 문서 전체 압축 플래그(FileHeader)를 그대로
+    따른다고 보고 시도하되, 압축 안 된 스트림도 있을 수 있어 압축 해제가
+    실패하면 원본 바이트를 그대로 쓴다.
+
+    주의: 실제로 BinData가 있는 샘플 HWP 파일로 검증하지 못했다 (테스트에
+    쓴 샘플엔 임베드 이미지가 없었음). 그림이 포함된 실제 HWP로 재검증이
+    필요하다.
+    """
+    load_file = olefile.OleFileIO(file_path)
+    compressed = _is_compressed(load_file)
+
+    images = []
+    for entry in load_file.listdir():
+        if entry[0] != "BinData":
+            continue
+        stream_name = entry[-1]
+        ext = "." + stream_name.rsplit(".", 1)[-1].lower() if "." in stream_name else ""
+        if ext not in _IMAGE_EXTENSIONS:
+            continue
+        with load_file.openstream(entry) as stream:
+            data = stream.read()
+        if compressed:
+            try:
+                data = zlib.decompress(data, -15)
+            except zlib.error:
+                pass
+        images.append((data, ext))
+    return images
+
 
 class HWPLoader(BaseLoader):
     """HWP(한글) 파일에서 본문 텍스트를 추출하는 로더.
@@ -60,11 +102,6 @@ class HWPLoader(BaseLoader):
             self._get_text_from_section(load_file, section) for section in sections
         )
 
-    def _is_compressed(self, load_file: olefile.OleFileIO) -> bool:
-        with load_file.openstream(self.FILE_HEADER_SECTION) as header:
-            header_data = header.read()
-            return bool(header_data[36] & 1)
-
     def _get_text_from_section(self, load_file: olefile.OleFileIO, section: str) -> str:
         with load_file.openstream(section) as bodytext:
             data = bodytext.read()
@@ -72,7 +109,7 @@ class HWPLoader(BaseLoader):
         # HWP는 zlib deflate로 압축돼 있는 경우가 많다. -15는 raw deflate
         # (zlib 헤더 없음)를 의미하며 HWP 포맷 스펙상 고정값이다.
         unpacked_data = (
-            zlib.decompress(data, -15) if self._is_compressed(load_file) else data
+            zlib.decompress(data, -15) if _is_compressed(load_file) else data
         )
 
         text = []

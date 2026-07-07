@@ -5,6 +5,27 @@ from collections.abc import Iterator
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
 
+_IMAGE_EXTENSIONS = (".bmp", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff")
+
+
+def extract_embedded_images(file_path: str) -> list[tuple[bytes, str]]:
+    """HWPX 안에 그림으로 삽입된 표/차트 등의 원본 이미지를 꺼낸다.
+
+    본문(Contents/section*.xml)의 t 태그에는 텍스트로 안 남고 통째로
+    그림으로 붙여넣은 슬라이드(예: SWOT/PEST 분석)가 실제 샘플에서
+    발견되어, 이 이미지들을 따로 OCR에 넘기기 위해 추출한다.
+    Preview/PrvImage.png는 문서 전체 축소 미리보기라 내용이 아니므로 뺀다.
+    """
+    images = []
+    with zipfile.ZipFile(file_path, "r") as zf:
+        for name in zf.namelist():
+            if not name.startswith("BinData/"):
+                continue
+            ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
+            if ext in _IMAGE_EXTENSIONS:
+                images.append((zf.read(name), ext))
+    return images
+
 
 class HWPXLoader(BaseLoader):
     """HWPX(OWPML) 파일에서 본문 텍스트를 추출하는 로더.
