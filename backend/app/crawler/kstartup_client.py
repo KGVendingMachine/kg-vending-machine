@@ -41,7 +41,7 @@ async def fetch_kstartup_notices(page: int = 1) -> list[dict]:
                         f"K-Startup API 응답의 data가 list가 아닙니다: {type(items).__name__}"
                     )
                 return items
-            except (httpx.HTTPError, ValueError) as exc:
+            except (httpx.HTTPError, ValueError, RuntimeError) as exc:
                 last_error = exc
                 if attempt < settings.KSTARTUP_MAX_RETRIES:
                     await asyncio.sleep(attempt)

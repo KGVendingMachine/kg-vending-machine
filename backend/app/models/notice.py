@@ -47,10 +47,10 @@ class Notice(Base):
     """모집중/마감/예정"""
     is_actionable: Mapped[bool | None] = mapped_column(Boolean)
     """신청가능여부"""
-    source_url: Mapped[str | None] = mapped_column(String(500))
+    source_url: Mapped[str | None] = mapped_column(Text)
     """공고 상세 URL"""
-    apply_url: Mapped[str | None] = mapped_column(String(500))
-    """신청 페이지 URL"""
+    apply_url: Mapped[str | None] = mapped_column(Text)
+    """신청 페이지 URL (구글폼 로그인 리다이렉트 등 500자 넘는 URL이 실제로 있어 Text로 둠)"""
     summary_text: Mapped[str | None] = mapped_column(Text)
     """요약내용"""
     amount_label: Mapped[str | None] = mapped_column(String(100))
@@ -61,22 +61,24 @@ class Notice(Base):
         DateTime, server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 
 class NoticeTargetType(Base):
     __tablename__ = "notice_target_type"
+    __table_args__ = (UniqueConstraint("notice_id", "target_type"),)
 
     id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
     notice_id: Mapped[int] = mapped_column(ForeignKey("notice.id"), nullable=False)
     """공고아이디"""
-    target_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(255), nullable=False)
     """청소년/대학생/일반인/대학/기업/창업/소상공인 등"""
 
 
 class NoticeRegion(Base):
     __tablename__ = "notice_region"
+    __table_args__ = (UniqueConstraint("notice_id", "region_code"),)
 
     id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
     notice_id: Mapped[int] = mapped_column(ForeignKey("notice.id"), nullable=False)
@@ -100,7 +102,7 @@ class NoticeChunk(Base):
         DateTime, server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 
@@ -119,5 +121,5 @@ class NoticeAttachment(Base):
         DateTime, server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
