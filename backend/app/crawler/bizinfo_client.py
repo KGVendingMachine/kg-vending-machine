@@ -46,7 +46,7 @@ async def fetch_bizinfo_notices(page: int = 1) -> list[dict]:
                         f"BizInfo API 응답의 jsonArray가 list가 아닙니다: {type(items).__name__}"
                     )
                 return items
-            except (httpx.HTTPError, ValueError) as exc:
+            except (httpx.HTTPError, ValueError, RuntimeError) as exc:
                 last_error = exc
                 if attempt < settings.BIZINFO_MAX_RETRIES:
                     await asyncio.sleep(attempt)
