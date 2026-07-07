@@ -125,8 +125,35 @@ def _parse_regions(value: str | None) -> list[tuple[str, str]]:
     return regions
 
 
+# 기업마당 전체(1,439건) 실제 데이터로 확인함: reqstBeginEndDe가
+# "YYYY-MM-DD ~ YYYY-MM-DD" 형식이 아닌 787건 중 726건(약 92%)이
+# 날짜가 없는 게 아니라 "상시/예산 소진 시까지" 같은, 정해진 종료일 없이
+# 계속 열려있다는 뜻의 표현이었다. 이걸 그냥 "확인필요"로 두면 실제로는
+# 신청 가능한 공고 대부분이 "확인필요"로 잘못 분류된다.
+_ROLLING_OPEN_KEYWORDS = (
+    "예산 소진",
+    "상시",
+    "선착순",
+    "모집 완료",
+    "모집완료",
+    "모집 마감",
+    "모집마감",
+    "수시",
+    "연중",
+    "모집규모 충족",
+    "모집규모충족",
+)
+
+
+def _is_rolling_open(value: str | None) -> bool:
+    """정해진 종료일 없이 계속 신청 가능하다는 뜻의 표현인지 확인한다."""
+    if not value:
+        return False
+    return any(keyword in value for keyword in _ROLLING_OPEN_KEYWORDS)
+
+
 def _derive_status_from_dates(
-    start_date: date | None, end_date: date | None
+    start_date: date | None, end_date: date | None, raw_period: str | None = None
 ) -> tuple[str, bool]:
     """기업마당 모집 상태를 신청 시작일과 종료일 기준으로 추정한다.
 
@@ -139,6 +166,8 @@ def _derive_status_from_dates(
     if end_date is not None and end_date < today:
         return "마감", False
     if start_date is not None and end_date is not None:
+        return "모집중", True
+    if _is_rolling_open(raw_period):
         return "모집중", True
     return "확인필요", False
 
@@ -159,10 +188,11 @@ async def _process_bizinfo_item(
 
     try:
         async with session.begin_nested():
-            start_date, end_date = _parse_bizinfo_date_range(
-                item.get("reqstBeginEndDe")
+            raw_period = item.get("reqstBeginEndDe")
+            start_date, end_date = _parse_bizinfo_date_range(raw_period)
+            status, is_actionable = _derive_status_from_dates(
+                start_date, end_date, raw_period
             )
-            status, is_actionable = _derive_status_from_dates(start_date, end_date)
 
             organization_id = None
             organization_name = item.get("jrsdInsttNm")
