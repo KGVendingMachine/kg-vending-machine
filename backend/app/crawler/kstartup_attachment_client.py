@@ -50,9 +50,10 @@ def _parse_attachments(html: str) -> list[tuple[str, str]]:
         file_name = file_link.get("title", "").removeprefix("[첨부파일] ")
         li = file_link.find_parent("li")
         download_link = li.select_one("a.btn_down") if li else None
-        if not file_name or download_link is None:
+        href = download_link.get("href") if download_link else None
+        if not file_name or not href:
             continue
-        attachments.append((file_name, _BASE_URL + download_link["href"]))
+        attachments.append((file_name, _BASE_URL + href))
     return attachments
 
 
