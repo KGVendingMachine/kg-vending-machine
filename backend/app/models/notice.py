@@ -44,10 +44,10 @@ class Notice(Base):
     """모집중/마감/예정"""
     is_actionable: Mapped[bool | None] = mapped_column(Boolean)
     """신청가능여부"""
-    source_url: Mapped[str | None] = mapped_column(String(500))
+    source_url: Mapped[str | None] = mapped_column(Text)
     """공고 상세 URL"""
-    apply_url: Mapped[str | None] = mapped_column(String(500))
-    """신청 페이지 URL"""
+    apply_url: Mapped[str | None] = mapped_column(Text)
+    """신청 페이지 URL (구글폼 로그인 리다이렉트 등 500자 넘는 URL이 실제로 있어 Text로 둠)"""
     summary_text: Mapped[str | None] = mapped_column(Text)
     """요약내용"""
     created_at: Mapped[datetime] = mapped_column(

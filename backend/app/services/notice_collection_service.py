@@ -143,6 +143,94 @@ def _derive_status_from_dates(
     return "확인필요", False
 
 
+async def _process_bizinfo_item(
+    session: AsyncSession,
+    source_id: int,
+    item: dict,
+    collection_result: CollectionResult,
+) -> None:
+    """기업마당 공고 한 건을 처리해 collection_result에 결과를 반영한다."""
+    if not isinstance(item, dict):
+        return
+    pblanc_id = item.get("pblancId")
+    if not pblanc_id:
+        return
+    external_id = str(pblanc_id)
+
+    try:
+        async with session.begin_nested():
+            start_date, end_date = _parse_bizinfo_date_range(
+                item.get("reqstBeginEndDe")
+            )
+            status, is_actionable = _derive_status_from_dates(start_date, end_date)
+
+            organization_id = None
+            organization_name = item.get("jrsdInsttNm")
+            if organization_name:
+                organization = await get_or_create_organization(
+                    session, organization_name
+                )
+                organization_id = organization.id
+
+            title = item.get("pblancNm")
+            notice_id = await upsert_notice(
+                session,
+                source_id=source_id,
+                external_id=external_id,
+                title=title,
+                organization_id=organization_id,
+                # 기업마당 응답에는 재공고/연장공고를 나타내는 필드가
+                # 확인되지 않아 notice_group_key는 비워둔다
+                # (K-Startup의 intg_pbanc_yn과 달리 별도 이슈로 조사 필요).
+                notice_group_key=None,
+                application_start_date=start_date,
+                application_end_date=end_date,
+                status=status,
+                is_actionable=is_actionable,
+                source_url=item.get("pblancUrl"),
+                apply_url=item.get("rceptEngnHmpgUrl"),
+                summary_text=item.get("bsnsSumryCn"),
+            )
+            await save_raw(
+                session,
+                BizinfoRaw,
+                key=external_id,
+                field=json.dumps(item, ensure_ascii=False),
+                notice_id=notice_id,
+            )
+            # delete는 값이 없어도 항상 실행돼야 하므로(예전 값 정리),
+            # target_type이 falsy여도 replace_notice_target_type을
+            # 무조건 호출한다. 기업마당은 지원지역 필드가 확인되지
+            # 않아 notice_region은 호출하지 않는다.
+            await replace_notice_target_type(
+                session, notice_id, _split_multi_value(item.get("trgetNm"))
+            )
+
+            # 기업마당·K-Startup에 같은 사업이 각자 다른 external_id로
+            # 중복 등록되는 경우, 제목이 같으면 기업마당을 우선한다.
+            # K-Startup을 먼저 수집해서 이미 저장돼 있었더라도 여기서
+            # 정리한다.
+            if title:
+                duplicate_id = await find_notice_id_by_source_and_title(
+                    session, KSTARTUP_SOURCE_NAME, title
+                )
+                if duplicate_id is not None:
+                    logger.info(
+                        "기업마당 우선 정책으로 K-Startup 중복 공고 삭제: %r", title
+                    )
+                    await delete_notice(session, duplicate_id)
+    except Exception:
+        # 이 항목만 SAVEPOINT 단위로 롤백되고, 나머지 항목 처리와
+        # 페이지 전체 커밋은 영향받지 않는다. 컬럼 길이 초과 같은
+        # 개별 데이터 문제로 페이지 전체가 날아가는 것을 막기 위함.
+        logger.exception("기업마당 공고 저장 실패 (external_id=%s)", external_id)
+        collection_result.failed_count += 1
+        collection_result.failed_ids.append(external_id)
+        return
+
+    collection_result.saved_count += 1
+
+
 async def collect_bizinfo_notices(
     session: AsyncSession, page: int = 1
 ) -> CollectionResult:
@@ -160,89 +248,142 @@ async def collect_bizinfo_notices(
 
     collection_result = CollectionResult()
     for item in items:
-        if not isinstance(item, dict):
-            continue
-        pblanc_id = item.get("pblancId")
-        if not pblanc_id:
-            continue
-        external_id = str(pblanc_id)
-
-        try:
-            async with session.begin_nested():
-                start_date, end_date = _parse_bizinfo_date_range(
-                    item.get("reqstBeginEndDe")
-                )
-                status, is_actionable = _derive_status_from_dates(start_date, end_date)
-
-                organization_id = None
-                organization_name = item.get("jrsdInsttNm")
-                if organization_name:
-                    organization = await get_or_create_organization(
-                        session, organization_name
-                    )
-                    organization_id = organization.id
-
-                title = item.get("pblancNm")
-                notice_id = await upsert_notice(
-                    session,
-                    source_id=source.id,
-                    external_id=external_id,
-                    title=title,
-                    organization_id=organization_id,
-                    # 기업마당 응답에는 재공고/연장공고를 나타내는 필드가
-                    # 확인되지 않아 notice_group_key는 비워둔다
-                    # (K-Startup의 intg_pbanc_yn과 달리 별도 이슈로 조사 필요).
-                    notice_group_key=None,
-                    application_start_date=start_date,
-                    application_end_date=end_date,
-                    status=status,
-                    is_actionable=is_actionable,
-                    source_url=item.get("pblancUrl"),
-                    apply_url=item.get("rceptEngnHmpgUrl"),
-                    summary_text=item.get("bsnsSumryCn"),
-                )
-                await save_raw(
-                    session,
-                    BizinfoRaw,
-                    key=external_id,
-                    field=json.dumps(item, ensure_ascii=False),
-                    notice_id=notice_id,
-                )
-                # delete는 값이 없어도 항상 실행돼야 하므로(예전 값 정리),
-                # target_type이 falsy여도 replace_notice_target_type을
-                # 무조건 호출한다. 기업마당은 지원지역 필드가 확인되지
-                # 않아 notice_region은 호출하지 않는다.
-                await replace_notice_target_type(
-                    session, notice_id, _split_multi_value(item.get("trgetNm"))
-                )
-
-                # 기업마당·K-Startup에 같은 사업이 각자 다른 external_id로
-                # 중복 등록되는 경우, 제목이 같으면 기업마당을 우선한다.
-                # K-Startup을 먼저 수집해서 이미 저장돼 있었더라도 여기서
-                # 정리한다.
-                if title:
-                    duplicate_id = await find_notice_id_by_source_and_title(
-                        session, KSTARTUP_SOURCE_NAME, title
-                    )
-                    if duplicate_id is not None:
-                        logger.info(
-                            "기업마당 우선 정책으로 K-Startup 중복 공고 삭제: %r",
-                            title,
-                        )
-                        await delete_notice(session, duplicate_id)
-        except Exception:
-            # 이 항목만 SAVEPOINT 단위로 롤백되고, 나머지 항목 처리와
-            # 페이지 전체 커밋은 영향받지 않는다. 컬럼 길이 초과 같은
-            # 개별 데이터 문제로 페이지 전체가 날아가는 것을 막기 위함.
-            logger.exception("기업마당 공고 저장 실패 (external_id=%s)", external_id)
-            collection_result.failed_count += 1
-            collection_result.failed_ids.append(external_id)
-            continue
-
-        collection_result.saved_count += 1
+        await _process_bizinfo_item(session, source.id, item, collection_result)
 
     await session.commit()
     return collection_result
+
+
+async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult:
+    """기업마당 공고를 첫 페이지부터 끝까지 전부 수집한다.
+
+    빈 페이지가 나오면 끝으로 간주한다 (page=9999처럼 끝을 넘어가도
+    에러 없이 빈 리스트를 주는 것을 실제 호출로 확인함). 페이지마다
+    커밋해서 트랜잭션이 지나치게 커지는 것을 막는다.
+    """
+    source = await get_or_create_source(
+        session,
+        source_name=BIZINFO_SOURCE_NAME,
+        base_url="https://www.bizinfo.go.kr",
+        collect_type="API",
+    )
+
+    collection_result = CollectionResult()
+    page = 1
+    while True:
+        items = await fetch_bizinfo_notices(page=page)
+        if not items:
+            break
+
+        for item in items:
+            await _process_bizinfo_item(session, source.id, item, collection_result)
+        await session.commit()
+
+        logger.info(
+            "기업마당 페이지 %d 처리 완료 (누적 saved=%d, failed=%d)",
+            page,
+            collection_result.saved_count,
+            collection_result.failed_count,
+        )
+        page += 1
+
+    return collection_result
+
+
+async def _process_kstartup_item(
+    session: AsyncSession,
+    source_id: int,
+    item: dict,
+    collection_result: CollectionResult,
+) -> None:
+    """K-Startup 공고 한 건을 처리해 collection_result에 결과를 반영한다."""
+    if not isinstance(item, dict):
+        return
+    pbanc_sn = item.get("pbanc_sn")
+    if not pbanc_sn:
+        return
+    external_id = str(pbanc_sn)
+
+    # 기업마당·K-Startup에 같은 사업이 각자 다른 external_id로 중복
+    # 등록되는 경우, 제목이 같으면 기업마당을 우선한다. 기업마당이
+    # 이미 수집돼 있으면 이 K-Startup 항목은 저장하지 않는다.
+    title = item.get("biz_pbanc_nm")
+    if title:
+        duplicate_id = await find_notice_id_by_source_and_title(
+            session, BIZINFO_SOURCE_NAME, title
+        )
+        if duplicate_id is not None:
+            logger.info("기업마당 우선 정책으로 K-Startup 중복 공고 건너뜀: %r", title)
+            return
+
+    try:
+        async with session.begin_nested():
+            start_date = _parse_kstartup_date(item.get("pbanc_rcpt_bgng_dt"))
+            end_date = _parse_kstartup_date(item.get("pbanc_rcpt_end_dt"))
+            rcrt_prgs_yn = item.get("rcrt_prgs_yn")
+            if rcrt_prgs_yn == "Y":
+                status, is_actionable = "모집중", True
+            elif rcrt_prgs_yn == "N":
+                status, is_actionable = "마감", False
+            else:
+                # 값이 없거나 Y/N이 아닌 경우 마감으로 단정하지 않는다.
+                status, is_actionable = "확인필요", False
+            apply_url = item.get("biz_aply_url") or item.get("aply_mthd_onli_rcpt_istc")
+
+            organization_id = None
+            organization_name = item.get("sprv_inst")
+            if organization_name:
+                organization = await get_or_create_organization(
+                    session, organization_name
+                )
+                organization_id = organization.id
+
+            # intg_pbanc_yn(통합공고여부)이 "Y"면 intg_pbanc_biz_nm(통합공고
+            # 사업명)이 재공고/연장공고를 묶는 상위 이름 역할을 한다. 이
+            # 값을 notice_group_key로 써서 같은 통합공고 아래 공고들을
+            # 묶는다.
+            notice_group_key = None
+            if item.get("intg_pbanc_yn") == "Y":
+                notice_group_key = item.get("intg_pbanc_biz_nm")
+
+            notice_id = await upsert_notice(
+                session,
+                source_id=source_id,
+                external_id=external_id,
+                title=title,
+                organization_id=organization_id,
+                notice_group_key=notice_group_key,
+                application_start_date=start_date,
+                application_end_date=end_date,
+                status=status,
+                is_actionable=is_actionable,
+                source_url=item.get("detl_pg_url"),
+                apply_url=apply_url,
+                summary_text=item.get("pbanc_ctnt"),
+            )
+            await save_raw(
+                session,
+                KstartupRaw,
+                key=external_id,
+                field=json.dumps(item, ensure_ascii=False),
+                notice_id=notice_id,
+            )
+
+            # delete는 값이 없어도 항상 실행돼야 하므로(예전 값 정리),
+            # 값이 falsy여도 무조건 호출한다.
+            await replace_notice_target_type(
+                session, notice_id, _split_multi_value(item.get("aply_trgt"))
+            )
+            await replace_notice_region(
+                session, notice_id, _parse_regions(item.get("supt_regin"))
+            )
+    except Exception:
+        logger.exception("K-Startup 공고 저장 실패 (external_id=%s)", external_id)
+        collection_result.failed_count += 1
+        collection_result.failed_ids.append(external_id)
+        return
+
+    collection_result.saved_count += 1
 
 
 async def collect_kstartup_notices(
@@ -262,97 +403,43 @@ async def collect_kstartup_notices(
 
     collection_result = CollectionResult()
     for item in items:
-        if not isinstance(item, dict):
-            continue
-        pbanc_sn = item.get("pbanc_sn")
-        if not pbanc_sn:
-            continue
-        external_id = str(pbanc_sn)
-
-        # 기업마당·K-Startup에 같은 사업이 각자 다른 external_id로 중복
-        # 등록되는 경우, 제목이 같으면 기업마당을 우선한다. 기업마당이
-        # 이미 수집돼 있으면 이 K-Startup 항목은 저장하지 않는다.
-        title = item.get("biz_pbanc_nm")
-        if title:
-            duplicate_id = await find_notice_id_by_source_and_title(
-                session, BIZINFO_SOURCE_NAME, title
-            )
-            if duplicate_id is not None:
-                logger.info(
-                    "기업마당 우선 정책으로 K-Startup 중복 공고 건너뜀: %r", title
-                )
-                continue
-
-        try:
-            async with session.begin_nested():
-                start_date = _parse_kstartup_date(item.get("pbanc_rcpt_bgng_dt"))
-                end_date = _parse_kstartup_date(item.get("pbanc_rcpt_end_dt"))
-                rcrt_prgs_yn = item.get("rcrt_prgs_yn")
-                if rcrt_prgs_yn == "Y":
-                    status, is_actionable = "모집중", True
-                elif rcrt_prgs_yn == "N":
-                    status, is_actionable = "마감", False
-                else:
-                    # 값이 없거나 Y/N이 아닌 경우 마감으로 단정하지 않는다.
-                    status, is_actionable = "확인필요", False
-                apply_url = item.get("biz_aply_url") or item.get(
-                    "aply_mthd_onli_rcpt_istc"
-                )
-
-                organization_id = None
-                organization_name = item.get("sprv_inst")
-                if organization_name:
-                    organization = await get_or_create_organization(
-                        session, organization_name
-                    )
-                    organization_id = organization.id
-
-                # intg_pbanc_yn(통합공고여부)이 "Y"면 intg_pbanc_biz_nm(통합공고
-                # 사업명)이 재공고/연장공고를 묶는 상위 이름 역할을 한다. 이
-                # 값을 notice_group_key로 써서 같은 통합공고 아래 공고들을
-                # 묶는다.
-                notice_group_key = None
-                if item.get("intg_pbanc_yn") == "Y":
-                    notice_group_key = item.get("intg_pbanc_biz_nm")
-
-                notice_id = await upsert_notice(
-                    session,
-                    source_id=source.id,
-                    external_id=external_id,
-                    title=title,
-                    organization_id=organization_id,
-                    notice_group_key=notice_group_key,
-                    application_start_date=start_date,
-                    application_end_date=end_date,
-                    status=status,
-                    is_actionable=is_actionable,
-                    source_url=item.get("detl_pg_url"),
-                    apply_url=apply_url,
-                    summary_text=item.get("pbanc_ctnt"),
-                )
-                await save_raw(
-                    session,
-                    KstartupRaw,
-                    key=external_id,
-                    field=json.dumps(item, ensure_ascii=False),
-                    notice_id=notice_id,
-                )
-
-                # delete는 값이 없어도 항상 실행돼야 하므로(예전 값 정리),
-                # 값이 falsy여도 무조건 호출한다.
-                await replace_notice_target_type(
-                    session, notice_id, _split_multi_value(item.get("aply_trgt"))
-                )
-                await replace_notice_region(
-                    session, notice_id, _parse_regions(item.get("supt_regin"))
-                )
-        except Exception:
-            logger.exception("K-Startup 공고 저장 실패 (external_id=%s)", external_id)
-            collection_result.failed_count += 1
-            collection_result.failed_ids.append(external_id)
-            continue
-
-        collection_result.saved_count += 1
+        await _process_kstartup_item(session, source.id, item, collection_result)
 
     await session.commit()
+    return collection_result
+
+
+async def collect_all_kstartup_notices(session: AsyncSession) -> CollectionResult:
+    """K-Startup 공고를 첫 페이지부터 끝까지 전부 수집한다.
+
+    K-Startup은 전체가 29,000건 이상이라 페이지 수가 많다(perPage=100
+    기준 약 290페이지). 빈 페이지가 나오면 끝으로 간주하고, 페이지마다
+    커밋한다 (collect_all_bizinfo_notices와 동일한 이유).
+    """
+    source = await get_or_create_source(
+        session,
+        source_name=KSTARTUP_SOURCE_NAME,
+        base_url="https://www.k-startup.go.kr",
+        collect_type="API",
+    )
+
+    collection_result = CollectionResult()
+    page = 1
+    while True:
+        items = await fetch_kstartup_notices(page=page)
+        if not items:
+            break
+
+        for item in items:
+            await _process_kstartup_item(session, source.id, item, collection_result)
+        await session.commit()
+
+        logger.info(
+            "K-Startup 페이지 %d 처리 완료 (누적 saved=%d, failed=%d)",
+            page,
+            collection_result.saved_count,
+            collection_result.failed_count,
+        )
+        page += 1
+
     return collection_result
