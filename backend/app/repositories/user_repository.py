@@ -11,6 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.user import User
 
 
+async def get_by_id(session: AsyncSession, user_id: int) -> User | None:
+    """PK(id)로 유저를 조회한다. 없으면 None."""
+    return await session.get(User, user_id)
+
+
 async def get_by_kakao_id(session: AsyncSession, kakao_id: str) -> User | None:
     """카카오 회원번호로 유저를 조회한다. 없으면 None."""
     result = await session.execute(select(User).where(User.kakao_id == kakao_id))
