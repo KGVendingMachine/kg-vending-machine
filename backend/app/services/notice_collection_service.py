@@ -10,6 +10,8 @@ from app.crawler.bizinfo_client import fetch_bizinfo_notices
 from app.crawler.kstartup_client import fetch_kstartup_notices
 from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
+    delete_notice,
+    find_notice_id_by_source_and_title,
     get_or_create_organization,
     get_or_create_source,
     replace_notice_region,
@@ -180,11 +182,12 @@ async def collect_bizinfo_notices(
                     )
                     organization_id = organization.id
 
+                title = item.get("pblancNm")
                 notice_id = await upsert_notice(
                     session,
                     source_id=source.id,
                     external_id=external_id,
-                    title=item.get("pblancNm"),
+                    title=title,
                     organization_id=organization_id,
                     # 기업마당 응답에는 재공고/연장공고를 나타내는 필드가
                     # 확인되지 않아 notice_group_key는 비워둔다
@@ -212,6 +215,21 @@ async def collect_bizinfo_notices(
                 await replace_notice_target_type(
                     session, notice_id, _split_multi_value(item.get("trgetNm"))
                 )
+
+                # 기업마당·K-Startup에 같은 사업이 각자 다른 external_id로
+                # 중복 등록되는 경우, 제목이 같으면 기업마당을 우선한다.
+                # K-Startup을 먼저 수집해서 이미 저장돼 있었더라도 여기서
+                # 정리한다.
+                if title:
+                    duplicate_id = await find_notice_id_by_source_and_title(
+                        session, KSTARTUP_SOURCE_NAME, title
+                    )
+                    if duplicate_id is not None:
+                        logger.info(
+                            "기업마당 우선 정책으로 K-Startup 중복 공고 삭제: %r",
+                            title,
+                        )
+                        await delete_notice(session, duplicate_id)
         except Exception:
             # 이 항목만 SAVEPOINT 단위로 롤백되고, 나머지 항목 처리와
             # 페이지 전체 커밋은 영향받지 않는다. 컬럼 길이 초과 같은
@@ -251,6 +269,20 @@ async def collect_kstartup_notices(
             continue
         external_id = str(pbanc_sn)
 
+        # 기업마당·K-Startup에 같은 사업이 각자 다른 external_id로 중복
+        # 등록되는 경우, 제목이 같으면 기업마당을 우선한다. 기업마당이
+        # 이미 수집돼 있으면 이 K-Startup 항목은 저장하지 않는다.
+        title = item.get("biz_pbanc_nm")
+        if title:
+            duplicate_id = await find_notice_id_by_source_and_title(
+                session, BIZINFO_SOURCE_NAME, title
+            )
+            if duplicate_id is not None:
+                logger.info(
+                    "기업마당 우선 정책으로 K-Startup 중복 공고 건너뜀: %r", title
+                )
+                continue
+
         try:
             async with session.begin_nested():
                 start_date = _parse_kstartup_date(item.get("pbanc_rcpt_bgng_dt"))
@@ -287,7 +319,7 @@ async def collect_kstartup_notices(
                     session,
                     source_id=source.id,
                     external_id=external_id,
-                    title=item.get("biz_pbanc_nm"),
+                    title=title,
                     organization_id=organization_id,
                     notice_group_key=notice_group_key,
                     application_start_date=start_date,

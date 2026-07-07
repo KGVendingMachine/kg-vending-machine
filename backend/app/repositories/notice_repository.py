@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.notice import Notice, NoticeRegion, NoticeTargetType
 from app.models.notice_source import NoticeSource
 from app.models.organization import Organization
+from app.models.raw import BizinfoRaw, KstartupRaw
 
 
 async def get_or_create_source(
@@ -181,6 +182,44 @@ async def replace_notice_region(
                 for region_code, region_name in regions
             ],
         )
+
+
+async def find_notice_id_by_source_and_title(
+    session: AsyncSession, source_name: str, title: str
+) -> int | None:
+    """특정 출처(source_name)에서 제목이 정확히 일치하는 공고의 id를 찾는다.
+
+    기업마당과 K-Startup에 같은 사업이 각자 다른 external_id로 중복
+    등록되는 경우가 있어, 제목 기준으로 다른 출처의 공고를 찾기 위해
+    쓴다. 소스별 유일 키(external_id)가 서로 달라 그것만으로는
+    중복을 판단할 수 없다.
+    """
+    result = await session.execute(
+        select(Notice.id)
+        .join(NoticeSource, Notice.source_id == NoticeSource.id)
+        .where(NoticeSource.source_name == source_name, Notice.title == title)
+    )
+    return result.scalars().first()
+
+
+async def delete_notice(session: AsyncSession, notice_id: int) -> None:
+    """공고와 그에 딸린 신청대상/지역/원본 데이터를 삭제한다.
+
+    notice_target_type/notice_region/bizinfo_raw/kstartup_raw는 모두
+    notice에 대한 ON DELETE 규칙이 없어(기본 RESTRICT/NO ACTION),
+    notice보다 먼저 지워야 FK 오류가 나지 않는다. 이 공고가 어느
+    출처였는지 호출자가 알 필요 없도록 두 raw 테이블 모두에서 시도한다
+    (해당 없는 쪽은 그냥 0행 삭제로 끝난다).
+    """
+    await session.execute(
+        delete(NoticeTargetType).where(NoticeTargetType.notice_id == notice_id)
+    )
+    await session.execute(
+        delete(NoticeRegion).where(NoticeRegion.notice_id == notice_id)
+    )
+    await session.execute(delete(BizinfoRaw).where(BizinfoRaw.notice_id == notice_id))
+    await session.execute(delete(KstartupRaw).where(KstartupRaw.notice_id == notice_id))
+    await session.execute(delete(Notice).where(Notice.id == notice_id))
 
 
 async def save_raw(
