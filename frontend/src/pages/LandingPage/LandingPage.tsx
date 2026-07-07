@@ -61,12 +61,9 @@ export function LandingPage() {
         <div className={styles.navRight}>
           <button
             type="button"
-            className={styles.navLoginLink}
+            className={styles.kakaoButtonSmall}
             onClick={() => navigate(PATHS.LOGIN)}
           >
-            로그인
-          </button>
-          <button type="button" className={styles.kakaoButtonSmall} onClick={goToUpload}>
             <span className={styles.kakaoDotSmall} />
             카카오로 시작
           </button>
@@ -111,7 +108,11 @@ export function LandingPage() {
               카카오 계정으로 로그인하면 바로 분석을 시작할 수 있어요. 별도
               가입 절차가 없습니다.
             </div>
-            <button type="button" className={styles.kakaoButtonLarge} onClick={goToUpload}>
+            <button
+              type="button"
+              className={styles.kakaoButtonLarge}
+              onClick={() => navigate(PATHS.LOGIN)}
+            >
               <span className={styles.kakaoDotLarge} />
               카카오로 3초 만에 시작하기
             </button>
