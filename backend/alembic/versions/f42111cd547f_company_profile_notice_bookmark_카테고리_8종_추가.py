@@ -67,9 +67,11 @@ def upgrade() -> None:
         "ALTER COLUMN name TYPE category_name USING name::text::category_name"
     )
     op.execute("DROP TYPE category_name_old")
-    op.bulk_insert(
-        sa.table("kg_category", sa.column("name", sa.String())),
-        [{"name": name} for name in NEW_CATEGORY_MEMBER_NAMES],
+    # asyncpg는 bind parameter(VARCHAR)를 enum 컬럼에 암시적으로 캐스팅해주지 않으므로
+    # (DatatypeMismatchError), 파라미터 바인딩 없는 리터럴 INSERT로 삽입한다.
+    op.execute(
+        "INSERT INTO kg_category (name) VALUES "
+        + ", ".join(f"('{name}')" for name in NEW_CATEGORY_MEMBER_NAMES)
     )
 
     # 2) 공고는 카테고리를 정확히 1개만 가진다 (다대다 대신 직접 FK)
