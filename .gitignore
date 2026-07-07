@@ -223,3 +223,6 @@ Thumbs.db
 
 xuswns
 xuswns/*
+
+# 로컬 테스트용 샘플 문서 (실제 공고 첨부파일 등, 저장소에 올리지 않음)
+backend/data/
