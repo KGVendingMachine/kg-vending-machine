@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { loginWithKakao } from '../../api/authApi'
 import { PATHS } from '../../routes/paths'
+import { consumeOAuthState } from '../../utils/kakaoAuth'
 import { saveTokens } from '../../utils/token'
 import styles from './AuthCallbackPage.module.css'
 
@@ -21,7 +22,13 @@ export function AuthCallbackPage() {
     handledRef.current = true
 
     const code = searchParams.get('code')
-    if (!code) {
+    const returnedState = searchParams.get('state')
+    const savedState = consumeOAuthState()
+
+    // CSRF 방지: 카카오가 돌려준 state가 우리가 보내며 저장해둔 값과
+    // 일치해야 한다. code가 없거나 state가 어긋나면 위조된 콜백으로 보고
+    // 로그인 화면으로 되돌린다.
+    if (!code || !returnedState || returnedState !== savedState) {
       navigate(PATHS.LOGIN, { replace: true })
       return
     }
