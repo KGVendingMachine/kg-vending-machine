@@ -5,11 +5,21 @@
 버린다.
 """
 
+import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.repositories.user_repository import upsert_on_login
+from app.repositories.user_repository import get_by_id, upsert_on_login
 from app.utils import kakao_client
-from app.utils.jwt import create_access_token, create_refresh_token
+from app.utils.jwt import (
+    REFRESH_TOKEN_TYPE,
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+)
+
+
+class RefreshTokenError(Exception):
+    """refresh token이 유효하지 않을 때. 라우터에서 401로 변환한다."""
 
 
 def _extract_profile(user_info: dict) -> dict:
@@ -43,5 +53,37 @@ async def login_with_kakao(session: AsyncSession, code: str) -> dict[str, str]:
     return {
         "access_token": create_access_token(user.id, role=user.role),
         "refresh_token": create_refresh_token(user.id),
+        "token_type": "bearer",
+    }
+
+
+async def refresh_access_token(
+    session: AsyncSession, refresh_token: str
+) -> dict[str, str]:
+    """refresh token을 검증해 새 access token을 발급한다.
+
+    검증(서명·만료), 토큰 종류(refresh), 유저 존재를 모두 통과해야 한다.
+    유저의 현재 role을 다시 읽어 새 access token 클레임에 반영한다(로그인
+    이후 role이 바뀌었으면 재발급 시점에 갱신됨). 유효하지 않으면
+    RefreshTokenError를 던진다.
+    """
+    try:
+        payload = decode_token(refresh_token)
+    except jwt.InvalidTokenError as exc:
+        raise RefreshTokenError("유효하지 않은 refresh token입니다") from exc
+
+    if payload.get("type") != REFRESH_TOKEN_TYPE:
+        raise RefreshTokenError("refresh token이 아닙니다")
+
+    subject = payload.get("sub")
+    if subject is None:
+        raise RefreshTokenError("잘못된 토큰입니다")
+
+    user = await get_by_id(session, int(subject))
+    if user is None:
+        raise RefreshTokenError("사용자를 찾을 수 없습니다")
+
+    return {
+        "access_token": create_access_token(user.id, role=user.role),
         "token_type": "bearer",
     }

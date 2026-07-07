@@ -7,8 +7,17 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.schemas.auth import KakaoLoginRequest, TokenResponse
-from app.services.auth_service import login_with_kakao
+from app.schemas.auth import (
+    AccessTokenResponse,
+    KakaoLoginRequest,
+    RefreshRequest,
+    TokenResponse,
+)
+from app.services.auth_service import (
+    RefreshTokenError,
+    login_with_kakao,
+    refresh_access_token,
+)
 from app.utils.kakao_client import KakaoAuthError
 
 router = APIRouter()
@@ -27,3 +36,18 @@ async def kakao_login(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
         ) from exc
     return TokenResponse(**tokens)
+
+
+@router.post("/refresh", response_model=AccessTokenResponse)
+async def refresh(
+    payload: RefreshRequest,
+    session: AsyncSession = Depends(get_db),
+) -> AccessTokenResponse:
+    """refresh token으로 새 access token을 발급받는다."""
+    try:
+        result = await refresh_access_token(session, payload.refresh_token)
+    except RefreshTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
+        ) from exc
+    return AccessTokenResponse(**result)

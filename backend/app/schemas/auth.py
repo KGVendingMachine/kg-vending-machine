@@ -15,3 +15,16 @@ class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+
+
+class RefreshRequest(BaseModel):
+    """access token 재발급을 위해 refresh token을 전달한다."""
+
+    refresh_token: str
+
+
+class AccessTokenResponse(BaseModel):
+    """재발급된 access token."""
+
+    access_token: str
+    token_type: str = "bearer"
