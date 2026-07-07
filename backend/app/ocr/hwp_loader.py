@@ -119,10 +119,18 @@ class HWPLoader(BaseLoader):
         i = 0
         while i < len(unpacked_data):
             _, rec_type, rec_len = self._parse_record_header(unpacked_data[i : i + 4])
+            header_size = 4
+            if rec_len == 0xFFF:
+                # HWP5 스펙: 레코드 길이가 12비트(4095)로 못 담을 만큼 크면
+                # 헤더에는 0xFFF만 넣고, 바로 뒤 4바이트(UInt32)에 실제
+                # 길이를 따로 저장한다. 이걸 안 챙기면 4095바이트 넘는
+                # 문단/표 셀 하나 때문에 이후 모든 레코드 오프셋이 밀린다.
+                rec_len = struct.unpack_from("<I", unpacked_data[i + 4 : i + 8])[0]
+                header_size = 8
             if rec_type in self.HWP_TEXT_TAGS:
-                rec_data = unpacked_data[i + 4 : i + 4 + rec_len]
+                rec_data = unpacked_data[i + header_size : i + header_size + rec_len]
                 text.append(rec_data.decode("utf-16"))
-            i += 4 + rec_len
+            i += header_size + rec_len
 
         joined = "\n".join(text)
         joined = self._remove_chinese_characters(joined)
