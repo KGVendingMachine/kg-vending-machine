@@ -30,25 +30,28 @@ def extract_embedded_images(file_path: str) -> list[tuple[bytes, str]]:
     쓴 샘플엔 임베드 이미지가 없었음). 그림이 포함된 실제 HWP로 재검증이
     필요하다.
     """
-    load_file = olefile.OleFileIO(file_path)
-    compressed = _is_compressed(load_file)
-
     images = []
-    for entry in load_file.listdir():
-        if entry[0] != "BinData":
-            continue
-        stream_name = entry[-1]
-        ext = "." + stream_name.rsplit(".", 1)[-1].lower() if "." in stream_name else ""
-        if ext not in _IMAGE_EXTENSIONS:
-            continue
-        with load_file.openstream(entry) as stream:
-            data = stream.read()
-        if compressed:
-            try:
-                data = zlib.decompress(data, -15)
-            except zlib.error:
-                pass
-        images.append((data, ext))
+    with olefile.OleFileIO(file_path) as load_file:
+        compressed = _is_compressed(load_file)
+        for entry in load_file.listdir():
+            if entry[0] != "BinData":
+                continue
+            stream_name = entry[-1]
+            ext = (
+                "." + stream_name.rsplit(".", 1)[-1].lower()
+                if "." in stream_name
+                else ""
+            )
+            if ext not in _IMAGE_EXTENSIONS:
+                continue
+            with load_file.openstream(entry) as stream:
+                data = stream.read()
+            if compressed:
+                try:
+                    data = zlib.decompress(data, -15)
+                except zlib.error:
+                    pass
+            images.append((data, ext))
     return images
 
 
@@ -72,13 +75,13 @@ class HWPLoader(BaseLoader):
         self.extra_info = {"source": file_path}
 
     def lazy_load(self) -> Iterator[Document]:
-        load_file = olefile.OleFileIO(self.file_path)
-        file_dir = load_file.listdir()
+        with olefile.OleFileIO(self.file_path) as load_file:
+            file_dir = load_file.listdir()
 
-        if not self._is_valid_hwp(file_dir):
-            raise ValueError("유효하지 않은 HWP 파일입니다.")
+            if not self._is_valid_hwp(file_dir):
+                raise ValueError("유효하지 않은 HWP 파일입니다.")
 
-        result_text = self._extract_text(load_file, file_dir)
+            result_text = self._extract_text(load_file, file_dir)
         yield Document(page_content=result_text, metadata=self.extra_info)
 
     def _is_valid_hwp(self, dirs: list[list[str]]) -> bool:
