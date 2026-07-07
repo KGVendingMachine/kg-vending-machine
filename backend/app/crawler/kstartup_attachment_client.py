@@ -63,9 +63,20 @@ async def download_kstartup_attachment(file_url: str) -> bytes:
     호출로 확인함 (%PDF 매직바이트 검증).
     """
     settings = get_settings()
+    last_error: Exception | None = None
     async with httpx.AsyncClient(
         timeout=settings.KSTARTUP_REQUEST_TIMEOUT_SECONDS
     ) as client:
-        response = await client.get(file_url)
-        response.raise_for_status()
-        return response.content
+        for attempt in range(1, settings.KSTARTUP_MAX_RETRIES + 1):
+            try:
+                response = await client.get(file_url)
+                response.raise_for_status()
+                return response.content
+            except httpx.HTTPError as exc:
+                last_error = exc
+                if attempt < settings.KSTARTUP_MAX_RETRIES:
+                    await asyncio.sleep(attempt)
+
+    raise RuntimeError(
+        f"K-Startup 첨부파일 다운로드가 {settings.KSTARTUP_MAX_RETRIES}회 모두 실패했습니다"
+    ) from last_error
