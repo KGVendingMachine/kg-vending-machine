@@ -2,7 +2,9 @@ import io
 from pathlib import Path
 
 from PIL import Image
+from pypdf import PdfReader
 
+from app.core.config import get_settings
 from app.ocr.clova_ocr_client import call_clova_ocr_bytes, fetch_clova_ocr_text
 from app.ocr.hwp_loader import HWPLoader
 from app.ocr.hwp_loader import extract_embedded_images as extract_hwp_images
@@ -46,10 +48,27 @@ async def extract_text(file_path: str) -> tuple[str, str]:
     elif suffix == ".hwpx":
         text = HWPXLoader(file_path).load()[0].page_content
         text = await _append_embedded_image_text(text, extract_hwpx_images(file_path))
+    elif suffix == ".pdf":
+        text = _extract_native_pdf_text(file_path)
+        if len(text) < get_settings().PDF_OCR_TEXT_THRESHOLD:
+            # 네이티브 텍스트가 거의 없으면 스캔본으로 보고 OCR로 전환한다.
+            text = await fetch_clova_ocr_text(file_path)
     else:
         text = await fetch_clova_ocr_text(file_path)
 
     return text, file_type
+
+
+def _extract_native_pdf_text(file_path: str) -> str:
+    """PDF 자체에 이미 있는 텍스트 레이어를 읽는다.
+
+    실제 사업계획서 샘플로 확인해보니, 스캔본이 아니라 문서 프로그램에서
+    바로 만든 PDF가 많았고 이 경우 CLOVA OCR보다 네이티브 텍스트가 더
+    많고 정확했다 (OCR 인식 오류/누락이 없어서). 그래서 PDF는 OCR을
+    기본값으로 두지 않고, 네이티브 텍스트를 먼저 시도한다.
+    """
+    reader = PdfReader(file_path)
+    return "\n".join(page.extract_text() or "" for page in reader.pages)
 
 
 async def _append_embedded_image_text(

@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     CLOVA_OCR_MAX_RETRIES: int = 3
     CLOVA_OCR_LANGUAGE: str = "ko"
 
+    PDF_OCR_TEXT_THRESHOLD: int = 50
+
     @property
     def DATABASE_URL(self) -> str:
         return (
