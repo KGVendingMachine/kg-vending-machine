@@ -90,9 +90,18 @@ async def call_clova_ocr_bytes(file_bytes: bytes, image_format: str, name: str) 
                 response.raise_for_status()
                 payload = response.json()
                 images = payload.get("images")
-                if not images or images[0].get("inferResult") != "SUCCESS":
+                if not images:
                     raise RuntimeError(f"CLOVA OCR이 오류를 반환했습니다: {payload}")
-                return _fields_to_text(images[0].get("fields", []))
+                # 여러 페이지 PDF를 한 번에 보내면 페이지마다 images 배열에
+                # 항목이 하나씩 생겨서 돌아온다 (page 1개 = images 1개가
+                # 아님). images[0]만 읽으면 첫 페이지 텍스트만 남고 나머지
+                # 페이지가 조용히 유실되므로 전체를 순회해야 한다.
+                page_texts = []
+                for image in images:
+                    if image.get("inferResult") != "SUCCESS":
+                        raise RuntimeError(f"CLOVA OCR이 오류를 반환했습니다: {payload}")
+                    page_texts.append(_fields_to_text(image.get("fields", [])))
+                return "\n".join(page_texts)
             except (httpx.HTTPError, ValueError, RuntimeError) as exc:
                 last_error = exc
                 if attempt < settings.CLOVA_OCR_MAX_RETRIES:
