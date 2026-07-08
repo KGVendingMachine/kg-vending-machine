@@ -1,3 +1,4 @@
+import asyncio
 import io
 from pathlib import Path
 
@@ -23,6 +24,10 @@ _FILE_TYPE_BY_SUFFIX = {
 }
 # CLOVA OCR이 그대로 받아주는 이미지 포맷 (bmp/gif 등은 여기 없으면 png로 변환)
 _CLOVA_NATIVE_FORMATS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
+# 임베드 이미지가 많은 PDF(수십 개)에서 순차 처리하면 문서 하나에 2분 넘게
+# 걸려서(실측: 이미지 48개, 122초) 동시에 여러 개씩 보낸다. 너무 크게
+# 잡으면 CLOVA API에 순간적으로 부하가 몰릴 수 있어 5개로 제한한다.
+_MAX_CONCURRENT_IMAGE_OCR = 5
 
 
 async def extract_text(file_path: str) -> tuple[str, str]:
@@ -49,10 +54,19 @@ async def extract_text(file_path: str) -> tuple[str, str]:
         text = HWPXLoader(file_path).load()[0].page_content
         text = await _append_embedded_image_text(text, extract_hwpx_images(file_path))
     elif suffix == ".pdf":
-        text = _extract_native_pdf_text(file_path)
-        if len(text) < get_settings().PDF_OCR_TEXT_THRESHOLD:
-            # 네이티브 텍스트가 거의 없으면 스캔본으로 보고 OCR로 전환한다.
+        native_text = _extract_native_pdf_text(file_path)
+        if len(native_text) < get_settings().PDF_OCR_TEXT_THRESHOLD:
+            # 네이티브 텍스트가 거의 없으면 스캔본으로 보고 페이지 전체를
+            # CLOVA로 OCR한다 (이 경우 임베드 이미지도 페이지 이미지에
+            # 포함되어 이미 인식되므로 별도로 다시 돌리지 않는다).
             text = await fetch_clova_ocr_text(file_path)
+        else:
+            # 네이티브 텍스트는 있어도 본문에 그림으로 삽입된 차트·스크린샷은
+            # 텍스트로 안 잡힌다 (실제 샘플에서 쿠팡 판매 스크린샷 확인함) —
+            # HWP/HWPX와 동일하게 임베드 이미지를 보완 OCR한다.
+            text = await _append_embedded_image_text(
+                native_text, _extract_pdf_images(file_path)
+            )
     else:
         text = await fetch_clova_ocr_text(file_path)
 
@@ -71,14 +85,43 @@ def _extract_native_pdf_text(file_path: str) -> str:
     return "\n".join(page.extract_text() or "" for page in reader.pages)
 
 
+def _extract_pdf_images(file_path: str) -> list[tuple[bytes, str]]:
+    """PDF 안에 그림으로 삽입된 이미지를 전부 꺼낸다 (차트/스크린샷 등).
+
+    HWP/HWPX의 extract_embedded_images와 같은 목적 — 네이티브 텍스트
+    추출은 이미지 안의 글자를 못 읽으므로 별도로 OCR에 넘긴다.
+    """
+    reader = PdfReader(file_path)
+    images = []
+    for page in reader.pages:
+        for image in page.images:
+            ext = (
+                "." + image.name.rsplit(".", 1)[-1].lower() if "." in image.name else ""
+            )
+            images.append((image.data, ext))
+    return images
+
+
 async def _append_embedded_image_text(
     text: str, images: list[tuple[bytes, str]]
 ) -> str:
-    ocr_texts = []
-    for data, ext in images:
-        image_text = await _ocr_image_bytes(data, ext)
-        if image_text:
-            ocr_texts.append(image_text)
+    if not images:
+        return text
+
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENT_IMAGE_OCR)
+
+    async def _ocr_isolated(data: bytes, ext: str) -> str:
+        async with semaphore:
+            try:
+                return await _ocr_image_bytes(data, ext)
+            except Exception:
+                # 로고·아이콘처럼 글자가 없는 이미지는 CLOVA가 NO_TEXT
+                # 오류를 낸다. 이미지 하나가 실패해도 나머지 이미지
+                # 처리가 전부 죽지 않도록 항목별로 격리한다.
+                return ""
+
+    results = await asyncio.gather(*(_ocr_isolated(data, ext) for data, ext in images))
+    ocr_texts = [t for t in results if t]
     if not ocr_texts:
         return text
     return text + "\n" + "\n".join(ocr_texts)
