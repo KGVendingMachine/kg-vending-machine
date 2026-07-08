@@ -64,9 +64,13 @@ async def extract_text(file_path: str) -> tuple[str, str]:
             # 네이티브 텍스트는 있어도 본문에 그림으로 삽입된 차트·스크린샷은
             # 텍스트로 안 잡힌다 (실제 샘플에서 쿠팡 판매 스크린샷 확인함) —
             # HWP/HWPX와 동일하게 임베드 이미지를 보완 OCR한다.
-            text = await _append_embedded_image_text(
-                native_text, _extract_pdf_images(file_path)
-            )
+            try:
+                images = _extract_pdf_images(file_path)
+            except Exception:
+                # 이미지 추출 자체가 실패해도(예: pypdf가 못 읽는 특수
+                # 인코딩) 이미 확보한 네이티브 텍스트는 그대로 살린다.
+                images = []
+            text = await _append_embedded_image_text(native_text, images)
     else:
         text = await fetch_clova_ocr_text(file_path)
 
@@ -94,7 +98,13 @@ def _extract_pdf_images(file_path: str) -> list[tuple[bytes, str]]:
     reader = PdfReader(file_path)
     images = []
     for page in reader.pages:
-        for image in page.images:
+        try:
+            page_images = list(page.images)
+        except Exception:
+            # 한 페이지의 이미지 인코딩이 이상해도 다른 페이지 이미지는
+            # 계속 뽑는다 (페이지 하나 때문에 전체를 포기하지 않음).
+            continue
+        for image in page_images:
             ext = (
                 "." + image.name.rsplit(".", 1)[-1].lower() if "." in image.name else ""
             )
