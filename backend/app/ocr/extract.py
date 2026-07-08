@@ -54,7 +54,12 @@ async def extract_text(file_path: str) -> tuple[str, str]:
         text = HWPXLoader(file_path).load()[0].page_content
         text = await _append_embedded_image_text(text, extract_hwpx_images(file_path))
     elif suffix == ".pdf":
-        native_text = _extract_native_pdf_text(file_path)
+        try:
+            native_text = _extract_native_pdf_text(file_path)
+        except Exception:
+            # PdfReader가 아예 못 여는 파일(암호화·손상 등)이면 빈 문자열로
+            # 두고 아래 분기에서 CLOVA OCR로 넘어가게 한다.
+            native_text = ""
         if len(native_text) < get_settings().PDF_OCR_TEXT_THRESHOLD:
             # 네이티브 텍스트가 거의 없으면 스캔본으로 보고 페이지 전체를
             # CLOVA로 OCR한다 (이 경우 임베드 이미지도 페이지 이미지에
@@ -86,7 +91,15 @@ def _extract_native_pdf_text(file_path: str) -> str:
     기본값으로 두지 않고, 네이티브 텍스트를 먼저 시도한다.
     """
     reader = PdfReader(file_path)
-    return "\n".join(page.extract_text() or "" for page in reader.pages)
+    texts = []
+    for page in reader.pages:
+        try:
+            texts.append(page.extract_text() or "")
+        except Exception:
+            # 한 페이지의 폰트/콘텐츠 스트림이 깨져 있어도 다른 페이지
+            # 텍스트는 계속 뽑는다 (페이지 하나 때문에 전체를 포기하지 않음).
+            continue
+    return "\n".join(texts)
 
 
 def _extract_pdf_images(file_path: str) -> list[tuple[bytes, str]]:
