@@ -49,10 +49,12 @@ async def extract_text(file_path: str) -> tuple[str, str]:
 
     if suffix == ".hwp":
         text = HWPLoader(file_path).load()[0].page_content
-        text = await _append_embedded_image_text(text, extract_hwp_images(file_path))
+        images = _extract_images_safely(extract_hwp_images, file_path)
+        text = await _append_embedded_image_text(text, images)
     elif suffix == ".hwpx":
         text = HWPXLoader(file_path).load()[0].page_content
-        text = await _append_embedded_image_text(text, extract_hwpx_images(file_path))
+        images = _extract_images_safely(extract_hwpx_images, file_path)
+        text = await _append_embedded_image_text(text, images)
     elif suffix == ".pdf":
         try:
             native_text = _extract_native_pdf_text(file_path)
@@ -69,17 +71,27 @@ async def extract_text(file_path: str) -> tuple[str, str]:
             # 네이티브 텍스트는 있어도 본문에 그림으로 삽입된 차트·스크린샷은
             # 텍스트로 안 잡힌다 (실제 샘플에서 쿠팡 판매 스크린샷 확인함) —
             # HWP/HWPX와 동일하게 임베드 이미지를 보완 OCR한다.
-            try:
-                images = _extract_pdf_images(file_path)
-            except Exception:
-                # 이미지 추출 자체가 실패해도(예: pypdf가 못 읽는 특수
-                # 인코딩) 이미 확보한 네이티브 텍스트는 그대로 살린다.
-                images = []
+            images = _extract_images_safely(_extract_pdf_images, file_path)
             text = await _append_embedded_image_text(native_text, images)
     else:
         text = await fetch_clova_ocr_text(file_path)
 
     return text, file_type
+
+
+def _extract_images_safely(extractor, file_path: str) -> list[tuple[bytes, str]]:
+    """임베드 이미지 추출기를 호출하되, 실패해도 예외를 삼키고 빈 리스트를
+    반환한다.
+
+    HWP/HWPX/PDF 전부 이 함수 호출 전에 이미 본문 텍스트를 성공적으로
+    뽑은 상태다. 뒤이은 임베드 이미지 추출(BinData 스트림 손상, 특수
+    이미지 인코딩 등)이 실패한다고 해서 이미 확보한 본문 텍스트까지
+    잃으면 안 되므로, 여기서 실패를 격리한다.
+    """
+    try:
+        return extractor(file_path)
+    except Exception:
+        return []
 
 
 def _extract_native_pdf_text(file_path: str) -> str:
