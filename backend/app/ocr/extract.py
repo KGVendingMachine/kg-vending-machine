@@ -108,6 +108,19 @@ async def _append_embedded_image_text(
     if not images:
         return text
 
+    # 같은 이미지(로고·워터마크 등)가 여러 페이지에 반복 삽입된 경우가
+    # 실제로 있었다 (샘플 하나는 39개 중 18개가 중복). 같은 이미지를
+    # 중복으로 OCR 돌리면 API 호출도 낭비고 같은 텍스트가 결과에
+    # 여러 번 섞여 들어간다 — 내용 기준으로 중복 제거 후 처리한다.
+    seen: set[bytes] = set()
+    unique_images = []
+    for data, ext in images:
+        if data in seen:
+            continue
+        seen.add(data)
+        unique_images.append((data, ext))
+    images = unique_images
+
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_IMAGE_OCR)
 
     async def _ocr_isolated(data: bytes, ext: str) -> str:
