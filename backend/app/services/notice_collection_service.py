@@ -432,11 +432,14 @@ async def _save_kstartup_attachments(
 ) -> None:
     """K-Startup 상세페이지를 크롤링해 첨부파일 메타데이터만 저장한다.
 
-    목록 API 응답엔 첨부파일 정보가 없어(app/crawler/kstartup_attachment_client.py
-    참고) 상세페이지를 한 번 더 열어야 한다. 파일명/URL/타입만 저장하고
-    텍스트 추출(OCR)은 하지 않는다 — 전체 공고를 다 OCR하면 비용이 크므로,
-    텍스트 추출은 매칭 후보로 좁혀진 공고에 한해 별도 단계에서 수행한다
-    (docs/matching-pipeline.md 4단계).
+    현재 수집 파이프라인(_process_kstartup_item)에서는 호출하지 않는다.
+    기업마당과 달리 K-Startup은 목록 API 응답에 첨부파일 정보가 없어
+    이 함수 자체가 상세페이지를 여는 크롤링이라(app/crawler/
+    kstartup_attachment_client.py 참고), 전체 공고에 대해 매번 돌리면
+    "매칭 후보로 좁혀진 것만 무거운 작업 한다"는 원칙에 어긋난다.
+    수집 시점이 아니라 매칭 후보로 좁혀진 공고에 대해서만, 2차 필터링
+    단계(docs/matching-pipeline.md 4단계)에서 호출하는 용도로 남겨둔다.
+    텍스트 추출(OCR)도 이 함수가 아니라 그 단계에서 별도로 수행한다.
 
     공고 저장 자체와는 독립적인 부가 작업이라, 실패해도 공고 저장 결과에는
     영향을 주지 않도록 별도 SAVEPOINT로 격리한다. 상세페이지 조회(외부 HTTP,
@@ -562,8 +565,6 @@ async def _process_kstartup_item(
         collection_result.failed_count += 1
         collection_result.failed_ids.append(external_id)
         return
-
-    await _save_kstartup_attachments(session, notice_id, external_id)
 
     collection_result.saved_count += 1
 
