@@ -41,6 +41,31 @@ class Settings(BaseSettings):
     KSTARTUP_REQUEST_TIMEOUT_SECONDS: int = 15
     KSTARTUP_MAX_RETRIES: int = 3
 
+    CLOVA_OCR_INVOKE_URL: str = ""
+    CLOVA_OCR_SECRET_KEY: str = ""
+    CLOVA_OCR_TIMEOUT_SECONDS: int = 30
+    CLOVA_OCR_MAX_RETRIES: int = 3
+    CLOVA_OCR_LANGUAGE: str = "ko"
+
+    PDF_OCR_TEXT_THRESHOLD: int = 50
+
+    # 카카오 로그인 (OAuth2)
+    KAKAO_CLIENT_ID: str = ""
+    """카카오 개발자 콘솔의 REST API 키"""
+    KAKAO_CLIENT_SECRET: str = ""
+    """활성화한 경우에만 사용. 비어 있으면 토큰 교환 시 전송하지 않는다."""
+    KAKAO_REDIRECT_URI: str = "http://localhost:5173/auth/callback"
+    KAKAO_TOKEN_URL: str = "https://kauth.kakao.com/oauth/token"
+    KAKAO_USER_INFO_URL: str = "https://kapi.kakao.com/v2/user/me"
+    KAKAO_REQUEST_TIMEOUT_SECONDS: int = 10
+
+    # JWT (자체 발급 토큰)
+    JWT_SECRET: str = "change-me-in-env"
+    """운영 환경에서는 반드시 .env에서 안전한 랜덤 값으로 덮어쓴다."""
+    JWT_ALGORITHM: str = "HS256"
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 14
+
     @property
     def DATABASE_URL(self) -> str:
         return (

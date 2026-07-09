@@ -1,0 +1,266 @@
+.page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 230px 1fr 380px;
+  min-height: 0;
+}
+
+.sidebar {
+  border-right: 1px solid #eef0f2;
+  padding: 24px 20px;
+  overflow: auto;
+}
+
+.sidebarTitle {
+  font-size: 13px;
+  font-weight: 800;
+  margin-bottom: 18px;
+}
+
+.filterGroupTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-muted);
+  margin-bottom: 10px;
+}
+
+.filterOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font-size: 13px;
+  margin-bottom: 22px;
+}
+
+.filterLabel {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.checkbox {
+  width: 15px;
+  height: 15px;
+  border: 1px solid #c8cdd3;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.checkbox.checked {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+}
+
+.rangeTrack {
+  height: 6px;
+  background: var(--color-border);
+  border-radius: 3px;
+  position: relative;
+  margin: 14px 4px;
+}
+
+.rangeFill {
+  position: absolute;
+  left: 10%;
+  right: 30%;
+  top: 0;
+  bottom: 0;
+  background: var(--color-primary);
+  border-radius: 3px;
+}
+
+.rangeLabel {
+  font-size: 11px;
+  color: var(--color-faint);
+}
+
+.list {
+  padding: 22px 24px;
+  overflow: auto;
+  background: var(--color-bg-subtle);
+}
+
+.listHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.listCount {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.listCount span {
+  color: var(--color-primary);
+}
+
+.sortLabel {
+  font-size: 13px;
+  color: var(--color-muted);
+}
+
+.moreLink {
+  text-align: center;
+  font-size: 13px;
+  color: var(--color-faint);
+  padding: 8px;
+}
+
+.detail {
+  border-left: 1px solid #eef0f2;
+  padding: 24px;
+  overflow: auto;
+}
+
+.detailBadge {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+  padding: 3px 8px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.detailTitle {
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.4;
+  margin-top: 12px;
+}
+
+.detailOrg {
+  font-size: 13px;
+  color: var(--color-muted);
+  margin-top: 4px;
+}
+
+.gaugeBanner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0;
+  padding: 16px;
+  background: var(--color-success-bg);
+  border-radius: 6px;
+}
+
+.gaugeBannerText {
+  font-size: 13px;
+  color: #15803d;
+  line-height: 1.5;
+}
+
+.gaugeBannerText span {
+  color: var(--color-muted);
+}
+
+.detailSectionTitle {
+  font-size: 13px;
+  font-weight: 800;
+  margin-bottom: 10px;
+}
+
+.reasons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+  color: #374151;
+  line-height: 1.6;
+}
+
+.reasonItem {
+  border-left: 2px solid var(--color-success);
+  padding-left: 10px;
+}
+
+.reasonItem.warn {
+  border-left-color: var(--color-warning);
+}
+
+.breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.breakdownRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.breakdownTrack {
+  height: 5px;
+  background: var(--color-border);
+  border-radius: 3px;
+}
+
+.breakdownFill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--color-success);
+}
+
+.breakdownFill.warn {
+  background: var(--color-warning);
+}
+
+.detailActions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.primaryAction {
+  height: 44px;
+  border: none;
+  background: var(--color-primary);
+  color: #fff;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.secondaryAction {
+  height: 44px;
+  border: 1px solid var(--color-border-strong);
+  background: #fff;
+  color: var(--color-text);
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.disabledAction {
+  height: 44px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-subtle);
+  color: var(--color-faint);
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: not-allowed;
+}
+
+.emptyDetail {
+  font-size: 13px;
+  color: var(--color-faint);
+  text-align: center;
+  margin-top: 60px;
+}

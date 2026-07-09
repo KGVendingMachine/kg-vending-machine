@@ -1,0 +1,420 @@
+.page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.subnav {
+  height: 56px;
+  border-bottom: 1px solid #eef0f2;
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  gap: 14px;
+  background: #fff;
+}
+
+.backLink {
+  font-size: 13px;
+  color: var(--color-primary);
+  font-weight: 600;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.subnavTitle {
+  font-weight: 800;
+  font-size: 15px;
+}
+
+.bookmarkButton {
+  margin-left: auto;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.bookmarkButton.bookmarked {
+  border-color: #f5a623;
+  color: #f5a623;
+}
+
+.banner {
+  padding: 28px 40px;
+  border-bottom: 1px solid #eef0f2;
+  display: flex;
+  gap: 32px;
+  align-items: center;
+  background: #fff;
+}
+
+.diagnosis {
+  padding: 24px 40px;
+  border-bottom: 1px solid #eef0f2;
+  background: #fff;
+}
+
+.diagnosisHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.diagnosisHeading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.diagnosisTitle {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.diagnosisSubtitle {
+  font-size: 12.5px;
+  color: var(--color-faint);
+}
+
+.summaryOverview {
+  font-size: 13px;
+  color: #374151;
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.diagnosisGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.summaryCard {
+  border-left: 3px solid var(--color-primary);
+  background: var(--color-primary-bg);
+  border-radius: 0 6px 6px 0;
+  padding: 12px 14px;
+}
+
+.diagnosisCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 5px;
+}
+
+.diagnosisLabel {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.diagnosisMessage {
+  font-size: 12px;
+  color: #374151;
+  line-height: 1.55;
+}
+
+.bannerMain {
+  flex: 1;
+}
+
+.badges {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.category {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-primary);
+  background: var(--color-primary-bg);
+  padding: 3px 8px;
+  border-radius: 3px;
+}
+
+.deadline {
+  font-size: 11px;
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.title {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+
+.org {
+  font-size: 14px;
+  color: var(--color-muted);
+  margin-top: 5px;
+}
+
+.target {
+  font-size: 13px;
+  color: var(--color-faint);
+  margin-top: 4px;
+}
+
+.gaugeCol {
+  text-align: center;
+  padding-left: 32px;
+  border-left: 1px solid #eef0f2;
+}
+
+.gaugeLevel {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-success);
+  margin-top: 6px;
+}
+
+.gaugeRank {
+  font-size: 11px;
+  color: var(--color-faint);
+}
+
+.body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex: 1;
+}
+
+.left {
+  padding: 28px 32px;
+  border-right: 1px solid #eef0f2;
+  background: #fff;
+}
+
+.right {
+  padding: 28px 32px;
+  background: #fff;
+}
+
+.sectionTitle {
+  font-size: 15px;
+  font-weight: 800;
+  margin-bottom: 6px;
+}
+
+.sectionSubtitle {
+  font-size: 12.5px;
+  color: var(--color-faint);
+  margin-bottom: 20px;
+}
+
+.scoreItem {
+  margin-bottom: 20px;
+}
+
+.scoreItemHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 7px;
+}
+
+.scoreItemLabel {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.scoreItemWeight {
+  font-size: 11px;
+  color: var(--color-faint);
+  font-weight: 500;
+}
+
+.scoreItemValue {
+  font-size: 13.5px;
+  font-weight: 800;
+  color: var(--color-success);
+}
+
+.scoreItemValue.warn {
+  color: var(--color-warning);
+}
+
+.scoreTrack {
+  height: 7px;
+  background: var(--color-border);
+  border-radius: 4px;
+}
+
+.scoreFill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--color-success);
+}
+
+.scoreFill.warn {
+  background: var(--color-warning);
+}
+
+.scoreItemNote {
+  font-size: 12px;
+  color: var(--color-muted);
+  margin-top: 7px;
+  line-height: 1.55;
+}
+
+.divider {
+  height: 1px;
+  background: #eef0f2;
+  margin: 24px 0;
+}
+
+.requirements {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.requirementRow {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 13px;
+}
+
+.requirementIcon {
+  font-weight: 800;
+}
+
+.requirementIcon.ok {
+  color: var(--color-success);
+}
+
+.requirementIcon.warn {
+  color: var(--color-warning);
+}
+
+.requirementDetail {
+  color: var(--color-faint);
+}
+
+.reasonCards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 26px;
+}
+
+.reasonCard {
+  background: var(--color-success-bg);
+  border-left: 3px solid var(--color-success);
+  border-radius: 0 6px 6px 0;
+  padding: 12px 14px;
+}
+
+.reasonCard.warn {
+  background: var(--color-warning-bg);
+  border-left-color: var(--color-warning);
+}
+
+.reasonCardLabel {
+  font-size: 13px;
+  color: #15803d;
+  font-weight: 700;
+  margin-bottom: 3px;
+}
+
+.reasonCard.warn .reasonCardLabel {
+  color: #b45309;
+}
+
+.reasonCardDetail {
+  font-size: 12.5px;
+  color: #374151;
+  line-height: 1.6;
+}
+
+.comparisonTable {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 12.5px;
+}
+
+.comparisonRow {
+  display: grid;
+  grid-template-columns: 1fr 56px 64px 60px;
+}
+
+.comparisonHeaderRow {
+  background: var(--color-bg-subtle);
+  font-weight: 700;
+  color: var(--color-muted);
+}
+
+.comparisonRow > div {
+  padding: 11px 12px;
+}
+
+.comparisonRow.current {
+  background: #f5f9ff;
+}
+
+.comparisonRow.current > div {
+  font-weight: 700;
+}
+
+.comparisonRow:not(.comparisonHeaderRow) {
+  border-top: 1px solid #eef0f2;
+}
+
+.comparisonScore {
+  font-weight: 800;
+  color: var(--color-success);
+}
+
+.comparisonScore.warn {
+  color: var(--color-warning);
+}
+
+.checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.checklistItem {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.checklistBox {
+  width: 16px;
+  height: 16px;
+  border: 1px solid #c8cdd3;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.checklistBox.checked {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+}
+
+.disclaimer {
+  margin-top: 24px;
+  background: var(--color-bg-subtle);
+  border-radius: 6px;
+  padding: 14px 16px;
+  font-size: 12px;
+  color: var(--color-muted);
+  line-height: 1.6;
+}
