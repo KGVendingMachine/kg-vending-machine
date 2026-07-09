@@ -230,6 +230,21 @@ def _within_collection_window(start_date: date | None) -> bool:
     return start_date.year >= date.today().year - 1
 
 
+# docs/notice-category-mapping.md, category_mapping 시드 데이터(0756e6c105fe) 기준 —
+# 통합 카테고리 "자금"에 매핑되는 원본 카테고리 원문 값. 지금은 자금만 수집하기로
+# 정해서, 나머지 카테고리(기술/수출·글로벌/인력 등)는 아예 저장하지 않는다.
+_BIZINFO_FUND_LCLAS = "금융"
+_KSTARTUP_FUND_CLSFC = {"정책자금", "융자ㆍ보증", "사업화"}
+
+
+def _is_bizinfo_fund_category(item: dict) -> bool:
+    return item.get("pldirSportRealmLclasCodeNm") == _BIZINFO_FUND_LCLAS
+
+
+def _is_kstartup_fund_category(item: dict) -> bool:
+    return item.get("supt_biz_clsfc") in _KSTARTUP_FUND_CLSFC
+
+
 def _derive_status_from_dates(
     start_date: date | None, end_date: date | None, raw_period: str | None = None
 ) -> tuple[str, bool]:
@@ -261,6 +276,8 @@ async def _process_bizinfo_item(
         return
     pblanc_id = item.get("pblancId")
     if not pblanc_id:
+        return
+    if not _is_bizinfo_fund_category(item):
         return
     external_id = str(pblanc_id)
 
@@ -459,6 +476,8 @@ async def _process_kstartup_item(
         return
     pbanc_sn = item.get("pbanc_sn")
     if not pbanc_sn:
+        return
+    if not _is_kstartup_fund_category(item):
         return
     external_id = str(pbanc_sn)
 
