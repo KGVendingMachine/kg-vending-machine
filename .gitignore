@@ -157,6 +157,12 @@ ENV/
 env.bak/
 venv.bak/
 
+# SSH / AWS key material — never commit
+*.pem
+*.ppk
+id_rsa*
+id_ed25519*
+
 # Spyder project settings
 .spyderproject
 .spyproject
