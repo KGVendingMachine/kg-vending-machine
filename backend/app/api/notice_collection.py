@@ -109,6 +109,8 @@ def _has_active_job() -> bool:
     "/collect",
     response_model=CollectionJobAccepted,
     status_code=status.HTTP_202_ACCEPTED,
+    summary="공고 수집 시작",
+    description="기업마당 → K-Startup 순서로 공고 전체 수집을 백그라운드에서 시작한다.",
 )
 async def start_collection(background_tasks: BackgroundTasks):
     # 이미 도는 작업이 있는데 또 시작하면 K-Startup 첨부파일 크롤링까지
@@ -130,7 +132,12 @@ async def start_collection(background_tasks: BackgroundTasks):
     return CollectionJobAccepted(job_id=job_id, status=CollectionJobStatus.PENDING)
 
 
-@router.get("/collect/{job_id}", response_model=CollectionJobStatusResponse)
+@router.get(
+    "/collect/{job_id}",
+    response_model=CollectionJobStatusResponse,
+    summary="공고 수집 상태 조회",
+    description="진행 단계(current_phase)와 출처별 저장/실패 건수를 조회한다.",
+)
 async def get_collection_status(job_id: str):
     job = _JOBS.get(job_id)
     if job is None:
