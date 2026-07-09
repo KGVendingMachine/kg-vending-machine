@@ -7,6 +7,7 @@ from datetime import date, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crawler.bizinfo_client import fetch_bizinfo_notices
+from app.crawler.kstartup_attachment_client import fetch_kstartup_attachments
 from app.crawler.kstartup_client import fetch_kstartup_notices
 from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
@@ -16,6 +17,7 @@ from app.repositories.notice_repository import (
     get_or_create_source,
     replace_notice_region,
     replace_notice_target_type,
+    save_attachment,
     save_raw,
     upsert_notice,
 )
@@ -125,6 +127,70 @@ def _parse_regions(value: str | None) -> list[tuple[str, str]]:
     return regions
 
 
+def _parse_bizinfo_regions(hashtags: str | None) -> list[tuple[str, str]]:
+    """기업마당 hashtags 필드에서 지역명과 일치하는 태그만 골라낸다.
+
+    기업마당 API에는 K-Startup의 supt_regin 같은 전용 지역 필드가 없다.
+    대신 hashtags에 지역명이 "경영", "2026", 기관명 같은 다른 주제 태그와
+    뒤섞여 들어있다(실제 응답 예: "경영,서울,부산,...,지식재산처"). 알려진
+    지역명과 정확히 일치하는 태그만 채택하고 나머지는 조용히 무시한다 —
+    지역이 아닌 태그가 대부분이라 _parse_regions처럼 태그마다 경고를
+    남기면 로그가 도배된다.
+    """
+    regions: list[tuple[str, str]] = []
+    seen_codes: set[str] = set()
+    for tag in _split_multi_value(hashtags):
+        region_code = REGION_CODE_BY_NAME.get(tag)
+        if region_code is None or region_code in seen_codes:
+            continue
+        seen_codes.add(region_code)
+        regions.append((region_code, tag))
+    return regions
+
+
+def _file_type_from_name(file_name: str) -> str | None:
+    if "." not in file_name:
+        return None
+    return file_name.rsplit(".", 1)[-1].upper()
+
+
+def _parse_bizinfo_attachments(item: dict) -> list[tuple[str, str]]:
+    """기업마당 응답에 이미 들어있는 첨부파일 (파일명, URL) 목록을 뽑는다.
+
+    K-Startup과 달리 기업마당은 목록 API 응답 자체에 첨부파일 URL이 있어
+    별도 상세페이지 크롤링이 필요 없다. 다만 첨부파일이 여러 개인 공고는
+    fileNm/flpthNm(그리고 printFileNm/printFlpthNm) 각각이 "@"로 이어붙은
+    문자열로 온다 — 실제 응답으로 확인함(파일 4개짜리 공고에서 flpthNm이
+    "url0@url1@url2@url3" 형태, fileSn만 0/1/2/3으로 다름). 그대로 하나의
+    파일명/URL로 저장하면 URL 여러 개가 이어붙은 깨진 값이 되어 다운로드가
+    안 되므로, "@" 기준으로 나눠서 같은 순번끼리 짝짓는다.
+    """
+    attachments: list[tuple[str, str]] = []
+    seen_urls: set[str] = set()
+    for names_field, urls_field in (
+        (item.get("fileNm"), item.get("flpthNm")),
+        (item.get("printFileNm"), item.get("printFlpthNm")),
+    ):
+        if not names_field or not urls_field:
+            continue
+        names = names_field.split("@")
+        urls = urls_field.split("@")
+        if len(names) != len(urls):
+            logger.warning(
+                "기업마당 첨부파일명/URL 개수가 서로 다릅니다: names=%r urls=%r",
+                names_field,
+                urls_field,
+            )
+            continue
+        for file_name, file_url in zip(names, urls):
+            file_name, file_url = file_name.strip(), file_url.strip()
+            if not file_name or not file_url or file_url in seen_urls:
+                continue
+            seen_urls.add(file_url)
+            attachments.append((file_name, file_url))
+    return attachments
+
+
 # 기업마당 전체(1,439건) 실제 데이터로 확인함: reqstBeginEndDe가
 # "YYYY-MM-DD ~ YYYY-MM-DD" 형식이 아닌 787건 중 726건(약 92%)이
 # 날짜가 없는 게 아니라 "상시/예산 소진 시까지" 같은, 정해진 종료일 없이
@@ -150,6 +216,18 @@ def _is_rolling_open(value: str | None) -> bool:
     if not value:
         return False
     return any(keyword in value for keyword in _ROLLING_OPEN_KEYWORDS)
+
+
+def _within_collection_window(start_date: date | None) -> bool:
+    """올해·작년 공고만 수집 대상으로 삼는다 (그 이전 데이터는 저장하지 않음).
+
+    신청시작일을 못 구한 공고까지 무조건 버리면 "오래된 공고"와 "API 응답에
+    날짜가 아예 없는 경우"를 구분할 수 없어, 시작일을 모르면 일단 수집
+    대상으로 둔다.
+    """
+    if start_date is None:
+        return True
+    return start_date.year >= date.today().year - 1
 
 
 def _derive_status_from_dates(
@@ -190,6 +268,8 @@ async def _process_bizinfo_item(
         async with session.begin_nested():
             raw_period = item.get("reqstBeginEndDe")
             start_date, end_date = _parse_bizinfo_date_range(raw_period)
+            if not _within_collection_window(start_date):
+                return
             status, is_actionable = _derive_status_from_dates(
                 start_date, end_date, raw_period
             )
@@ -229,12 +309,22 @@ async def _process_bizinfo_item(
                 notice_id=notice_id,
             )
             # delete는 값이 없어도 항상 실행돼야 하므로(예전 값 정리),
-            # target_type이 falsy여도 replace_notice_target_type을
-            # 무조건 호출한다. 기업마당은 지원지역 필드가 확인되지
-            # 않아 notice_region은 호출하지 않는다.
+            # 값이 falsy여도 무조건 호출한다. 기업마당은 전용 지역 필드가
+            # 없어 hashtags에서 지역명과 일치하는 태그만 추려 사용한다.
             await replace_notice_target_type(
                 session, notice_id, _split_multi_value(item.get("trgetNm"))
             )
+            await replace_notice_region(
+                session, notice_id, _parse_bizinfo_regions(item.get("hashtags"))
+            )
+            for file_name, file_url in _parse_bizinfo_attachments(item):
+                await save_attachment(
+                    session,
+                    notice_id,
+                    file_name,
+                    file_url,
+                    _file_type_from_name(file_name),
+                )
 
             # 기업마당·K-Startup에 같은 사업이 각자 다른 external_id로
             # 중복 등록되는 경우, 제목이 같으면 기업마당을 우선한다.
@@ -320,6 +410,44 @@ async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult
     return collection_result
 
 
+async def _save_kstartup_attachments(
+    session: AsyncSession, notice_id: int, pbanc_sn: str
+) -> None:
+    """K-Startup 상세페이지를 크롤링해 첨부파일 메타데이터만 저장한다.
+
+    목록 API 응답엔 첨부파일 정보가 없어(app/crawler/kstartup_attachment_client.py
+    참고) 상세페이지를 한 번 더 열어야 한다. 파일명/URL/타입만 저장하고
+    텍스트 추출(OCR)은 하지 않는다 — 전체 공고를 다 OCR하면 비용이 크므로,
+    텍스트 추출은 매칭 후보로 좁혀진 공고에 한해 별도 단계에서 수행한다
+    (docs/matching-pipeline.md 4단계).
+
+    공고 저장 자체와는 독립적인 부가 작업이라, 실패해도 공고 저장 결과에는
+    영향을 주지 않도록 별도 SAVEPOINT로 격리한다. 상세페이지 조회(외부 HTTP,
+    재시도 포함 최대 KSTARTUP_REQUEST_TIMEOUT_SECONDS × KSTARTUP_MAX_RETRIES까지
+    걸릴 수 있음)는 SAVEPOINT 밖에서 먼저 끝내고, DB에 쓰는 부분만 짧게
+    SAVEPOINT로 감싼다 — 안에서 같이 하면 느린 외부 요청 동안 DB 커넥션과
+    트랜잭션을 계속 붙잡고 있게 된다.
+    """
+    try:
+        attachments = await fetch_kstartup_attachments(int(pbanc_sn))
+    except Exception:
+        logger.exception("K-Startup 첨부파일 조회 실패 (notice_id=%s)", notice_id)
+        return
+
+    try:
+        async with session.begin_nested():
+            for file_name, file_url in attachments:
+                await save_attachment(
+                    session,
+                    notice_id,
+                    file_name,
+                    file_url,
+                    _file_type_from_name(file_name),
+                )
+    except Exception:
+        logger.exception("K-Startup 첨부파일 저장 실패 (notice_id=%s)", notice_id)
+
+
 async def _process_kstartup_item(
     session: AsyncSession,
     source_id: int,
@@ -333,6 +461,10 @@ async def _process_kstartup_item(
     if not pbanc_sn:
         return
     external_id = str(pbanc_sn)
+
+    start_date = _parse_kstartup_date(item.get("pbanc_rcpt_bgng_dt"))
+    if not _within_collection_window(start_date):
+        return
 
     # 기업마당·K-Startup에 같은 사업이 각자 다른 external_id로 중복
     # 등록되는 경우, 제목이 같으면 기업마당을 우선한다. 기업마당이
@@ -348,7 +480,6 @@ async def _process_kstartup_item(
 
     try:
         async with session.begin_nested():
-            start_date = _parse_kstartup_date(item.get("pbanc_rcpt_bgng_dt"))
             end_date = _parse_kstartup_date(item.get("pbanc_rcpt_end_dt"))
             rcrt_prgs_yn = item.get("rcrt_prgs_yn")
             if rcrt_prgs_yn == "Y":
@@ -412,6 +543,8 @@ async def _process_kstartup_item(
         collection_result.failed_count += 1
         collection_result.failed_ids.append(external_id)
         return
+
+    await _save_kstartup_attachments(session, notice_id, external_id)
 
     collection_result.saved_count += 1
 

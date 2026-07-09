@@ -2,6 +2,7 @@ import asyncio
 import io
 from pathlib import Path
 
+import pdfplumber
 from PIL import Image
 from pypdf import PdfReader
 
@@ -101,16 +102,21 @@ def _extract_native_pdf_text(file_path: str) -> str:
     바로 만든 PDF가 많았고 이 경우 CLOVA OCR보다 네이티브 텍스트가 더
     많고 정확했다 (OCR 인식 오류/누락이 없어서). 그래서 PDF는 OCR을
     기본값으로 두지 않고, 네이티브 텍스트를 먼저 시도한다.
+
+    pypdf 대신 pdfplumber를 쓰는 이유: 표가 많은 사업계획서 양식에서
+    pypdf가 셀 순서를 뒤섞어 뽑는 경우가 실제 샘플에서 확인됐고(예:
+    "최대 1. 이내 10page 로"처럼 번호와 본문이 엇갈림), pdfplumber가
+    읽기 순서를 더 안정적으로 보존했다.
     """
-    reader = PdfReader(file_path)
     texts = []
-    for page in reader.pages:
-        try:
-            texts.append(page.extract_text() or "")
-        except Exception:
-            # 한 페이지의 폰트/콘텐츠 스트림이 깨져 있어도 다른 페이지
-            # 텍스트는 계속 뽑는다 (페이지 하나 때문에 전체를 포기하지 않음).
-            continue
+    with pdfplumber.open(file_path) as pdf:
+        for page in pdf.pages:
+            try:
+                texts.append(page.extract_text() or "")
+            except Exception:
+                # 한 페이지의 폰트/콘텐츠 스트림이 깨져 있어도 다른 페이지
+                # 텍스트는 계속 뽑는다 (페이지 하나 때문에 전체를 포기하지 않음).
+                continue
     return "\n".join(texts)
 
 
@@ -183,5 +189,15 @@ async def _ocr_image_bytes(data: bytes, ext: str) -> str:
         data = buffer.getvalue()
         ext = ".png"
 
-    image_format = "jpg" if ext in (".jpg", ".jpeg") else ext.lstrip(".")
+    if ext in (".jpg", ".jpeg"):
+        image_format = "jpg"
+    elif ext == ".tif":
+        # CLOVA는 "tiff"만 인식하고 "tif"는 모른다 (clova_ocr_client의
+        # _SUPPORTED_FORMATS 참고). pypdf가 CCITT 팩스 인코딩 이미지(스캔된
+        # 관공서 문서의 도장·서명 등에서 흔함)에 ".tif"를 붙이는 경우가
+        # 있어, 그대로 보내면 CLOVA가 거부하고 해당 이미지 텍스트만
+        # 조용히 유실된다.
+        image_format = "tiff"
+    else:
+        image_format = ext.lstrip(".")
     return await call_clova_ocr_bytes(data, image_format, "embedded")
