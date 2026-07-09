@@ -93,9 +93,23 @@ async def _run_collection_job(session: AsyncSession, job_id: str) -> None:
 
 async def _execute_collection_job(job_id: str) -> None:
     """BackgroundTasks 진입점. 요청 스코프 세션이 아니라 새 세션을 직접 연다
-    (business_plan.py의 정규화 작업 실행기와 동일한 이유)."""
-    async with async_session_factory() as session:
-        await _run_collection_job(session, job_id)
+    (business_plan.py의 정규화 작업 실행기와 동일한 이유).
+
+    세션을 여는 것 자체가 실패하는 경우까지 여기서 잡아야 한다 —
+    _run_collection_job 안의 try/except는 그 함수 안에서 일어나는
+    실패만 잡아서, 세션 생성 실패는 못 잡힌 채로 올라오면 job이
+    PENDING에 영원히 멈추고 _has_active_job()이 계속 True를 반환해
+    이후 수집 요청이 전부 막힌다.
+    """
+    try:
+        async with async_session_factory() as session:
+            await _run_collection_job(session, job_id)
+    except Exception as exc:
+        _JOBS[job_id] = CollectionJobStatusResponse(
+            job_id=job_id,
+            status=CollectionJobStatus.FAILED,
+            error_message=f"수집 작업 실행 실패: {exc}",
+        )
 
 
 def _has_active_job() -> bool:
