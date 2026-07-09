@@ -153,9 +153,9 @@ async def _run_notice_ocr_job(session: AsyncSession, job_id: str, notice_id: int
 
     suffix = _SUFFIX_BY_FILE_TYPE.get(target.file_type or "", ".pdf")
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(data)
         tmp_path = tmp.name
     try:
+        Path(tmp_path).write_bytes(data)
         text, _ = await extract_text(tmp_path)
     except Exception as exc:
         _JOBS[job_id] = NoticeOcrJobStatusResponse(
@@ -195,6 +195,14 @@ async def _execute_notice_ocr_job(job_id: str, notice_id: int) -> None:
         )
 
 
+def _has_active_job_for_notice(notice_id: int) -> bool:
+    return any(
+        job.notice_id == notice_id
+        and job.status in (NoticeOcrJobStatus.PENDING, NoticeOcrJobStatus.RUNNING)
+        for job in _JOBS.values()
+    )
+
+
 @router.post(
     "/{notice_id}/ocr",
     response_model=NoticeOcrJobAccepted,
@@ -203,6 +211,15 @@ async def _execute_notice_ocr_job(job_id: str, notice_id: int) -> None:
     description="공고 하나의 첨부파일(PDF/HWP/HWPX)을 확인·다운로드해 OCR 텍스트를 추출한다.",
 )
 async def start_notice_ocr(notice_id: int, background_tasks: BackgroundTasks):
+    # 같은 공고에 대해 동시에 두 번 트리거되면 각자 독립적으로 다운로드+OCR을
+    # 돌려서 CLOVA 호출 비용이 이중으로 나간다. 매칭 파이프라인이 여러 사용자
+    # 요청에서 같은 공고를 후보로 겹쳐 뽑으면 실제로 벌어질 수 있는 상황.
+    if _has_active_job_for_notice(notice_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 이 공고에 대한 OCR 작업이 진행 중입니다.",
+        )
+
     job_id = str(uuid.uuid4())
     _JOBS[job_id] = NoticeOcrJobStatusResponse(
         job_id=job_id, notice_id=notice_id, status=NoticeOcrJobStatus.PENDING
