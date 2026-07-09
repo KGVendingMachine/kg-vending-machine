@@ -273,6 +273,18 @@ async def save_attachment(
     await session.execute(stmt)
 
 
+async def set_attachment_parsed_text(
+    session: AsyncSession, attachment_id: int, parsed_text: str
+) -> None:
+    """첨부파일 OCR 결과를 저장한다. save_attachment의 upsert는 재수집 시
+    parsed_text를 건드리지 않으므로, OCR 결과 저장은 이 함수로 따로 한다."""
+    await session.execute(
+        update(NoticeAttachment)
+        .where(NoticeAttachment.id == attachment_id)
+        .values(parsed_text=parsed_text)
+    )
+
+
 async def get_category_mapping(session: AsyncSession) -> dict[str, int]:
     """원본 카테고리 키(예: "BIZINFO:금융") → kg_category.id 딕셔너리를 반환한다.
 
