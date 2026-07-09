@@ -98,12 +98,29 @@ async def _execute_collection_job(job_id: str) -> None:
         await _run_collection_job(session, job_id)
 
 
+def _has_active_job() -> bool:
+    return any(
+        job.status in (CollectionJobStatus.PENDING, CollectionJobStatus.RUNNING)
+        for job in _JOBS.values()
+    )
+
+
 @router.post(
     "/collect",
     response_model=CollectionJobAccepted,
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def start_collection(background_tasks: BackgroundTasks):
+    # 이미 도는 작업이 있는데 또 시작하면 K-Startup 첨부파일 크롤링까지
+    # 겹쳐 돌아 외부 사이트에 요청이 배로 몰리고 리소스만 낭비한다.
+    # (멀티 워커 환경에서는 워커별로 따로 관리되어 이 가드가 못 막는
+    # 경우도 있음 — 모듈 docstring 참고.)
+    if _has_active_job():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 실행 중인 공고 수집 작업이 있습니다.",
+        )
+
     job_id = str(uuid.uuid4())
     _JOBS[job_id] = CollectionJobStatusResponse(
         job_id=job_id, status=CollectionJobStatus.PENDING
