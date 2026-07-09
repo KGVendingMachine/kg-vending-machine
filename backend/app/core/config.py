@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_TIMEOUT_SECONDS: float = 30.0
     OPENAI_MAX_RETRIES: int = 3
+    BUSINESS_PLAN_SAMPLE_JSON_PATH: str = ""
 
     BIZINFO_API_KEY: str = ""
     BIZINFO_API_URL: str = "https://www.bizinfo.go.kr/uss/rss/bizinfoApi.do"
