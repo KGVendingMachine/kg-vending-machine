@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     KSTARTUP_REQUEST_TIMEOUT_SECONDS: int = 15
     KSTARTUP_MAX_RETRIES: int = 3
 
+    CLOVA_OCR_INVOKE_URL: str = ""
+    CLOVA_OCR_SECRET_KEY: str = ""
+    CLOVA_OCR_TIMEOUT_SECONDS: int = 30
+    CLOVA_OCR_MAX_RETRIES: int = 3
+    CLOVA_OCR_LANGUAGE: str = "ko"
+
+    PDF_OCR_TEXT_THRESHOLD: int = 50
+
     # 카카오 로그인 (OAuth2)
     KAKAO_CLIENT_ID: str = ""
     """카카오 개발자 콘솔의 REST API 키"""
