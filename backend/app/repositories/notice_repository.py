@@ -4,7 +4,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.category import CategoryMapping
+from app.models.category import CategoryMapping, KgCategory
 from app.models.notice import Notice, NoticeAttachment, NoticeRegion, NoticeTargetType
 from app.models.notice_source import NoticeSource
 from app.models.organization import Organization
@@ -291,3 +291,105 @@ async def set_notice_category(
     await session.execute(
         update(Notice).where(Notice.id == notice_id).values(category_id=category_id)
     )
+
+
+async def list_notices(
+    session: AsyncSession,
+    *,
+    source_name: str | None = None,
+    category_name: str | None = None,
+    region_code: str | None = None,
+    exclude_closed: bool = False,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[tuple[Notice, str, str | None]], int]:
+    """조건에 맞는 공고 목록((Notice, 출처명, 카테고리명) 튜플)과 전체 건수를 반환한다.
+
+    notice_region은 공고당 여러 행이라, LIMIT 걸기 전에 JOIN하면 지역이
+    여러 개인 공고가 페이지네이션 개수를 왜곡한다(행이 늘어나 LIMIT 안에
+    다른 공고가 덜 들어옴). region_code 필터는 유니크 제약(notice_id,
+    region_code) 덕에 공고당 최대 1행만 매치되니 걸어도 안전하지만,
+    지역 목록 자체는 여기서 같이 안 뽑고 호출자가 notice_id로 따로
+    조회해야 한다.
+    """
+    query = (
+        select(Notice, NoticeSource.source_name, KgCategory.name)
+        .join(NoticeSource, NoticeSource.id == Notice.source_id)
+        .outerjoin(KgCategory, KgCategory.id == Notice.category_id)
+    )
+    if region_code:
+        query = query.join(
+            NoticeRegion,
+            (NoticeRegion.notice_id == Notice.id)
+            & (NoticeRegion.region_code == region_code),
+        )
+    if source_name:
+        query = query.where(NoticeSource.source_name == source_name)
+    if category_name:
+        query = query.where(KgCategory.name == category_name)
+    if exclude_closed:
+        query = query.where(Notice.status.is_distinct_from("마감"))
+
+    total = await session.scalar(
+        select(func.count()).select_from(query.with_only_columns(Notice.id).subquery())
+    )
+
+    result = await session.execute(
+        query.order_by(Notice.id.desc()).limit(limit).offset(offset)
+    )
+    return list(result.all()), total or 0
+
+
+async def get_notice_regions_by_ids(
+    session: AsyncSession, notice_ids: list[int]
+) -> dict[int, list[str]]:
+    """notice_id -> 지역명 목록 딕셔너리. list_notices 결과에 붙여쓰는 용도."""
+    if not notice_ids:
+        return {}
+    result = await session.execute(
+        select(NoticeRegion.notice_id, NoticeRegion.region_name).where(
+            NoticeRegion.notice_id.in_(notice_ids)
+        )
+    )
+    regions: dict[int, list[str]] = {}
+    for notice_id, region_name in result.all():
+        regions.setdefault(notice_id, []).append(region_name)
+    return regions
+
+
+async def get_notice_detail(
+    session: AsyncSession, notice_id: int
+) -> tuple[Notice, str, str | None] | None:
+    """공고 하나를 (Notice, 출처명, 카테고리명) 튜플로 반환한다. 없으면 None."""
+    result = await session.execute(
+        select(Notice, NoticeSource.source_name, KgCategory.name)
+        .join(NoticeSource, NoticeSource.id == Notice.source_id)
+        .outerjoin(KgCategory, KgCategory.id == Notice.category_id)
+        .where(Notice.id == notice_id)
+    )
+    return result.first()
+
+
+async def get_notice_target_types(session: AsyncSession, notice_id: int) -> list[str]:
+    result = await session.execute(
+        select(NoticeTargetType.target_type).where(
+            NoticeTargetType.notice_id == notice_id
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def get_notice_regions(session: AsyncSession, notice_id: int) -> list[str]:
+    result = await session.execute(
+        select(NoticeRegion.region_name).where(NoticeRegion.notice_id == notice_id)
+    )
+    return list(result.scalars().all())
+
+
+async def get_notice_attachments(
+    session: AsyncSession, notice_id: int
+) -> list[NoticeAttachment]:
+    result = await session.execute(
+        select(NoticeAttachment).where(NoticeAttachment.notice_id == notice_id)
+    )
+    return list(result.scalars().all())
