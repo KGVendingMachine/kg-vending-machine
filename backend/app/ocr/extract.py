@@ -189,5 +189,15 @@ async def _ocr_image_bytes(data: bytes, ext: str) -> str:
         data = buffer.getvalue()
         ext = ".png"
 
-    image_format = "jpg" if ext in (".jpg", ".jpeg") else ext.lstrip(".")
+    if ext in (".jpg", ".jpeg"):
+        image_format = "jpg"
+    elif ext == ".tif":
+        # CLOVA는 "tiff"만 인식하고 "tif"는 모른다 (clova_ocr_client의
+        # _SUPPORTED_FORMATS 참고). pypdf가 CCITT 팩스 인코딩 이미지(스캔된
+        # 관공서 문서의 도장·서명 등에서 흔함)에 ".tif"를 붙이는 경우가
+        # 있어, 그대로 보내면 CLOVA가 거부하고 해당 이미지 텍스트만
+        # 조용히 유실된다.
+        image_format = "tiff"
+    else:
+        image_format = ext.lstrip(".")
     return await call_clova_ocr_bytes(data, image_format, "embedded")
