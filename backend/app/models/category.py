@@ -27,7 +27,15 @@ class KgCategory(Base):
 
     id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
     name: Mapped[CategoryName] = mapped_column(
-        SqlEnum(CategoryName, name="category_name"), nullable=False
+        # values_callable 없으면 SqlAlchemy가 기본으로 .name(FUND 등 영문
+        # 멤버명)을 저장한다. 화면에 그대로 노출해도 되는 값을 저장하려고
+        # .value(자금 등 한글 표시값)를 쓰도록 명시한다.
+        SqlEnum(
+            CategoryName,
+            name="category_name",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        ),
+        nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
