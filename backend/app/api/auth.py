@@ -24,7 +24,15 @@ from app.utils.kakao_client import KakaoAuthError
 router = APIRouter()
 
 
-@router.post("/kakao", response_model=TokenResponse)
+@router.post(
+    "/kakao",
+    response_model=TokenResponse,
+    summary="카카오 로그인",
+    responses={
+        401: {"description": "카카오 인증 실패"},
+        403: {"description": "비활성화된 계정"},
+    },
+)
 async def kakao_login(
     payload: KakaoLoginRequest,
     session: AsyncSession = Depends(get_db),
@@ -43,7 +51,15 @@ async def kakao_login(
     return TokenResponse(**tokens)
 
 
-@router.post("/refresh", response_model=AccessTokenResponse)
+@router.post(
+    "/refresh",
+    response_model=AccessTokenResponse,
+    summary="access token 재발급",
+    responses={
+        401: {"description": "refresh token이 유효하지 않음"},
+        403: {"description": "비활성화된 계정"},
+    },
+)
 async def refresh(
     payload: RefreshRequest,
     session: AsyncSession = Depends(get_db),
