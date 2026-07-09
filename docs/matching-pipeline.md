@@ -61,18 +61,25 @@
   → 상위 K건 확정 (2차 필터링 결과)
 ```
 
-- **첨부파일 가져오는 방법(2026-07-07 구현 완료, `app/crawler`·`app/ocr` 담당 영역)**:
+- **첨부파일 가져오는 방법(2026-07-09 갱신, `app/crawler`·`app/ocr` 담당 영역)**:
   - 기업마당: raw API 응답(`fileNm`/`flpthNm`, `printFileNm`/`printFlpthNm`)에 다운로드 URL이
-    이미 있어, 수집 시점에 `notice_attachment`에 미리 채워둠 (`app/repositories/notice_repository.py`
-    `save_attachment`).
+    이미 있어, **수집 시점(`notice_collection_service._process_bizinfo_item`)에 매번**
+    `notice_attachment`에 채운다 (`app/repositories/notice_repository.py` `save_attachment`).
+    첨부파일이 여러 개면 두 필드가 각각 `"@"`로 이어붙어 오므로 이름/URL을 순서대로
+    짝지어 분리해야 한다(합쳐서 저장하면 다운로드 불가능한 URL이 됨).
   - K-Startup: 목록 API 응답에는 첨부파일 정보가 없음(전체 29,353건 확인). 상세페이지
     (`bizpbanc-ongoing.do`) HTML에 서버 렌더링된 `/afile/fileDownload/{코드}` 링크가 있어,
     `app/crawler/kstartup_attachment_client.py`의 `fetch_kstartup_attachments(pbanc_sn)`으로
-    단건 조회 후 `download_kstartup_attachment(file_url)`로 다운로드한다. 전체를 미리 긁지
-    않고 1차 필터링을 통과한 공고에 대해서만 이 시점에 호출하는 용도로 만들어 둠.
-  - 텍스트 추출은 포맷 상관없이 `app/ocr/extract.py`의 `extract_text(file_path)` 하나로
-    처리(HWP/HWPX/PDF/이미지, 문서 내 그림으로 삽입된 표까지 OCR 보완 포함).
-- 왜 1차 필터링 후에만 이 작업을 하는가: PDF OCR + 임베딩은 비용이 크기 때문에, 명백히 부적합한 공고까지 전부 처리하지 않기 위함이다.
+    단건 조회한다. **원래는 1차 필터링을 통과한 공고에 대해서만 호출할 계획이었으나,
+    2026-07-09부터 `notice_collection_service._process_kstartup_item`이 수집 시점마다
+    바로 호출하도록 바뀌었다** (파일명/URL/타입 메타데이터만 저장, 텍스트 추출은 안 함).
+  - 텍스트 추출(OCR)은 여전히 1차 필터링을 통과한 매칭 후보 공고에 한해서만 수행한다 —
+    포맷 상관없이 `app/ocr/extract.py`의 `extract_text(file_path)` 하나로 처리
+    (HWP/HWPX/PDF/이미지, 문서 내 그림으로 삽입된 표까지 OCR 보완 포함). 사업계획서
+    OCR과 완전히 같은 함수를 재사용하므로, 공고문도 CLOVA OCR을 바로 부르지 않고
+    네이티브 텍스트(pdfplumber/HWP·HWPX 로더)를 먼저 시도한다.
+- 왜 텍스트 추출·임베딩은 1차 필터링 후에만 하는가: PDF OCR + 임베딩은 비용이 크기 때문에, 명백히 부적합한 공고까지 전부 처리하지 않기 위함이다 (첨부파일 메타데이터 자체는 위처럼 수집 시점에 미리 채워두지만, 텍스트 추출까지 미리 하지는 않는다).
+- **운영 규칙 — 기업마당을 항상 K-Startup보다 먼저 수집할 것**: 같은 공고가 두 출처에 중복 등록되면 "기업마당 우선 정책"으로 제목이 같은 K-Startup 공고를 삭제하는데(`_process_bizinfo_item`), 이 삭제는 K-Startup 쪽에 이미 저장된 첨부파일까지 cascade로 지운다. K-Startup을 먼저 수집하면 방금 크롤링한 첨부파일이 곧바로 삭제될 수 있으므로, 반드시 기업마당(`collect_all_bizinfo_notices`) → K-Startup(`collect_all_kstartup_notices`) 순서로 실행해야 한다. (기업마당이 먼저면 `_process_kstartup_item`의 중복 검사가 애초에 저장을 건너뛰어 문제가 발생하지 않음.)
 - 벡터 DB는 공고 단위로 재사용 가능하도록 캐싱하는 것을 전제로 한다 (동일 공고를 여러 사용자의 계획서와 비교할 때 매번 재추출하지 않도록). TBD: 캐시 무효화 기준(공고 수정/재게시 시 갱신 여부).
 
 ## 5단계 — AI 매칭 스코어링
