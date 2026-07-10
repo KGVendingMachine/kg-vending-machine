@@ -2,15 +2,17 @@
 다운로드 → 텍스트 추출(extract_text) → 공고 메타데이터와 합쳐서 AI 팀원에게
 줄 샘플 JSON을 만든다.
 
-기업마당 + K-Startup 둘 다 포함한다. 기업마당은 목록 API 응답에 첨부파일이
-이미 있어(수집 시점에 채워짐) DB 조회만 하면 되지만, K-Startup은 목록
-API에 첨부파일 정보가 없어 상세페이지를 크롤링해 첨부파일을 먼저 찾는다
-(app/crawler/kstartup_attachment_client.py, notice_ocr.py의
-_ensure_kstartup_attachments와 같은 방식).
+기업마당 + K-Startup 둘 다 포함하되, 소스 비율은 상관없이 전체
+_TOTAL_SAMPLE_COUNT건을 채우는 게 목표다. 기업마당은 목록 API 응답에
+첨부파일이 이미 있어(수집 시점에 채워짐) DB 조회만 하면 되지만,
+K-Startup은 목록 API에 첨부파일 정보가 없어 상세페이지를 크롤링해
+첨부파일을 먼저 찾는다(app/crawler/kstartup_attachment_client.py,
+notice_ocr.py의 _ensure_kstartup_attachments와 같은 방식) — 기업마당
+쪽에서 목표치를 못 채우면 그 부족분만큼 K-Startup을 크롤링해서라도
+채운다.
 
-올해~작년 공고로 한정한다. 소스별 목표 건수(_SAMPLE_COUNT_PER_SOURCE)만큼
-못 채우면 있는 만큼만 담는다 (예: K-Startup 첨부파일이 있는 공고 자체가
-적으면 목표보다 적게 나올 수 있음).
+올해~작년 공고로 한정한다. 그래도 목표치를 못 채우면(예: 조건에 맞는
+공고 자체가 부족) 있는 만큼만 담는다.
 
 실행: uv run python scripts/export_notice_ocr_samples.py
 """
@@ -32,12 +34,12 @@ from app.models.notice import Notice, NoticeAttachment
 from app.models.notice_source import NoticeSource
 from app.ocr.extract import extract_text
 
-_SAMPLE_COUNT_PER_SOURCE = 10
+_TOTAL_SAMPLE_COUNT = 30
 _TARGET_FILE_TYPES = {"PDF", "HWP", "HWPX"}
-_KSTARTUP_CANDIDATE_POOL_SIZE = _SAMPLE_COUNT_PER_SOURCE * 5
+_KSTARTUP_CANDIDATE_POOL_SIZE = _TOTAL_SAMPLE_COUNT * 5
 """K-Startup은 후보 공고 중 첨부파일이 아예 없거나 대상 포맷이 아닌 경우가
-많아(약 76%가 첨부파일 없음, docs/matching-pipeline.md 참고), 목표 건수보다
-넉넉하게 후보를 뽑아서 그중 실제로 채워지는 만큼만 쓴다."""
+많아(약 76%가 첨부파일 없음, docs/matching-pipeline.md 참고), 필요한
+건수보다 넉넉하게 후보를 뽑아서 그중 실제로 채워지는 만큼만 쓴다."""
 _SINCE_LAST_YEAR = date(datetime.now().year - 1, 1, 1)  # 작년 1/1부터 (올해 포함)
 _OUTPUT_PATH = (
     Path(__file__).resolve().parent.parent / "data" / "notice_ocr_samples.json"
@@ -67,7 +69,7 @@ async def _fetch_bizinfo_candidates(
             Notice.application_start_date >= _SINCE_LAST_YEAR,
         )
         .order_by(Notice.application_end_date.desc())
-        .limit(_SAMPLE_COUNT_PER_SOURCE)
+        .limit(_TOTAL_SAMPLE_COUNT)
     )
     result = await session.execute(stmt)
     return [
@@ -163,13 +165,19 @@ async def _collect_bizinfo_samples(client: httpx.AsyncClient) -> list[dict]:
     return samples
 
 
-async def _collect_kstartup_samples(client: httpx.AsyncClient) -> list[dict]:
+async def _collect_kstartup_samples(
+    client: httpx.AsyncClient, needed: int
+) -> list[dict]:
+    """기업마당에서 못 채운 나머지(needed건)를 K-Startup 크롤링으로 채운다."""
+    if needed <= 0:
+        return []
+
     async with async_session_factory() as session:
         candidate_notices = await _fetch_kstartup_candidate_notices(session)
 
     samples = []
     for notice, source_name, category_name in candidate_notices:
-        if len(samples) >= _SAMPLE_COUNT_PER_SOURCE:
+        if len(samples) >= needed:
             break
         try:
             attachments = await fetch_kstartup_attachments(int(notice.external_id))
@@ -210,7 +218,8 @@ async def _collect_kstartup_samples(client: httpx.AsyncClient) -> list[dict]:
 async def main() -> None:
     async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT_SECONDS) as client:
         bizinfo_samples = await _collect_bizinfo_samples(client)
-        kstartup_samples = await _collect_kstartup_samples(client)
+        remaining = _TOTAL_SAMPLE_COUNT - len(bizinfo_samples)
+        kstartup_samples = await _collect_kstartup_samples(client, remaining)
 
     samples = bizinfo_samples + kstartup_samples
     if not samples:
