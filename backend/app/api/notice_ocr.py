@@ -63,14 +63,16 @@ def _file_type_from_name(file_name: str) -> str | None:
 def _pick_ocr_target(attachments: list[NoticeAttachment]) -> NoticeAttachment | None:
     """이미 OCR된 게 있으면 그걸 우선하고, 없으면 문서 포맷 중 첫 번째를 고른다."""
     already_parsed = next(
-        (a for a in attachments if a.file_type in _OCR_TARGET_FILE_TYPES and a.parsed_text),
+        (
+            a
+            for a in attachments
+            if a.file_type in _OCR_TARGET_FILE_TYPES and a.parsed_text
+        ),
         None,
     )
     if already_parsed is not None:
         return already_parsed
-    return next(
-        (a for a in attachments if a.file_type in _OCR_TARGET_FILE_TYPES), None
-    )
+    return next((a for a in attachments if a.file_type in _OCR_TARGET_FILE_TYPES), None)
 
 
 async def _ensure_kstartup_attachments(
@@ -87,7 +89,9 @@ async def _ensure_kstartup_attachments(
     return await get_notice_attachments(session, notice_id)
 
 
-async def _run_notice_ocr_job(session: AsyncSession, job_id: str, notice_id: int) -> None:
+async def _run_notice_ocr_job(
+    session: AsyncSession, job_id: str, notice_id: int
+) -> None:
     row = await get_notice_detail(session, notice_id)
     if row is None:
         _JOBS[job_id] = NoticeOcrJobStatusResponse(

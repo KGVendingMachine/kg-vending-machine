@@ -66,10 +66,16 @@ async def _create_notice(db_session, source: NoticeSource, **overrides) -> int:
 
 async def test_get_or_create_source_is_idempotent(db_session):
     first = await get_or_create_source(
-        db_session, source_name="중복테스트출처", base_url="https://a.com", collect_type="API"
+        db_session,
+        source_name="중복테스트출처",
+        base_url="https://a.com",
+        collect_type="API",
     )
     second = await get_or_create_source(
-        db_session, source_name="중복테스트출처", base_url="https://b.com", collect_type="API"
+        db_session,
+        source_name="중복테스트출처",
+        base_url="https://b.com",
+        collect_type="API",
     )
 
     assert first.id == second.id
@@ -311,7 +317,9 @@ async def test_list_notices_filters_by_category_name(db_session):
     )
     await _create_notice(db_session, source, external_id="cat-none")
 
-    rows, total = await list_notices(db_session, source_name="목록조회_카테고리", category_name="자금")
+    rows, total = await list_notices(
+        db_session, source_name="목록조회_카테고리", category_name="자금"
+    )
 
     assert total == 1
     assert rows[0][0].id == fund_id

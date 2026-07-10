@@ -199,7 +199,9 @@ def test_derive_status_마감_when_end_date_passed():
 
 
 def test_derive_status_모집중_when_both_dates_bracket_today():
-    status, is_actionable = _derive_status_from_dates(date(2020, 1, 1), date(2099, 1, 1))
+    status, is_actionable = _derive_status_from_dates(
+        date(2020, 1, 1), date(2099, 1, 1)
+    )
     assert (status, is_actionable) == ("모집중", True)
 
 
@@ -319,7 +321,11 @@ async def test_backfill_skips_malformed_raw_json_without_aborting_batch(db_sessi
         apply_url=None,
         summary_text=None,
     )
-    db_session.add(KstartupRaw(key="ks-broken", field="이건 JSON이 아님", notice_id=broken_notice_id))
+    db_session.add(
+        KstartupRaw(
+            key="ks-broken", field="이건 JSON이 아님", notice_id=broken_notice_id
+        )
+    )
     db_session.add(
         KstartupRaw(
             key="ks-ok",

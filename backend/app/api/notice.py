@@ -36,7 +36,9 @@ router = APIRouter(prefix="/notices", tags=["notices"])
 )
 async def get_notices(
     source: str | None = Query(default=None, description="기업마당 / K-Startup"),
-    category: str | None = Query(default=None, description="자금, R&D·기술 등 통합 카테고리명"),
+    category: str | None = Query(
+        default=None, description="자금, R&D·기술 등 통합 카테고리명"
+    ),
     region_code: str | None = Query(default=None, description="행정표준코드, 전국=ALL"),
     exclude_closed: bool = Query(default=True, description="마감 공고 제외 여부"),
     limit: int = Query(default=20, ge=1, le=100),
