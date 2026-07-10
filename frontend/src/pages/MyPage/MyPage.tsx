@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom'
+import { apiFetch } from '../../api/client'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { mockCompany } from '../../mock/company'
 import { PATHS } from '../../routes/paths'
@@ -6,6 +7,18 @@ import styles from './MyPage.module.css'
 
 export function MyPage() {
   const navigate = useNavigate()
+
+  async function handleLogout(): Promise<void> {
+    // 서버가 인증 쿠키를 삭제하게 한다. 실패하더라도(이미 만료 등) 사용자
+    // 의도는 로그아웃이므로 어느 경우든 루트 페이지로 보낸다.
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' })
+    } catch {
+      // 무시하고 이동한다.
+    } finally {
+      navigate(PATHS.LANDING)
+    }
+  }
 
   return (
     <div className={styles.page}>
@@ -48,7 +61,7 @@ export function MyPage() {
         <button
           type="button"
           className={styles.logoutButton}
-          onClick={() => navigate(PATHS.LANDING)}
+          onClick={handleLogout}
         >
           로그아웃
         </button>
