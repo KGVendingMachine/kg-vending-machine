@@ -181,6 +181,65 @@ def test_parse_bizinfo_regions_normalizes_known_malformed_compound_tags():
     assert regions == [("46", "전남")]
 
 
+def test_parse_bizinfo_regions_adds_all_when_every_region_tagged():
+    """기업마당은 "전국" 태그 대신 광역자치단체 17개를 전부 나열하는
+    방식으로 전국 대상을 표현한다(실제 응답으로 확인함). 17개가 다 있으면
+    K-Startup과 같은 기준(region_code=ALL)으로도 조회되도록 "전국"을
+    추가해야 한다."""
+    all_region_names = [
+        "서울",
+        "부산",
+        "대구",
+        "인천",
+        "광주",
+        "대전",
+        "울산",
+        "세종",
+        "경기",
+        "충북",
+        "충남",
+        "전남",
+        "경북",
+        "경남",
+        "제주",
+        "강원",
+        "전북",
+    ]
+    assert len(all_region_names) == len(svc._ALL_REGION_CODES)
+
+    regions = _parse_bizinfo_regions("금융,2026," + ",".join(all_region_names))
+
+    codes = {code for code, _ in regions}
+    assert codes == svc._ALL_REGION_CODES | {"ALL"}
+
+
+def test_parse_bizinfo_regions_no_all_when_one_region_missing():
+    """17개 중 하나라도 빠지면 전국으로 간주하지 않는다."""
+    all_but_jeju = [
+        "서울",
+        "부산",
+        "대구",
+        "인천",
+        "광주",
+        "대전",
+        "울산",
+        "세종",
+        "경기",
+        "충북",
+        "충남",
+        "전남",
+        "경북",
+        "경남",
+        "강원",
+        "전북",
+    ]
+
+    regions = _parse_bizinfo_regions(",".join(all_but_jeju))
+
+    codes = {code for code, _ in regions}
+    assert "ALL" not in codes
+
+
 # ---------------------------------------------------------------------------
 # 기업마당 첨부파일 파싱 ("@"로 이어붙은 다건 응답)
 # ---------------------------------------------------------------------------
