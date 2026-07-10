@@ -57,6 +57,10 @@ class Notice(Base):
     """지원금액 표시용 라벨 (예: "최대 1.2억원")"""
     summary_points_json: Mapped[list | None] = mapped_column(JSONB)
     """공고 요약 구조화 항목 (지원대상/지원내용/지원한도/신청기간/신청방법/제출서류 등)"""
+    normalized_json: Mapped[dict | None] = mapped_column(JSONB)
+    normalization_status: Mapped[str | None] = mapped_column(String(20))
+    normalization_error: Mapped[str | None] = mapped_column(Text)
+    normalized_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
