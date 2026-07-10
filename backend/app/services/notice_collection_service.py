@@ -14,12 +14,12 @@ from app.repositories.notice_repository import (
     delete_notice,
     find_notice_id_by_source_and_title,
     get_category_mapping,
+    get_max_bizinfo_registration_time,
     get_max_notice_external_id,
     get_notices_for_status_refresh,
     get_notices_missing_category,
     get_or_create_organization,
     get_or_create_source,
-    get_source_updated_at,
     replace_notice_region,
     replace_notice_target_type,
     save_attachment,
@@ -462,21 +462,22 @@ async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult
     에러 없이 빈 리스트를 주는 것을 실제 호출로 확인함). 페이지마다
     커밋해서 트랜잭션이 지나치게 커지는 것을 막는다.
 
-    조기종료: 직전 수집 시각(source.updated_at) 이전에 등록된 공고를
-    만나면 그 이후는 이미 다 확인한 것으로 보고 멈춘다 (첫 수집이면
-    updated_at이 없어 조기종료 없이 전부 훑는다). 반드시
-    get_or_create_source *이전에* 직전 시각을 읽어야 한다 —
-    get_or_create_source 자체가 updated_at을 지금 시각으로 갱신한다.
+    조기종료: 직전 수집에서 실제로 저장에 성공한 공고들의 등록시각
+    (creatPnttm) 최댓값 이전에 등록된 공고를 만나면 그 이후는 이미 다
+    확인한 것으로 보고 멈춘다 (아직 저장된 공고가 없으면 조기종료 없이
+    전부 훑는다). get_max_notice_external_id(K-Startup)와 같은 이유로
+    "수집 시작 시각"이 아니라 "실제로 저장된 데이터" 기준으로 커서를
+    계산한다 — 페이지 중간에 수집이 실패해도 그만큼만 커서가 전진해서,
+    실패 지점 이후를 영원히 건너뛰는 일이 없다.
     """
-    since = await get_source_updated_at(session, BIZINFO_SOURCE_NAME)
-    stop_before = since - _BIZINFO_EARLY_STOP_BUFFER if since is not None else None
-
     source = await get_or_create_source(
         session,
         source_name=BIZINFO_SOURCE_NAME,
         base_url="https://www.bizinfo.go.kr",
         collect_type="API",
     )
+    since = await get_max_bizinfo_registration_time(session, source.id)
+    stop_before = since - _BIZINFO_EARLY_STOP_BUFFER if since is not None else None
     category_mapping = await get_category_mapping(session)
 
     collection_result = CollectionResult()

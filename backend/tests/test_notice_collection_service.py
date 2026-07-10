@@ -10,7 +10,6 @@ import json
 from datetime import date, datetime
 
 import pytest
-from sqlalchemy import update
 
 from app.models.notice import Notice
 from app.models.notice_source import NoticeSource
@@ -501,29 +500,62 @@ def test_kstartup_item_before_cutoff_false_when_no_cutoff():
 # ---------------------------------------------------------------------------
 
 
-async def test_get_source_updated_at_none_when_source_missing(db_session):
-    from app.repositories.notice_repository import get_source_updated_at
-
-    assert await get_source_updated_at(db_session, "존재하지않는출처") is None
-
-
-async def test_get_source_updated_at_returns_stored_value(db_session):
-    from app.repositories.notice_repository import get_source_updated_at
+async def test_get_max_bizinfo_registration_time_none_when_no_notices(db_session):
+    from app.repositories.notice_repository import get_max_bizinfo_registration_time
 
     source = NoticeSource(
-        source_name="커서테스트_기업마당", base_url="https://example.com"
+        source_name="커서테스트_기업마당1", base_url="https://example.com"
     )
     db_session.add(source)
     await db_session.flush()
-    await db_session.execute(
-        update(NoticeSource)
-        .where(NoticeSource.id == source.id)
-        .values(updated_at=datetime(2026, 7, 1, 0, 0, 0))
+
+    assert await get_max_bizinfo_registration_time(db_session, source.id) is None
+
+
+async def test_get_max_bizinfo_registration_time_returns_latest_creatpnttm(
+    db_session,
+):
+    """이번 수집이 일부만 성공해도(예: 중간에 실패) 그만큼만 커서가 전진해야
+    하므로, notice_source.updated_at이 아니라 실제로 저장된 원본 데이터
+    (bizinfo_raw.creatPnttm)에서 최댓값을 구한다."""
+    from app.repositories.notice_repository import get_max_bizinfo_registration_time
+
+    source = NoticeSource(
+        source_name="커서테스트_기업마당2", base_url="https://example.com"
     )
+    db_session.add(source)
+    await db_session.flush()
 
-    result = await get_source_updated_at(db_session, "커서테스트_기업마당")
+    for external_id, creat_pnttm in (
+        ("biz-1", "2026-07-01 10:00:00"),
+        ("biz-2", "2026-07-05 09:00:00"),  # 가장 최신
+        ("biz-3", "2026-07-03 12:00:00"),
+    ):
+        notice_id = await upsert_notice(
+            db_session,
+            source_id=source.id,
+            external_id=external_id,
+            title="테스트 공고",
+            application_start_date=None,
+            application_end_date=None,
+            status="모집중",
+            is_actionable=True,
+            source_url=None,
+            apply_url=None,
+            summary_text=None,
+        )
+        db_session.add(
+            BizinfoRaw(
+                key=external_id,
+                field=json.dumps({"creatPnttm": creat_pnttm}),
+                notice_id=notice_id,
+            )
+        )
+    await db_session.flush()
 
-    assert result == datetime(2026, 7, 1, 0, 0, 0)
+    result = await get_max_bizinfo_registration_time(db_session, source.id)
+
+    assert result == datetime(2026, 7, 5, 9, 0, 0)
 
 
 async def test_get_max_notice_external_id_none_when_no_notices(db_session):

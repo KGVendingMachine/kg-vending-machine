@@ -1,6 +1,7 @@
 from datetime import date, datetime
 
 from sqlalchemy import Integer, cast, delete, func, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,23 +51,6 @@ async def get_or_create_source(
     return await session.get_one(NoticeSource, source_id, populate_existing=True)
 
 
-async def get_source_updated_at(
-    session: AsyncSession, source_name: str
-) -> datetime | None:
-    """출처의 마지막 수집(갱신) 시각을 반환한다. 출처가 아직 없으면 None
-    (첫 수집이라는 뜻 — 조기종료 없이 전체를 훑어야 함).
-
-    기업마당 조기종료 수집의 기준 시각으로 쓴다: get_or_create_source가
-    호출될 때마다 updated_at이 now()로 갱신되므로, 이 함수는 반드시
-    get_or_create_source를 호출하기 *전에* 불러야 "직전 실행 시각"을
-    얻을 수 있다.
-    """
-    result = await session.execute(
-        select(NoticeSource.updated_at).where(NoticeSource.source_name == source_name)
-    )
-    return result.scalar_one_or_none()
-
-
 async def get_max_notice_external_id(
     session: AsyncSession, source_id: int
 ) -> int | None:
@@ -75,7 +59,7 @@ async def get_max_notice_external_id(
     K-Startup처럼 external_id가 순수 숫자 문자열(pbanc_sn)인 출처에서,
     "마지막으로 저장된 지점"을 조기종료 커서로 재활용하는 용도. 기업마당은
     external_id가 "PBLN_..." 접두사가 붙은 문자열이라 이 함수를 쓸 수 없다
-    (get_source_updated_at을 대신 쓴다).
+    (get_max_bizinfo_registration_time을 대신 쓴다).
     """
     result = await session.execute(
         select(func.max(cast(Notice.external_id, Integer))).where(
@@ -83,6 +67,36 @@ async def get_max_notice_external_id(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def get_max_bizinfo_registration_time(
+    session: AsyncSession, source_id: int
+) -> datetime | None:
+    """저장된 기업마당 공고 중 원본 응답의 creatPnttm(등록시각) 최댓값을 반환한다.
+
+    get_max_notice_external_id와 같은 이유로, notice_source.updated_at
+    (수집 "시작" 시각)을 그대로 커서로 쓰지 않는다 — 그러면 페이지 중간에
+    수집이 실패해도 이미 시작 시각이 커밋돼버려서, 다음 수집이 실패
+    지점 이후를 영원히 건너뛸 위험이 있다. 대신 "실제로 저장에 성공한
+    데이터" 기준으로 커서를 계산해 자기 보정되게 한다 — 이번 수집이
+    일부만 성공해도 그만큼만 커서가 전진한다.
+
+    creatPnttm 형식("YYYY-MM-DD HH:MM:SS")은 고정 자릿수라 문자열
+    비교 순서가 시간 순서와 같아, SQL에서 문자열 그대로 MAX를 구해도
+    정확하다.
+    """
+    result = await session.execute(
+        select(func.max(cast(BizinfoRaw.field, JSONB)["creatPnttm"].astext))
+        .join(Notice, Notice.id == BizinfoRaw.notice_id)
+        .where(Notice.source_id == source_id)
+    )
+    max_str = result.scalar_one_or_none()
+    if max_str is None:
+        return None
+    try:
+        return datetime.strptime(max_str, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
 
 
 async def get_or_create_organization(session: AsyncSession, name: str) -> Organization:
