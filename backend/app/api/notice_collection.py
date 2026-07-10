@@ -11,6 +11,17 @@ GET  /internal/notices/collect/{job_id}      -> 작업 상태/결과 조회
 
 /internal prefix: 외부 사용자가 아니라 운영자가 트리거하는 내부 작업이라
 docs/matching-pipeline.md 관례(관리자=/admin, 내부 모듈=/internal)를 따름.
+
+스케줄러 연동 가이드 (실제 cron/APScheduler 배포는 별도 과제, 이슈 #49):
+이 라우터의 API 자체는 스케줄러 없이도 완결돼 있어, 나중에 스케줄러가
+붙을 때 아래 두 엔드포인트를 호출 순서만 지켜서 주기적으로 호출하면 된다.
+- POST /internal/notices/collect: 기업마당 → K-Startup 순서가 코드
+  내부(_run_collection_job)에 고정돼 있어 호출자가 순서를 신경 쓸 필요
+  없다. 이미 실행 중이면 409를 반환하므로(_has_active_job), 스케줄러는
+  409를 "건너뛰고 다음 주기에 재시도"로 처리하면 된다.
+- POST /internal/notices/refresh-status: 순수하게 저장된 날짜만으로
+  재계산·조건부 갱신만 하는 멱등 작업이라 별도 동시성 가드가 없어도
+  언제, 몇 번을 호출해도 안전하다.
 """
 
 import uuid
