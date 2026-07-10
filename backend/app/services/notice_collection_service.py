@@ -231,14 +231,8 @@ _ROLLING_OPEN_KEYWORDS = (
     "예산 소진",
     "상시",
     "선착순",
-    "모집 완료",
-    "모집완료",
-    "모집 마감",
-    "모집마감",
     "수시",
     "연중",
-    "모집규모 충족",
-    "모집규모충족",
 )
 
 
@@ -247,6 +241,27 @@ def _is_rolling_open(value: str | None) -> bool:
     if not value:
         return False
     return any(keyword in value for keyword in _ROLLING_OPEN_KEYWORDS)
+
+
+# "모집 완료"/"모집 마감"/"모집규모 충족"류는 반대로 이미 신청이 끝났다는
+# 뜻이라(정원 충족 포함), _ROLLING_OPEN_KEYWORDS와 같이 두면 마감된
+# 공고가 모집중/actionable=True로 잘못 분류된다 — _ROLLING_OPEN_KEYWORDS에
+# 섞여 있던 버그를 분리해 고침.
+_CLOSED_KEYWORDS = (
+    "모집 완료",
+    "모집완료",
+    "모집 마감",
+    "모집마감",
+    "모집규모 충족",
+    "모집규모충족",
+)
+
+
+def _is_closed_by_keyword(value: str | None) -> bool:
+    """정원 충족/모집 마감 공지 등, 이미 모집이 끝났다는 뜻의 표현인지 확인한다."""
+    if not value:
+        return False
+    return any(keyword in value for keyword in _CLOSED_KEYWORDS)
 
 
 def _within_collection_window(start_date: date | None) -> bool:
@@ -315,6 +330,8 @@ def _derive_status_from_dates(
         return "마감", False
     if start_date is not None and end_date is not None:
         return "모집중", True
+    if _is_closed_by_keyword(raw_period):
+        return "마감", False
     if _is_rolling_open(raw_period):
         return "모집중", True
     return "확인필요", False

@@ -23,6 +23,7 @@ from app.services.notice_collection_service import (
     _bizinfo_raw_category_key,
     _derive_status_from_dates,
     _is_bizinfo_fund_category,
+    _is_closed_by_keyword,
     _is_kstartup_fund_category,
     _is_rolling_open,
     _kstartup_raw_category_key,
@@ -130,6 +131,22 @@ def test_is_rolling_open_matches_known_keywords():
     assert _is_rolling_open(None) is False
 
 
+def test_is_rolling_open_false_for_closed_keywords():
+    """ "모집완료"/"모집마감"류는 반대로 이미 끝났다는 뜻이라 rolling open이
+    아니다 (예전에 _ROLLING_OPEN_KEYWORDS에 잘못 섞여 있던 버그)."""
+    assert _is_rolling_open("모집완료") is False
+    assert _is_rolling_open("모집 마감") is False
+    assert _is_rolling_open("모집규모 충족") is False
+
+
+def test_is_closed_by_keyword_matches_known_keywords():
+    assert _is_closed_by_keyword("모집완료") is True
+    assert _is_closed_by_keyword("모집 마감") is True
+    assert _is_closed_by_keyword("모집규모 충족") is True
+    assert _is_closed_by_keyword("예산 소진 시까지") is False
+    assert _is_closed_by_keyword(None) is False
+
+
 def test_within_collection_window_true_when_start_date_missing():
     assert _within_collection_window(None) is True
 
@@ -222,6 +239,13 @@ def test_derive_status_모집중_when_rolling_open_keyword():
         None, None, raw_period="예산 소진 시까지"
     )
     assert (status, is_actionable) == ("모집중", True)
+
+
+def test_derive_status_마감_when_closed_keyword():
+    """ "모집완료"/"모집마감"류는 이미 끝났다는 뜻이므로 마감으로 분류해야
+    한다 (예전엔 rolling open 키워드에 섞여 있어 반대로 모집중이 됐던 버그)."""
+    status, is_actionable = _derive_status_from_dates(None, None, raw_period="모집완료")
+    assert (status, is_actionable) == ("마감", False)
 
 
 def test_derive_status_확인필요_when_no_signal():
