@@ -2,7 +2,7 @@ import re
 from typing import Any
 
 from app.schemas.business_plan import ValidationResult
-from app.schemas.notice import NormalizedNoticeSchema
+from app.schemas.notice_normalization import NormalizedNoticeSchema
 
 REQUIRED_FIELDS: tuple[str, ...] = (
     "basic.title",

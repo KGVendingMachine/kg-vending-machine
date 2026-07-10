@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from app.ai.normalizer import AiNormalizationError
 from app.ai.notice_normalizer import normalize_notice_text
 from app.schemas.business_plan import ValidationResult
-from app.schemas.notice import NormalizedNoticeSchema
+from app.schemas.notice_normalization import NormalizedNoticeSchema
 from app.services.notice_service import validate_normalized_notice
 from app.services.sample_notice_loader import (
     SampleNotice,

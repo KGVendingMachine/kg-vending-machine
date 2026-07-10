@@ -1,6 +1,6 @@
 import json
 
-from app.schemas.notice import NormalizedNoticeSchema
+from app.schemas.notice_normalization import NormalizedNoticeSchema
 
 _SCHEMA_JSON = json.dumps(
     NormalizedNoticeSchema.model_json_schema(), ensure_ascii=False

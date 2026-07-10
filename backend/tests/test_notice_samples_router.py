@@ -11,7 +11,7 @@ from app.api.notice_samples import (
     normalize_sample_notice,
 )
 from app.main import app
-from app.schemas.notice import (
+from app.schemas.notice_normalization import (
     NormalizedNoticeSchema,
     NoticeApplicationInfo,
     NoticeBasicInfo,

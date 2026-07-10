@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from app.ai.normalizer import AiNormalizationError
 from app.ai.notice_prompts import NOTICE_SYSTEM_PROMPT, build_notice_user_prompt
 from app.core.config import get_settings
-from app.schemas.notice import NormalizedNoticeSchema
+from app.schemas.notice_normalization import NormalizedNoticeSchema
 
 logger = logging.getLogger(__name__)
 
