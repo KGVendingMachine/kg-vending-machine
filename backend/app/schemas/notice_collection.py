@@ -70,3 +70,12 @@ class BizinfoRegionBackfillResult(BaseModel):
     """검사한 기업마당 공고 수"""
     updated: int
     """실제로 전국(region_code=ALL)이 추가된 공고 수"""
+
+
+class RegionCodeBackfillResult(BaseModel):
+    """POST /internal/notices/backfill-region-codes 응답"""
+
+    checked: int
+    """검사한 공고 수 (기업마당+K-Startup)"""
+    updated: int
+    """실제로 지역 코드가 재계산돼 바뀐 공고 수"""
