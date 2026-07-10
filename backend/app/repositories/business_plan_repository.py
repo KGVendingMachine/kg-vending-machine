@@ -21,6 +21,32 @@ class BusinessPlanNotFoundError(Exception):
         super().__init__(f"BusinessPlan {business_plan_id} not found")
 
 
+async def create(
+    session: AsyncSession,
+    *,
+    company_profile_id: int,
+    title: str | None,
+    file_url: str,
+    file_type: str | None,
+) -> BusinessPlan:
+    """Insert a new business_plan row for an uploaded file.
+
+    Flushes to populate the generated id but does not commit; the caller
+    (service) owns the transaction boundary. uploaded_at is stored as naive
+    UTC to match the column type.
+    """
+    plan = BusinessPlan(
+        company_profile_id=company_profile_id,
+        title=title,
+        file_url=file_url,
+        file_type=file_type,
+        uploaded_at=datetime.now(timezone.utc).replace(tzinfo=None),
+    )
+    session.add(plan)
+    await session.flush()
+    return plan
+
+
 async def get_by_id(
     session: AsyncSession, business_plan_id: int
 ) -> BusinessPlan | None:

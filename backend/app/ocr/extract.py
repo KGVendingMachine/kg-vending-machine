@@ -23,6 +23,9 @@ _FILE_TYPE_BY_SUFFIX = {
     ".png": "IMAGE",
     ".tiff": "IMAGE",
 }
+# 업로드 시 허용하는 확장자. extract_text가 실제로 처리할 수 있는 포맷과
+# 동일하게 두어(단일 소스), 업로드는 됐는데 OCR 단계에서 못 여는 상황을 막는다.
+SUPPORTED_UPLOAD_SUFFIXES = frozenset(_FILE_TYPE_BY_SUFFIX)
 # CLOVA OCR이 그대로 받아주는 이미지 포맷 (bmp/gif 등은 여기 없으면 png로 변환)
 _CLOVA_NATIVE_FORMATS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 # 임베드 이미지가 많은 PDF(수십 개)에서 순차 처리하면 문서 하나에 2분 넘게
