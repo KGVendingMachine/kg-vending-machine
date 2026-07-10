@@ -13,9 +13,11 @@ from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
     delete_notice,
     find_notice_id_by_source_and_title,
+    get_bizinfo_notices_with_raw,
     get_category_mapping,
     get_max_bizinfo_registration_time,
     get_max_notice_external_id,
+    get_notice_regions,
     get_notices_for_status_refresh,
     get_notices_missing_category,
     get_or_create_organization,
@@ -898,6 +900,46 @@ async def refresh_notice_statuses(session: AsyncSession) -> dict[str, int]:
                 session, notice_id, new_status, new_is_actionable
             )
             updated += 1
+
+    await session.commit()
+    return {"checked": checked, "updated": updated}
+
+
+async def backfill_bizinfo_nationwide_regions(session: AsyncSession) -> dict[str, int]:
+    """기업마당 공고 중 hashtags에 광역자치단체 17개가 모두 태그돼 있는데
+    아직 region_code=ALL("전국")이 없는 공고에 이를 추가한다.
+
+    _parse_bizinfo_regions에 전국 판정 로직을 추가하기 전에 이미 수집된
+    공고는 조기종료 커서 때문에 일반 재수집으로는 다시 훑이지 않을 수
+    있어(이미 저장된 지점보다 과거라 건너뜀), 저장된 원본 hashtags를
+    다시 읽어 일회성으로 보정한다. 외부 API를 다시 호출하지 않는다.
+    """
+    checked = 0
+    updated = 0
+
+    rows = await get_bizinfo_notices_with_raw(session)
+    for notice_id, raw_field in rows:
+        checked += 1
+        try:
+            item = json.loads(raw_field)
+        except (TypeError, json.JSONDecodeError):
+            logger.warning(
+                "기업마당 전국 지역 백필 중 raw 데이터를 파싱하지 못했습니다 "
+                "(notice_id=%s)",
+                notice_id,
+            )
+            continue
+
+        regions = _parse_bizinfo_regions(item.get("hashtags"))
+        if not any(region_code == "ALL" for region_code, _ in regions):
+            continue
+
+        existing_region_names = await get_notice_regions(session, notice_id)
+        if "전국" in existing_region_names:
+            continue
+
+        await replace_notice_region(session, notice_id, regions)
+        updated += 1
 
     await session.commit()
     return {"checked": checked, "updated": updated}

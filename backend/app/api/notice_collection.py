@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import async_session_factory, get_db
 from app.schemas.notice_collection import (
+    BizinfoRegionBackfillResult,
     CategoryBackfillResult,
     CollectionJobAccepted,
     CollectionJobStatus,
@@ -40,6 +41,7 @@ from app.schemas.notice_collection import (
 )
 from app.services.notice_collection_service import (
     CollectionResult,
+    backfill_bizinfo_nationwide_regions,
     backfill_notice_categories,
     collect_all_bizinfo_notices,
     collect_all_kstartup_notices,
@@ -206,3 +208,19 @@ async def backfill_category(session: AsyncSession = Depends(get_db)):
 async def refresh_status(session: AsyncSession = Depends(get_db)):
     result = await refresh_notice_statuses(session)
     return StatusRefreshResult(**result)
+
+
+@router.post(
+    "/backfill-bizinfo-region",
+    response_model=BizinfoRegionBackfillResult,
+    summary="기업마당 전국 대상 공고 지역 보정",
+    description=(
+        "기업마당은 hashtags에 광역자치단체 17개를 전부 나열하는 방식으로 "
+        "전국 대상을 표현한다. 전국 판정 로직이 추가되기 전에 저장된 공고에 "
+        "region_code=ALL을 보정해 채운다. 이미 저장된 원본 응답(raw)만으로 "
+        "재계산하므로 외부 API를 호출하지 않는다."
+    ),
+)
+async def backfill_bizinfo_region(session: AsyncSession = Depends(get_db)):
+    result = await backfill_bizinfo_nationwide_regions(session)
+    return BizinfoRegionBackfillResult(**result)

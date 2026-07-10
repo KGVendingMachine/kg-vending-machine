@@ -61,3 +61,12 @@ class StatusRefreshResult(BaseModel):
     """마감 처리되지 않아 검사한 공고 수"""
     updated: int
     """실제로 status가 바뀐 공고 수 (주로 마감일 경과로 인한 마감 처리)"""
+
+
+class BizinfoRegionBackfillResult(BaseModel):
+    """POST /internal/notices/backfill-bizinfo-region 응답"""
+
+    checked: int
+    """검사한 기업마당 공고 수"""
+    updated: int
+    """실제로 전국(region_code=ALL)이 추가된 공고 수"""
