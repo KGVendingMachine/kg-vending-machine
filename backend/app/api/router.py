@@ -3,6 +3,7 @@ from app.api.business_plan import router as business_plan_router
 from app.api.business_plan_samples import router as business_plan_samples_router
 from app.api.notice import router as notice_router
 from app.api.notice_collection import router as notice_collection_router
+from app.api.notice_samples import router as notice_samples_router
 from app.api.notice_ocr import router as notice_ocr_router
 
 from app.api import auth
@@ -10,6 +11,7 @@ from app.api import auth
 api_router = APIRouter()
 
 api_router.include_router(business_plan_samples_router)
+api_router.include_router(notice_samples_router)
 api_router.include_router(business_plan_router)
 api_router.include_router(notice_router)
 api_router.include_router(notice_collection_router)
