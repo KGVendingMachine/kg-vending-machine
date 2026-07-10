@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { uploadBusinessPlan } from '../../api/businessPlan'
+import { ApiError } from '../../api/client'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { PATHS } from '../../routes/paths'
 import styles from './UploadPage.module.css'
@@ -14,10 +16,32 @@ export function UploadPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [file, setFile] = useState<File | null>(null)
   const [dragOver, setDragOver] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   function handleFiles(files: FileList | null) {
     if (files && files.length > 0) {
       setFile(files[0])
+      setError(null)
+    }
+  }
+
+  async function handleStartAnalysis() {
+    if (!file || uploading) return
+    setUploading(true)
+    setError(null)
+    try {
+      const { id } = await uploadBusinessPlan(file)
+      // 무거운 분석(OCR·정규화·매칭)은 다음 단계에서 백그라운드 잡으로 돌린다.
+      // 여기서는 업로드로 생성된 id만 넘기고 진행 페이지로 이동한다.
+      navigate(PATHS.ANALYSIS, { state: { businessPlanId: id } })
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? '업로드에 실패했어요. 잠시 후 다시 시도해 주세요.'
+          : '네트워크 오류로 업로드하지 못했어요.',
+      )
+      setUploading(false)
     }
   }
 
@@ -79,19 +103,20 @@ export function UploadPage() {
               <span className={styles.fileIcon} />
               <div className={styles.fileInfo}>
                 <div className={styles.fileName}>{file.name}</div>
-                <div className={styles.fileMeta}>
-                  {formatFileSize(file.size)} · 업로드 완료
-                </div>
+                <div className={styles.fileMeta}>{formatFileSize(file.size)}</div>
               </div>
-              <span className={styles.fileStatus}>✓ 검증 통과</span>
+              <span className={styles.fileStatus}>선택됨</span>
             </div>
           ) : null}
+
+          {error ? <div className={styles.error}>{error}</div> : null}
         </div>
 
         <div className={styles.actions}>
           <button
             type="button"
             className={styles.secondaryButton}
+            disabled={uploading}
             onClick={() => navigate(PATHS.COMPANY_PROFILE)}
           >
             ← 기업 프로필
@@ -99,10 +124,10 @@ export function UploadPage() {
           <button
             type="button"
             className={styles.primaryButton}
-            disabled={!file}
-            onClick={() => navigate(PATHS.ANALYSIS)}
+            disabled={!file || uploading}
+            onClick={handleStartAnalysis}
           >
-            분석 시작 →
+            {uploading ? '업로드 중…' : '분석 시작 →'}
           </button>
         </div>
       </div>

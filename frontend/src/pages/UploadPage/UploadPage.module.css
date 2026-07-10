@@ -107,6 +107,12 @@
   font-weight: 600;
 }
 
+.error {
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--color-danger);
+}
+
 .actions {
   display: flex;
   justify-content: space-between;
