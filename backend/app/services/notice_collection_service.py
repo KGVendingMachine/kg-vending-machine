@@ -145,6 +145,18 @@ def _parse_regions(value: str | None) -> list[tuple[str, str]]:
     return regions
 
 
+# 기업마당 hashtags에 실제 행정구역명이 아닌 이상한 복합 태그가 섞여
+# 있는 경우가 실제 데이터에서 확인됨 — 예: "여수시 소상공인 융자금" 공고의
+# hashtags에 "전남광주"/"전남광주통합특별시"라는, 존재하지 않는 행정구역명이
+# 들어있었다(원본 데이터 자체의 오류로 보임). 해당 공고는 실제로는
+# 여수시=전라남도 소속이라 "전남"으로 정정해 매핑한다. 알려진 오류
+# 패턴만 다루고 나머지 미매칭 태그는 그대로 무시한다.
+_BIZINFO_REGION_TAG_ALIASES = {
+    "전남광주": "전남",
+    "전남광주통합특별시": "전남",
+}
+
+
 def _parse_bizinfo_regions(hashtags: str | None) -> list[tuple[str, str]]:
     """기업마당 hashtags 필드에서 지역명과 일치하는 태그만 골라낸다.
 
@@ -158,6 +170,7 @@ def _parse_bizinfo_regions(hashtags: str | None) -> list[tuple[str, str]]:
     regions: list[tuple[str, str]] = []
     seen_codes: set[str] = set()
     for tag in _split_multi_value(hashtags):
+        tag = _BIZINFO_REGION_TAG_ALIASES.get(tag, tag)
         region_code = REGION_CODE_BY_NAME.get(tag)
         if region_code is None or region_code in seen_codes:
             continue

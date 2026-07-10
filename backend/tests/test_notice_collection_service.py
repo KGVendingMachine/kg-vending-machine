@@ -157,6 +157,13 @@ def test_parse_bizinfo_regions_picks_only_region_tags_from_mixed_hashtags():
     assert regions == [("11", "서울"), ("26", "부산")]
 
 
+def test_parse_bizinfo_regions_normalizes_known_malformed_compound_tags():
+    """실제 응답에서 확인된 오류 태그("전남광주"/"전남광주통합특별시")를
+    "전남"으로 정정해 매핑한다."""
+    regions = _parse_bizinfo_regions("전남광주,여수시,전남광주통합특별시")
+    assert regions == [("46", "전남")]
+
+
 # ---------------------------------------------------------------------------
 # 기업마당 첨부파일 파싱 ("@"로 이어붙은 다건 응답)
 # ---------------------------------------------------------------------------
