@@ -1,6 +1,6 @@
 """인증 관련 요청/응답 스키마."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class KakaoLoginRequest(BaseModel):
@@ -45,3 +45,16 @@ class AccessTokenResponse(BaseModel):
         examples=["eyJhbGciOiJIUzI1NiInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIn0.new456"],
     )
     token_type: str = "bearer"
+
+
+class UserResponse(BaseModel):
+    """현재 로그인한 유저 정보(GET /auth/me). 토큰·kakao_id 등 민감값은 제외한다."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: str | None = None
+    name: str | None = None
+    nickname: str | None = None
+    role: str
+    status: str

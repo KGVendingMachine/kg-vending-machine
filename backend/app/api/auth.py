@@ -6,23 +6,32 @@ HTTP 입출력과 예외 변환만 담당하고 비즈니스 로직은 서비스
 import secrets
 from urllib.parse import urlencode, urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
+from app.models.user import User
 from app.schemas.auth import (
     AccessTokenResponse,
     KakaoLoginRequest,
     RefreshRequest,
     TokenResponse,
+    UserResponse,
 )
 from app.services.auth_service import (
     InactiveAccountError,
     RefreshTokenError,
     login_with_kakao,
     refresh_access_token,
+)
+from app.utils.auth_cookies import (
+    REFRESH_TOKEN_COOKIE_NAME,
+    clear_auth_cookies,
+    set_access_cookie,
+    set_refresh_cookie,
 )
 from app.utils.kakao_client import KakaoAuthError
 
@@ -34,11 +43,8 @@ STATE_COOKIE_NAME = "kakao_oauth_state"
 값은 "{mode}:{state}" 형태. mode가 "code"면 콜백이 로그인을 완료하지 않고
 인가 코드를 JSON으로 그대로 돌려준다(Swagger 등으로 POST /kakao를 수동
 테스트할 때 씀). 그 외(기본값 "redirect")에는 콜백이 로그인을 끝내고
-ACCESS_TOKEN_COOKIE_NAME/REFRESH_TOKEN_COOKIE_NAME 쿠키를 심어 프론트로
-리다이렉트한다.
+access_token/refresh_token 쿠키를 심어 프론트로 리다이렉트한다.
 """
-ACCESS_TOKEN_COOKIE_NAME = "access_token"
-REFRESH_TOKEN_COOKIE_NAME = "refresh_token"
 
 
 def _kakao_login_url() -> str:
@@ -131,20 +137,8 @@ async def kakao_login_callback(
         return _to_login_with_error("inactive_account")
 
     response = RedirectResponse(f"{settings.FRONTEND_URL}/company-profile")
-    response.set_cookie(
-        ACCESS_TOKEN_COOKIE_NAME,
-        tokens["access_token"],
-        max_age=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        httponly=True,
-        samesite="lax",
-    )
-    response.set_cookie(
-        REFRESH_TOKEN_COOKIE_NAME,
-        tokens["refresh_token"],
-        max_age=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 86400,
-        httponly=True,
-        samesite="lax",
-    )
+    set_access_cookie(response, tokens["access_token"])
+    set_refresh_cookie(response, tokens["refresh_token"])
     response.delete_cookie(STATE_COOKIE_NAME)
     return response
 
@@ -186,12 +180,29 @@ async def kakao_login(
     },
 )
 async def refresh(
-    payload: RefreshRequest,
+    request: Request,
+    response: Response,
+    payload: RefreshRequest | None = None,
     session: AsyncSession = Depends(get_db),
 ) -> AccessTokenResponse:
-    """refresh token으로 새 access token을 발급받는다."""
+    """refresh token으로 새 access token을 발급받는다.
+
+    refresh token은 요청 바디(Swagger 등 수동 테스트)나 refresh_token 쿠키
+    (브라우저 자동 전송) 어느 쪽으로든 받는다. 발급한 새 access token은
+    응답 바디로 돌려주는 동시에 access_token 쿠키에도 다시 심어, 브라우저
+    흐름에서 별도 처리 없이 곧바로 갱신되게 한다.
+    """
+    refresh_token = (payload.refresh_token if payload else None) or request.cookies.get(
+        REFRESH_TOKEN_COOKIE_NAME
+    )
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="refresh token이 없습니다",
+        )
+
     try:
-        result = await refresh_access_token(session, payload.refresh_token)
+        result = await refresh_access_token(session, refresh_token)
     except RefreshTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)
@@ -200,4 +211,37 @@ async def refresh(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
         ) from exc
+
+    set_access_cookie(response, result["access_token"])
     return AccessTokenResponse(**result)
+
+
+@router.post(
+    "/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="로그아웃",
+    description=(
+        "access_token/refresh_token 쿠키를 삭제한다. httpOnly 쿠키는 JS로 지울 "
+        "수 없어 서버가 Set-Cookie(Max-Age=0)로 만료시킨다. 인증 없이 호출할 수 "
+        "있어(토큰 만료 상태여도) 항상 쿠키를 정리한다."
+    ),
+)
+async def logout() -> Response:
+    """인증 쿠키를 삭제한다."""
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    clear_auth_cookies(response)
+    return response
+
+
+@router.get(
+    "/me",
+    response_model=UserResponse,
+    summary="현재 로그인한 유저 정보",
+    responses={
+        401: {"description": "인증되지 않음"},
+        403: {"description": "비활성화된 계정"},
+    },
+)
+async def me(current_user: User = Depends(get_current_user)) -> User:
+    """access token(쿠키 또는 Bearer)으로 인증된 유저 정보를 반환한다."""
+    return current_user
