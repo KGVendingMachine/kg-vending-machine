@@ -2,7 +2,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +14,9 @@ from app.repositories.notice_repository import (
     delete_notice,
     find_notice_id_by_source_and_title,
     get_category_mapping,
+    get_max_bizinfo_registration_time,
+    get_max_notice_external_id,
+    get_notices_for_status_refresh,
     get_notices_missing_category,
     get_or_create_organization,
     get_or_create_source,
@@ -22,6 +25,7 @@ from app.repositories.notice_repository import (
     save_attachment,
     save_raw,
     set_notice_category,
+    update_notice_status,
     upsert_notice,
 )
 
@@ -87,6 +91,17 @@ def _split_multi_value(value: str | None) -> list[str]:
     )
 
 
+def _parse_bizinfo_datetime(value: str | None) -> datetime | None:
+    """ "2026-07-09 15:16:31" 형식의 등록시각(creatPnttm)을 datetime으로 변환한다."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        logger.warning("기업마당 등록시각 형식을 해석하지 못했습니다: %r", value)
+        return None
+
+
 def _parse_bizinfo_date_range(value: str | None) -> tuple[date | None, date | None]:
     """ "2026-07-27 ~ 2026-07-30" 형식 문자열을 (시작일, 종료일)로 변환한다."""
     if not value or "~" not in value:
@@ -130,6 +145,18 @@ def _parse_regions(value: str | None) -> list[tuple[str, str]]:
     return regions
 
 
+# 기업마당 hashtags에 실제 행정구역명이 아닌 이상한 복합 태그가 섞여
+# 있는 경우가 실제 데이터에서 확인됨 — 예: "여수시 소상공인 융자금" 공고의
+# hashtags에 "전남광주"/"전남광주통합특별시"라는, 존재하지 않는 행정구역명이
+# 들어있었다(원본 데이터 자체의 오류로 보임). 해당 공고는 실제로는
+# 여수시=전라남도 소속이라 "전남"으로 정정해 매핑한다. 알려진 오류
+# 패턴만 다루고 나머지 미매칭 태그는 그대로 무시한다.
+_BIZINFO_REGION_TAG_ALIASES = {
+    "전남광주": "전남",
+    "전남광주통합특별시": "전남",
+}
+
+
 def _parse_bizinfo_regions(hashtags: str | None) -> list[tuple[str, str]]:
     """기업마당 hashtags 필드에서 지역명과 일치하는 태그만 골라낸다.
 
@@ -143,6 +170,7 @@ def _parse_bizinfo_regions(hashtags: str | None) -> list[tuple[str, str]]:
     regions: list[tuple[str, str]] = []
     seen_codes: set[str] = set()
     for tag in _split_multi_value(hashtags):
+        tag = _BIZINFO_REGION_TAG_ALIASES.get(tag, tag)
         region_code = REGION_CODE_BY_NAME.get(tag)
         if region_code is None or region_code in seen_codes:
             continue
@@ -203,14 +231,8 @@ _ROLLING_OPEN_KEYWORDS = (
     "예산 소진",
     "상시",
     "선착순",
-    "모집 완료",
-    "모집완료",
-    "모집 마감",
-    "모집마감",
     "수시",
     "연중",
-    "모집규모 충족",
-    "모집규모충족",
 )
 
 
@@ -219,6 +241,27 @@ def _is_rolling_open(value: str | None) -> bool:
     if not value:
         return False
     return any(keyword in value for keyword in _ROLLING_OPEN_KEYWORDS)
+
+
+# "모집 완료"/"모집 마감"/"모집규모 충족"류는 반대로 이미 신청이 끝났다는
+# 뜻이라(정원 충족 포함), _ROLLING_OPEN_KEYWORDS와 같이 두면 마감된
+# 공고가 모집중/actionable=True로 잘못 분류된다 — _ROLLING_OPEN_KEYWORDS에
+# 섞여 있던 버그를 분리해 고침.
+_CLOSED_KEYWORDS = (
+    "모집 완료",
+    "모집완료",
+    "모집 마감",
+    "모집마감",
+    "모집규모 충족",
+    "모집규모충족",
+)
+
+
+def _is_closed_by_keyword(value: str | None) -> bool:
+    """정원 충족/모집 마감 공지 등, 이미 모집이 끝났다는 뜻의 표현인지 확인한다."""
+    if not value:
+        return False
+    return any(keyword in value for keyword in _CLOSED_KEYWORDS)
 
 
 def _within_collection_window(start_date: date | None) -> bool:
@@ -287,6 +330,8 @@ def _derive_status_from_dates(
         return "마감", False
     if start_date is not None and end_date is not None:
         return "모집중", True
+    if _is_closed_by_keyword(raw_period):
+        return "마감", False
     if _is_rolling_open(raw_period):
         return "모집중", True
     return "확인필요", False
@@ -423,12 +468,37 @@ async def collect_bizinfo_notices(
     return collection_result
 
 
+# 기업마당 응답은 creatPnttm(등록시각) 기준 최신순으로 오는 것을 실제
+# 호출로 확인함(페이지 넘어가도 끊김 없이 내림차순). 조기종료 시 직전
+# 수집 시각(notice_source.updated_at) 딱 그 지점에서 멈추면, 시스템
+# 내부적으로 ID/시각이 먼저 잡히고 공개는 나중에 되는 경우(관공서
+# 시스템에서 흔함) 그 사이에 낀 공고를 영원히 놓칠 수 있다. 여유분을
+# 두고 그보다 더 과거까지 다시 확인한다.
+_BIZINFO_EARLY_STOP_BUFFER = timedelta(hours=24)
+
+
+def _bizinfo_item_before_cutoff(item: dict, stop_before: datetime | None) -> bool:
+    """이 항목이 조기종료 기준 시각보다 과거(=이미 확인한 범위)인지 판단한다."""
+    if stop_before is None:
+        return False
+    created_at = _parse_bizinfo_datetime(item.get("creatPnttm"))
+    return created_at is not None and created_at <= stop_before
+
+
 async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult:
     """기업마당 공고를 첫 페이지부터 끝까지 전부 수집한다.
 
     빈 페이지가 나오면 끝으로 간주한다 (page=9999처럼 끝을 넘어가도
     에러 없이 빈 리스트를 주는 것을 실제 호출로 확인함). 페이지마다
     커밋해서 트랜잭션이 지나치게 커지는 것을 막는다.
+
+    조기종료: 직전 수집에서 실제로 저장에 성공한 공고들의 등록시각
+    (creatPnttm) 최댓값 이전에 등록된 공고를 만나면 그 이후는 이미 다
+    확인한 것으로 보고 멈춘다 (아직 저장된 공고가 없으면 조기종료 없이
+    전부 훑는다). get_max_notice_external_id(K-Startup)와 같은 이유로
+    "수집 시작 시각"이 아니라 "실제로 저장된 데이터" 기준으로 커서를
+    계산한다 — 페이지 중간에 수집이 실패해도 그만큼만 커서가 전진해서,
+    실패 지점 이후를 영원히 건너뛰는 일이 없다.
     """
     source = await get_or_create_source(
         session,
@@ -436,6 +506,21 @@ async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult
         base_url="https://www.bizinfo.go.kr",
         collect_type="API",
     )
+    try:
+        # bizinfo_raw.field를 SQL에서 jsonb로 캐스팅하는 쿼리라, 혹시라도
+        # 유효하지 않은 JSON이 섞여 있으면 이 문장 자체가 실패한다.
+        # Postgres는 실패한 문장이 있으면 롤백 전까지 트랜잭션 전체를
+        # 막아버리므로, SAVEPOINT로 감싸서 실패해도 이 지점까지만
+        # 롤백되고 이후 페이지 처리·커밋에는 영향이 없게 한다.
+        async with session.begin_nested():
+            since = await get_max_bizinfo_registration_time(session, source.id)
+    except Exception:
+        logger.warning(
+            "기업마당 조기종료 커서 계산 실패, 이번 수집은 조기종료 없이 전체를 훑습니다",
+            exc_info=True,
+        )
+        since = None
+    stop_before = since - _BIZINFO_EARLY_STOP_BUFFER if since is not None else None
     category_mapping = await get_category_mapping(session)
 
     collection_result = CollectionResult()
@@ -445,7 +530,11 @@ async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult
         if not items:
             break
 
+        reached_known_items = False
         for item in items:
+            if _bizinfo_item_before_cutoff(item, stop_before):
+                reached_known_items = True
+                break
             await _process_bizinfo_item(
                 session, source.id, item, collection_result, category_mapping
             )
@@ -457,6 +546,11 @@ async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult
             collection_result.saved_count,
             collection_result.failed_count,
         )
+
+        if reached_known_items:
+            logger.info("기업마당 직전 수집 시점(%s) 부근 도달, 조기 종료", stop_before)
+            break
+
         page += 1
 
     return collection_result
@@ -632,18 +726,56 @@ async def collect_kstartup_notices(
     return collection_result
 
 
+# K-Startup 목록 API에는 등록시각 필드가 없다(신청시작일 pbanc_rcpt_bgng_dt는
+# 등록순과 안 맞는 것을 실측 확인함 — 예: pbanc_sn 178487이 7/8, 바로 다음
+# 178486이 7/9). 순서가 보장되는 값은 pbanc_sn(정수 일련번호)뿐이라 이걸
+# 커서로 쓰되, 새 컬럼 없이 "이미 저장된 공고 중 가장 큰 external_id"로
+# 대신한다 — 자금 카테고리만 저장하므로 이 값은 "마지막으로 확인한 지점"
+# 보다 항상 같거나 작다(놓치는 방향이 아니라 더 훑는 방향으로만 어긋남).
+# 여기에 추가로 여유분을 둔다 — pbanc_sn이 먼저 채번되고 공개는 나중에
+# 되는 경우(관공서 시스템에서 흔함) 이미 지나친 것처럼 보이는 번호가
+# 나중에 나타날 수 있어서다.
+_KSTARTUP_EARLY_STOP_BUFFER = 200
+
+
+def _kstartup_item_before_cutoff(item: dict, stop_below: int | None) -> bool:
+    """이 항목이 조기종료 기준 pbanc_sn보다 작은(=이미 확인한 범위) 항목인지 판단한다."""
+    if stop_below is None:
+        return False
+    pbanc_sn = item.get("pbanc_sn")
+    return isinstance(pbanc_sn, int) and pbanc_sn <= stop_below
+
+
 async def collect_all_kstartup_notices(session: AsyncSession) -> CollectionResult:
     """K-Startup 공고를 첫 페이지부터 끝까지 전부 수집한다.
 
     K-Startup은 전체가 29,000건 이상이라 페이지 수가 많다(perPage=100
     기준 약 290페이지). 빈 페이지가 나오면 끝으로 간주하고, 페이지마다
     커밋한다 (collect_all_bizinfo_notices와 동일한 이유).
+
+    조기종료: _KSTARTUP_EARLY_STOP_BUFFER 설명 참고.
     """
     source = await get_or_create_source(
         session,
         source_name=KSTARTUP_SOURCE_NAME,
         base_url="https://www.k-startup.go.kr",
         collect_type="API",
+    )
+    try:
+        # get_max_bizinfo_registration_time과 같은 이유로 SAVEPOINT로
+        # 감싼다 — external_id를 SQL에서 정수로 캐스팅하는 쿼리라, 혹시
+        # 숫자가 아닌 값이 섞여 있으면 이 문장이 실패하면서 Postgres
+        # 트랜잭션 전체를 막을 수 있다.
+        async with session.begin_nested():
+            max_saved_id = await get_max_notice_external_id(session, source.id)
+    except Exception:
+        logger.warning(
+            "K-Startup 조기종료 커서 계산 실패, 이번 수집은 조기종료 없이 전체를 훑습니다",
+            exc_info=True,
+        )
+        max_saved_id = None
+    stop_below = (
+        max_saved_id - _KSTARTUP_EARLY_STOP_BUFFER if max_saved_id is not None else None
     )
     category_mapping = await get_category_mapping(session)
 
@@ -654,7 +786,11 @@ async def collect_all_kstartup_notices(session: AsyncSession) -> CollectionResul
         if not items:
             break
 
+        reached_known_items = False
         for item in items:
+            if _kstartup_item_before_cutoff(item, stop_below):
+                reached_known_items = True
+                break
             await _process_kstartup_item(
                 session, source.id, item, collection_result, category_mapping
             )
@@ -666,6 +802,11 @@ async def collect_all_kstartup_notices(session: AsyncSession) -> CollectionResul
             collection_result.saved_count,
             collection_result.failed_count,
         )
+
+        if reached_known_items:
+            logger.info("K-Startup 직전 수집 지점(%s) 부근 도달, 조기 종료", stop_below)
+            break
+
         page += 1
 
     return collection_result
@@ -710,6 +851,41 @@ async def backfill_notice_categories(session: AsyncSession) -> dict[str, int]:
             if category_id is not None:
                 await set_notice_category(session, notice_id, category_id)
                 updated += 1
+
+    await session.commit()
+    return {"checked": checked, "updated": updated}
+
+
+async def refresh_notice_statuses(session: AsyncSession) -> dict[str, int]:
+    """마감일이 지났는데 status가 아직 갱신 안 된 공고를 오늘 날짜 기준으로
+    다시 계산한다 (수집 시점에만 계산해서 저장해두는 값이라, 재수집 없이는
+    시간이 지나도 저절로 안 바뀜).
+
+    외부 API를 다시 호출하지 않고, 이미 저장된 application_start_date/
+    application_end_date만으로 재계산한다 — 날짜 자체는 수집 이후 바뀌지
+    않으므로 이 값만으로 충분하다. 단, "확인필요"였던 공고를 "모집중"으로
+    바꿔줬던 상시모집 판단(reqstBeginEndDe의 "상시"/"예산 소진" 등 키워드,
+    _is_rolling_open)은 원본 문자열을 다시 안 부르면 재현할 수 없어서,
+    재계산 결과가 "확인필요"인데 기존 상태가 "모집중"이면 건드리지 않는다
+    (상시모집 공고가 여기서 잘못 마감 취급되는 걸 막기 위함).
+
+    지금은 직접 호출하는 용도이고, 나중에 만들 스케줄러가 주기적으로
+    호출해서 마감 처리를 최신 상태로 유지하는 데 쓴다.
+    """
+    checked = 0
+    updated = 0
+
+    rows = await get_notices_for_status_refresh(session)
+    for notice_id, start_date, end_date, current_status in rows:
+        checked += 1
+        new_status, new_is_actionable = _derive_status_from_dates(start_date, end_date)
+        if new_status == "확인필요" and current_status == "모집중":
+            continue
+        if new_status != current_status:
+            await update_notice_status(
+                session, notice_id, new_status, new_is_actionable
+            )
+            updated += 1
 
     await session.commit()
     return {"checked": checked, "updated": updated}

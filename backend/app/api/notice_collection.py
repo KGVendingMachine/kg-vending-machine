@@ -25,12 +25,14 @@ from app.schemas.notice_collection import (
     CollectionJobStatus,
     CollectionJobStatusResponse,
     SourceCollectionResult,
+    StatusRefreshResult,
 )
 from app.services.notice_collection_service import (
     CollectionResult,
     backfill_notice_categories,
     collect_all_bizinfo_notices,
     collect_all_kstartup_notices,
+    refresh_notice_statuses,
 )
 
 router = APIRouter(prefix="/internal/notices", tags=["internal-notices"])
@@ -177,3 +179,19 @@ async def get_collection_status(job_id: str):
 async def backfill_category(session: AsyncSession = Depends(get_db)):
     result = await backfill_notice_categories(session)
     return CategoryBackfillResult(**result)
+
+
+@router.post(
+    "/refresh-status",
+    response_model=StatusRefreshResult,
+    summary="공고 모집 상태 갱신",
+    description=(
+        "마감일이 지났는데도 status가 예전 값(모집중/예정 등)으로 남아있는 "
+        "공고를 오늘 날짜 기준으로 다시 계산해 마감 처리한다. 이미 저장된 "
+        "날짜만으로 재계산하므로 외부 API를 호출하지 않는다. 추후 스케줄러가 "
+        "주기적으로 호출하는 걸 염두에 두고 만든 API."
+    ),
+)
+async def refresh_status(session: AsyncSession = Depends(get_db)):
+    result = await refresh_notice_statuses(session)
+    return StatusRefreshResult(**result)

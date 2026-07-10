@@ -7,18 +7,23 @@ conftest.db_session(SAVEPOINT 롤백) 위에서 검증한다.
 """
 
 import json
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
 from app.models.notice import Notice
 from app.models.notice_source import NoticeSource
 from app.models.raw import BizinfoRaw, KstartupRaw
-from app.repositories.notice_repository import upsert_notice
+from app.repositories.notice_repository import (
+    get_notices_for_status_refresh,
+    upsert_notice,
+)
+from app.services import notice_collection_service as svc
 from app.services.notice_collection_service import (
     _bizinfo_raw_category_key,
     _derive_status_from_dates,
     _is_bizinfo_fund_category,
+    _is_closed_by_keyword,
     _is_kstartup_fund_category,
     _is_rolling_open,
     _kstartup_raw_category_key,
@@ -29,6 +34,7 @@ from app.services.notice_collection_service import (
     _parse_regions,
     _within_collection_window,
     backfill_notice_categories,
+    refresh_notice_statuses,
 )
 
 pytestmark = pytest.mark.anyio
@@ -125,6 +131,22 @@ def test_is_rolling_open_matches_known_keywords():
     assert _is_rolling_open(None) is False
 
 
+def test_is_rolling_open_false_for_closed_keywords():
+    """ "모집완료"/"모집마감"류는 반대로 이미 끝났다는 뜻이라 rolling open이
+    아니다 (예전에 _ROLLING_OPEN_KEYWORDS에 잘못 섞여 있던 버그)."""
+    assert _is_rolling_open("모집완료") is False
+    assert _is_rolling_open("모집 마감") is False
+    assert _is_rolling_open("모집규모 충족") is False
+
+
+def test_is_closed_by_keyword_matches_known_keywords():
+    assert _is_closed_by_keyword("모집완료") is True
+    assert _is_closed_by_keyword("모집 마감") is True
+    assert _is_closed_by_keyword("모집규모 충족") is True
+    assert _is_closed_by_keyword("예산 소진 시까지") is False
+    assert _is_closed_by_keyword(None) is False
+
+
 def test_within_collection_window_true_when_start_date_missing():
     assert _within_collection_window(None) is True
 
@@ -150,6 +172,13 @@ def test_parse_regions_skips_unknown_region_name():
 def test_parse_bizinfo_regions_picks_only_region_tags_from_mixed_hashtags():
     regions = _parse_bizinfo_regions("경영,서울,부산,2026,지식재산처")
     assert regions == [("11", "서울"), ("26", "부산")]
+
+
+def test_parse_bizinfo_regions_normalizes_known_malformed_compound_tags():
+    """실제 응답에서 확인된 오류 태그("전남광주"/"전남광주통합특별시")를
+    "전남"으로 정정해 매핑한다."""
+    regions = _parse_bizinfo_regions("전남광주,여수시,전남광주통합특별시")
+    assert regions == [("46", "전남")]
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +239,13 @@ def test_derive_status_모집중_when_rolling_open_keyword():
         None, None, raw_period="예산 소진 시까지"
     )
     assert (status, is_actionable) == ("모집중", True)
+
+
+def test_derive_status_마감_when_closed_keyword():
+    """ "모집완료"/"모집마감"류는 이미 끝났다는 뜻이므로 마감으로 분류해야
+    한다 (예전엔 rolling open 키워드에 섞여 있어 반대로 모집중이 됐던 버그)."""
+    status, is_actionable = _derive_status_from_dates(None, None, raw_period="모집완료")
+    assert (status, is_actionable) == ("마감", False)
 
 
 def test_derive_status_확인필요_when_no_signal():
@@ -342,3 +378,250 @@ async def test_backfill_skips_malformed_raw_json_without_aborting_batch(db_sessi
     assert broken.category_id is None
     assert ok.category_id is not None
     assert result["checked"] >= 2
+
+
+# ---------------------------------------------------------------------------
+# refresh_notice_statuses (DB 기반)
+# ---------------------------------------------------------------------------
+
+
+async def test_refresh_closes_notice_whose_end_date_has_passed(db_session):
+    source = await _create_source(db_session, "상태갱신_마감")
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="refresh-closed",
+        title="마감됐어야 하는 공고",
+        application_start_date=date(2020, 1, 1),
+        application_end_date=date(2020, 1, 31),
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+
+    result = await refresh_notice_statuses(db_session)
+
+    notice = await db_session.get(Notice, notice_id)
+    assert notice.status == "마감"
+    assert notice.is_actionable is False
+    assert result["updated"] >= 1
+
+
+async def test_refresh_leaves_open_notice_untouched(db_session):
+    source = await _create_source(db_session, "상태갱신_모집중유지")
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="refresh-open",
+        title="아직 열려있는 공고",
+        application_start_date=date(2020, 1, 1),
+        application_end_date=date(2099, 1, 1),
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+
+    await refresh_notice_statuses(db_session)
+
+    notice = await db_session.get(Notice, notice_id)
+    assert notice.status == "모집중"
+    assert notice.is_actionable is True
+
+
+async def test_refresh_does_not_downgrade_rolling_open_notice_to_확인필요(db_session):
+    """종료일 없는 상시모집 공고는 raw_period 정보 없이 재계산하면 '확인필요'로
+    잘못 떨어지므로, 기존 '모집중'을 그대로 유지해야 한다."""
+    source = await _create_source(db_session, "상태갱신_상시모집")
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="refresh-rolling",
+        title="상시모집 공고",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+
+    await refresh_notice_statuses(db_session)
+
+    notice = await db_session.get(Notice, notice_id)
+    assert notice.status == "모집중"
+
+
+async def test_refresh_skips_already_closed_notices(db_session):
+    source = await _create_source(db_session, "상태갱신_이미마감")
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="refresh-already-closed",
+        title="이미 마감 처리된 공고",
+        application_start_date=date(2020, 1, 1),
+        application_end_date=date(2020, 1, 31),
+        status="마감",
+        is_actionable=False,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+
+    rows = await get_notices_for_status_refresh(db_session)
+
+    assert notice_id not in {row[0] for row in rows}
+
+
+# ---------------------------------------------------------------------------
+# 조기종료 판단 (순수 함수 — DB/외부 API 없이 검증)
+#
+# collect_all_bizinfo_notices/collect_all_kstartup_notices 자체는 소스명이
+# "기업마당"/"K-Startup"으로 고정돼 있어, 라이브 검증에 이미 실제 데이터가
+# 쌓인 개발 DB에서는 그 실제 데이터가 조기종료 커서에 섞여 들어가 격리된
+# 단위 테스트가 불가능하다 (예: get_max_notice_external_id가 테스트가
+# 만든 값이 아니라 오늘 실제로 수집된 179xxx대 값을 집어버림). 그래서
+# 조기종료 "판단 로직"만 순수 함수로 뽑아 따로 검증하고, 전체 파이프라인
+# 동작은 실제 API로 라이브 검증했다(기업마당 1페이지, K-Startup 2페이지
+# 만에 조기종료 확인함).
+# ---------------------------------------------------------------------------
+
+
+def test_bizinfo_item_before_cutoff_true_when_older_than_stop_before():
+    item = {"creatPnttm": "2026-06-01 10:00:00"}
+    stop_before = datetime(2026, 6, 30, 0, 0, 0)
+
+    assert svc._bizinfo_item_before_cutoff(item, stop_before) is True
+
+
+def test_bizinfo_item_before_cutoff_false_within_buffer_window():
+    """stop_before보다 늦으면(버퍼 안) 아직 다시 확인해야 할 대상이다."""
+    item = {"creatPnttm": "2026-06-30 12:00:00"}
+    stop_before = datetime(2026, 6, 30, 0, 0, 0)
+
+    assert svc._bizinfo_item_before_cutoff(item, stop_before) is False
+
+
+def test_bizinfo_item_before_cutoff_false_when_no_cutoff():
+    """stop_before가 None이면(첫 수집) 조기종료 대상이 없다."""
+    item = {"creatPnttm": "2020-01-01 00:00:00"}
+
+    assert svc._bizinfo_item_before_cutoff(item, None) is False
+
+
+def test_kstartup_item_before_cutoff_true_when_id_at_or_below_threshold():
+    assert svc._kstartup_item_before_cutoff({"pbanc_sn": 800}, 800) is True
+    assert svc._kstartup_item_before_cutoff({"pbanc_sn": 700}, 800) is True
+
+
+def test_kstartup_item_before_cutoff_false_when_id_above_threshold():
+    assert svc._kstartup_item_before_cutoff({"pbanc_sn": 900}, 800) is False
+
+
+def test_kstartup_item_before_cutoff_false_when_no_cutoff():
+    assert svc._kstartup_item_before_cutoff({"pbanc_sn": 1}, None) is False
+
+
+# ---------------------------------------------------------------------------
+# 조기종료 커서 조회 함수 (DB 기반, 격리된 source_name으로 검증)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_max_bizinfo_registration_time_none_when_no_notices(db_session):
+    from app.repositories.notice_repository import get_max_bizinfo_registration_time
+
+    source = NoticeSource(
+        source_name="커서테스트_기업마당1", base_url="https://example.com"
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    assert await get_max_bizinfo_registration_time(db_session, source.id) is None
+
+
+async def test_get_max_bizinfo_registration_time_returns_latest_creatpnttm(
+    db_session,
+):
+    """이번 수집이 일부만 성공해도(예: 중간에 실패) 그만큼만 커서가 전진해야
+    하므로, notice_source.updated_at이 아니라 실제로 저장된 원본 데이터
+    (bizinfo_raw.creatPnttm)에서 최댓값을 구한다."""
+    from app.repositories.notice_repository import get_max_bizinfo_registration_time
+
+    source = NoticeSource(
+        source_name="커서테스트_기업마당2", base_url="https://example.com"
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    for external_id, creat_pnttm in (
+        ("biz-1", "2026-07-01 10:00:00"),
+        ("biz-2", "2026-07-05 09:00:00"),  # 가장 최신
+        ("biz-3", "2026-07-03 12:00:00"),
+    ):
+        notice_id = await upsert_notice(
+            db_session,
+            source_id=source.id,
+            external_id=external_id,
+            title="테스트 공고",
+            application_start_date=None,
+            application_end_date=None,
+            status="모집중",
+            is_actionable=True,
+            source_url=None,
+            apply_url=None,
+            summary_text=None,
+        )
+        db_session.add(
+            BizinfoRaw(
+                key=external_id,
+                field=json.dumps({"creatPnttm": creat_pnttm}),
+                notice_id=notice_id,
+            )
+        )
+    await db_session.flush()
+
+    result = await get_max_bizinfo_registration_time(db_session, source.id)
+
+    assert result == datetime(2026, 7, 5, 9, 0, 0)
+
+
+async def test_get_max_notice_external_id_none_when_no_notices(db_session):
+    from app.repositories.notice_repository import get_max_notice_external_id
+
+    source = NoticeSource(
+        source_name="커서테스트_케이스타트업1", base_url="https://example.com"
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    assert await get_max_notice_external_id(db_session, source.id) is None
+
+
+async def test_get_max_notice_external_id_returns_largest_numeric_id(db_session):
+    from app.repositories.notice_repository import get_max_notice_external_id
+
+    source = NoticeSource(
+        source_name="커서테스트_케이스타트업2", base_url="https://example.com"
+    )
+    db_session.add(source)
+    await db_session.flush()
+    for external_id in ("100", "500", "300"):
+        await upsert_notice(
+            db_session,
+            source_id=source.id,
+            external_id=external_id,
+            title="테스트 공고",
+            application_start_date=None,
+            application_end_date=None,
+            status="모집중",
+            is_actionable=True,
+            source_url=None,
+            apply_url=None,
+            summary_text=None,
+        )
+
+    assert await get_max_notice_external_id(db_session, source.id) == 500
