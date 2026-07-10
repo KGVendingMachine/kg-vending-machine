@@ -744,7 +744,19 @@ async def collect_all_kstartup_notices(session: AsyncSession) -> CollectionResul
         base_url="https://www.k-startup.go.kr",
         collect_type="API",
     )
-    max_saved_id = await get_max_notice_external_id(session, source.id)
+    try:
+        # get_max_bizinfo_registration_time과 같은 이유로 SAVEPOINT로
+        # 감싼다 — external_id를 SQL에서 정수로 캐스팅하는 쿼리라, 혹시
+        # 숫자가 아닌 값이 섞여 있으면 이 문장이 실패하면서 Postgres
+        # 트랜잭션 전체를 막을 수 있다.
+        async with session.begin_nested():
+            max_saved_id = await get_max_notice_external_id(session, source.id)
+    except Exception:
+        logger.warning(
+            "K-Startup 조기종료 커서 계산 실패, 이번 수집은 조기종료 없이 전체를 훑습니다",
+            exc_info=True,
+        )
+        max_saved_id = None
     stop_below = (
         max_saved_id - _KSTARTUP_EARLY_STOP_BUFFER if max_saved_id is not None else None
     )
