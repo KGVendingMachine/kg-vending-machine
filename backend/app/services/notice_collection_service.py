@@ -691,7 +691,21 @@ async def backfill_notice_categories(session: AsyncSession) -> dict[str, int]:
         rows = await get_notices_missing_category(session, raw_model_cls)
         for notice_id, raw_field in rows:
             checked += 1
-            item = json.loads(raw_field)
+            # raw_field는 항상 save_raw()에서 json.dumps()로 채워지지만,
+            # 컬럼 자체는 NULL을 허용해서(레거시 데이터·수동 조작 가능성)
+            # 여기서 깨지면 json.loads가 예외를 던진다. 한 건 때문에
+            # 나머지 수천 건 백필이 통째로 실패하면 안 되므로(수집
+            # 파이프라인의 SAVEPOINT 격리와 같은 이유), 이 건만 건너뛴다.
+            try:
+                item = json.loads(raw_field)
+            except (TypeError, json.JSONDecodeError):
+                logger.warning(
+                    "category 백필 중 raw 데이터를 파싱하지 못했습니다 "
+                    "(notice_id=%s, raw_model=%s)",
+                    notice_id,
+                    raw_model_cls.__tablename__,
+                )
+                continue
             category_id = category_mapping.get(raw_category_key(item))
             if category_id is not None:
                 await set_notice_category(session, notice_id, category_id)
