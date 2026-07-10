@@ -82,16 +82,55 @@ def _has_keyword(values: list[str], keyword: str) -> bool:
     return any(keyword in value for value in values)
 
 
-def _enrich_support_types(sample: SampleNotice, normalized: NormalizedNoticeSchema) -> None:
-    support_text = "\n".join(
-        [sample.raw_text, *normalized.support.support_content]
-    )
+def _enrich_support_types(
+    sample: SampleNotice, normalized: NormalizedNoticeSchema
+) -> None:
+    support_text = "\n".join([sample.raw_text, *normalized.support.support_content])
     rules = (
-        (("등록", "출원", "특허", "실용신안", "의장", "상표", "지적재산권", "산업재산권"), "지식재산권"),
+        (
+            (
+                "등록",
+                "출원",
+                "특허",
+                "실용신안",
+                "의장",
+                "상표",
+                "지적재산권",
+                "산업재산권",
+            ),
+            "지식재산권",
+        ),
         (("세미나", "교육", "워크숍", "워크샵"), "교육"),
-        (("인증", "ISO", "이노비즈", "메인비즈", "벤처", "NET", "NEP", "KS", "CE", "RoHS", "FDA", "HACCP"), "인증지원"),
+        (
+            (
+                "인증",
+                "ISO",
+                "이노비즈",
+                "메인비즈",
+                "벤처",
+                "NET",
+                "NEP",
+                "KS",
+                "CE",
+                "RoHS",
+                "FDA",
+                "HACCP",
+            ),
+            "인증지원",
+        ),
         (("홍보", "카탈로그", "동영상", "홈페이지", "제작"), "홍보지원"),
-        (("시험", "성능시험", "신뢰성", "환경시험", "전자파", "소재시험", "제품성적서"), "시험/인증"),
+        (
+            (
+                "시험",
+                "성능시험",
+                "신뢰성",
+                "환경시험",
+                "전자파",
+                "소재시험",
+                "제품성적서",
+            ),
+            "시험/인증",
+        ),
         (("전문기술", "기술적 문제", "전문가", "컨설팅", "매칭"), "기술지원"),
         (("전투실험", "군 ", "국방", "방산", "방위산업"), "국방/방산"),
         (("비용", "지원금", "지원예산", "부담금", "만원", "억원", "%"), "자금지원"),
@@ -104,7 +143,9 @@ def _enrich_support_types(sample: SampleNotice, normalized: NormalizedNoticeSche
             _append_unique(normalized.support.support_type, label)
 
 
-def _enrich_support_rates(sample: SampleNotice, normalized: NormalizedNoticeSchema) -> None:
+def _enrich_support_rates(
+    sample: SampleNotice, normalized: NormalizedNoticeSchema
+) -> None:
     source_text = "\n".join([sample.raw_text, *normalized.support.support_content])
     has_support_90 = bool(re.search(r"90\s*%", source_text))
     has_self_payment_10 = bool(
@@ -130,8 +171,8 @@ def _enrich_from_sample_metadata(
     normalized.basic.source = normalized.basic.source or sample.source
     normalized.basic.category = normalized.basic.category or sample.category
     normalized.basic.status = normalized.basic.status or sample.status
-    normalized.application.start_date = normalized.application.start_date or _parse_date(
-        sample.application_start_date
+    normalized.application.start_date = (
+        normalized.application.start_date or _parse_date(sample.application_start_date)
     )
     normalized.application.end_date = normalized.application.end_date or _parse_date(
         sample.application_end_date
@@ -205,5 +246,7 @@ async def normalize_sample_notice(
         file_type=sample.file_type,
         char_count=sample.char_count,
         normalized_json=normalized,
-        validation_result=validate_normalized_notice(normalized, source_text=sample.raw_text),
+        validation_result=validate_normalized_notice(
+            normalized, source_text=sample.raw_text
+        ),
     )

@@ -78,7 +78,9 @@ def _load_json_array(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def load_sample_notice(sample_index: int, sample_path: str | None = None) -> SampleNotice:
+def load_sample_notice(
+    sample_index: int, sample_path: str | None = None
+) -> SampleNotice:
     path = _resolve_sample_path(sample_path)
     rows = _load_json_array(path)
 
