@@ -69,11 +69,27 @@ class HWPXLoader(BaseLoader):
                     root = ET.fromstring(xml_data)
 
                     # HWPX(OWPML) 표준의 텍스트 태그는 보통 't' 또는 네임스페이스를
-                    # 포함한 '{...}t' 형태라, 태그 이름이 't'로 끝나는 요소를 순회한다.
+                    # 포함한 '{...}t' 형태이고, 문단 태그는 'p'/'{...}p' 형태다.
+                    # 한 문단(<hp:p>) 안에서도 글자 서식(굵게/색 등)이 바뀌는
+                    # 지점마다 <hp:run>이 나뉘어 <hp:t>가 여러 개 생긴다 — 이걸
+                    # 문단 구분 없이 전부 개별 줄로 이어붙이면 한 문장이 서식
+                    # 경계에서 줄바꿈으로 잘린다(실제 샘플에서 "어르신들의 건강
+                    # 상태에 대한"과 "주관적 판단으로 대처 오류 발생"이 한
+                    # 문장인데 두 줄로 쪼개지는 것을 확인함). 'p' 태그를 만날
+                    # 때마다 지금까지 모은 run 텍스트를 한 문단으로 확정하고,
+                    # 그 사이에 나온 't' 텍스트는 구분자 없이 이어붙인다 — 표
+                    # 셀 안에 중첩된 문단도 자기 차례에 똑같이 처리되므로 표
+                    # 안팎을 구분해서 따로 다룰 필요가 없다.
+                    current_paragraph: list[str] = []
                     for node in root.iter():
-                        if node.tag.endswith("}t") or node.tag == "t":
-                            if node.text:
-                                text_content.append(node.text)
+                        if node.tag.endswith("}p") or node.tag == "p":
+                            if current_paragraph:
+                                text_content.append("".join(current_paragraph))
+                                current_paragraph = []
+                        elif (node.tag.endswith("}t") or node.tag == "t") and node.text:
+                            current_paragraph.append(node.text)
+                    if current_paragraph:
+                        text_content.append("".join(current_paragraph))
         except (zipfile.BadZipFile, ET.ParseError) as exc:
             raise RuntimeError(
                 f"HWPX 파일을 파싱하는 중 오류가 발생했습니다: {exc}"

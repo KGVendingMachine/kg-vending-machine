@@ -15,11 +15,12 @@ docs/matching-pipeline.md 관례(관리자=/admin, 내부 모듈=/internal)를 �
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import async_session_factory
+from app.db.session import async_session_factory, get_db
 from app.schemas.notice_collection import (
+    CategoryBackfillResult,
     CollectionJobAccepted,
     CollectionJobStatus,
     CollectionJobStatusResponse,
@@ -27,6 +28,7 @@ from app.schemas.notice_collection import (
 )
 from app.services.notice_collection_service import (
     CollectionResult,
+    backfill_notice_categories,
     collect_all_bizinfo_notices,
     collect_all_kstartup_notices,
 )
@@ -93,9 +95,23 @@ async def _run_collection_job(session: AsyncSession, job_id: str) -> None:
 
 async def _execute_collection_job(job_id: str) -> None:
     """BackgroundTasks 진입점. 요청 스코프 세션이 아니라 새 세션을 직접 연다
-    (business_plan.py의 정규화 작업 실행기와 동일한 이유)."""
-    async with async_session_factory() as session:
-        await _run_collection_job(session, job_id)
+    (business_plan.py의 정규화 작업 실행기와 동일한 이유).
+
+    세션을 여는 것 자체가 실패하는 경우까지 여기서 잡아야 한다 —
+    _run_collection_job 안의 try/except는 그 함수 안에서 일어나는
+    실패만 잡아서, 세션 생성 실패는 못 잡힌 채로 올라오면 job이
+    PENDING에 영원히 멈추고 _has_active_job()이 계속 True를 반환해
+    이후 수집 요청이 전부 막힌다.
+    """
+    try:
+        async with async_session_factory() as session:
+            await _run_collection_job(session, job_id)
+    except Exception as exc:
+        _JOBS[job_id] = CollectionJobStatusResponse(
+            job_id=job_id,
+            status=CollectionJobStatus.FAILED,
+            error_message=f"수집 작업 실행 실패: {exc}",
+        )
 
 
 def _has_active_job() -> bool:
@@ -109,6 +125,8 @@ def _has_active_job() -> bool:
     "/collect",
     response_model=CollectionJobAccepted,
     status_code=status.HTTP_202_ACCEPTED,
+    summary="공고 수집 시작",
+    description="기업마당 → K-Startup 순서로 공고 전체 수집을 백그라운드에서 시작한다.",
 )
 async def start_collection(background_tasks: BackgroundTasks):
     # 이미 도는 작업이 있는데 또 시작하면 K-Startup 첨부파일 크롤링까지
@@ -130,7 +148,12 @@ async def start_collection(background_tasks: BackgroundTasks):
     return CollectionJobAccepted(job_id=job_id, status=CollectionJobStatus.PENDING)
 
 
-@router.get("/collect/{job_id}", response_model=CollectionJobStatusResponse)
+@router.get(
+    "/collect/{job_id}",
+    response_model=CollectionJobStatusResponse,
+    summary="공고 수집 상태 조회",
+    description="진행 단계(current_phase)와 출처별 저장/실패 건수를 조회한다.",
+)
 async def get_collection_status(job_id: str):
     job = _JOBS.get(job_id)
     if job is None:
@@ -139,3 +162,18 @@ async def get_collection_status(job_id: str):
             detail="해당 job_id의 수집 작업을 찾을 수 없습니다.",
         )
     return job
+
+
+@router.post(
+    "/backfill-category",
+    response_model=CategoryBackfillResult,
+    summary="기존 공고 category_id 보정",
+    description=(
+        "category_id 자동 매핑이 붙기 전에 저장돼 category_id가 비어있는 "
+        "공고를 찾아, 이미 저장된 원본 응답(raw)만으로 다시 채운다. "
+        "외부 API를 호출하지 않아 빠르게 끝나므로 동기로 처리한다."
+    ),
+)
+async def backfill_category(session: AsyncSession = Depends(get_db)):
+    result = await backfill_notice_categories(session)
+    return CategoryBackfillResult(**result)
