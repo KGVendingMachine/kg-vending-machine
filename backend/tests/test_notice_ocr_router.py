@@ -32,7 +32,9 @@ def clear_jobs():
 
 
 def _attachment(**overrides) -> NoticeAttachment:
-    defaults = dict(id=1, notice_id=1, file_name="a.pdf", file_type="PDF", parsed_text=None)
+    defaults = dict(
+        id=1, notice_id=1, file_name="a.pdf", file_type="PDF", parsed_text=None
+    )
     defaults.update(overrides)
     return NoticeAttachment(**defaults)
 
