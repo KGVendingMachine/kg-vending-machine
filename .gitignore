@@ -157,6 +157,12 @@ ENV/
 env.bak/
 venv.bak/
 
+# SSH / AWS key material — never commit
+*.pem
+*.ppk
+id_rsa*
+id_ed25519*
+
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -199,7 +205,7 @@ cython_debug/
 #   that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
 #   and can be added to the global gitignore or merged into this file. However, if you prefer, 
 #   you could uncomment the following to ignore the entire vscode folder
-# .vscode/
+.vscode/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
@@ -226,3 +232,4 @@ xuswns/*
 
 # 로컬 테스트용 샘플 문서 (실제 공고 첨부파일 등, 저장소에 올리지 않음)
 backend/data/
+*.pem
