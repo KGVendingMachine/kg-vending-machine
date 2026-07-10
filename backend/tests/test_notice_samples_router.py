@@ -67,9 +67,7 @@ def _write_samples(tmp_path) -> str:
     return str(path)
 
 
-async def test_normalize_sample_notice_returns_normalized_result(
-    tmp_path, monkeypatch
-):
+async def test_normalize_sample_notice_returns_normalized_result(tmp_path, monkeypatch):
     sample_path = _write_samples(tmp_path)
     seen_texts: list[str] = []
 
@@ -114,9 +112,7 @@ async def test_normalize_sample_notice_raises_400_for_loader_errors():
     assert exc_info.value.status_code == 400
 
 
-async def test_normalize_sample_notice_raises_502_for_ai_errors(
-    tmp_path, monkeypatch
-):
+async def test_normalize_sample_notice_raises_502_for_ai_errors(tmp_path, monkeypatch):
     sample_path = _write_samples(tmp_path)
 
     async def fake_normalize(text: str) -> NormalizedNoticeSchema:
@@ -221,9 +217,7 @@ def test_enrich_from_sample_metadata_keeps_subsidy_and_self_payment_separate():
         file_name="notice.pdf",
         file_type="PDF",
         char_count=100,
-        raw_text=(
-            "등록/출원비용의 90% 지원. 기업부담금은 공급가액의 10% 이상"
-        ),
+        raw_text=("등록/출원비용의 90% 지원. 기업부담금은 공급가액의 10% 이상"),
     )
     normalized = NormalizedNoticeSchema(
         support=NoticeSupportInfo(

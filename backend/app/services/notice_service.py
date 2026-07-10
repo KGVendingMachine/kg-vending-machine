@@ -61,10 +61,14 @@ def _collect_source_consistency_errors(
         )
 
     if _has_email(source_text) and not _has_value(normalized.contact.email):
-        errors.append("source.contact.email: 원문에 이메일이 있지만 contact.email이 비어 있습니다.")
+        errors.append(
+            "source.contact.email: 원문에 이메일이 있지만 contact.email이 비어 있습니다."
+        )
 
     if _has_phone(source_text) and not _has_value(normalized.contact.phone):
-        errors.append("source.contact.phone: 원문에 전화번호가 있지만 contact.phone이 비어 있습니다.")
+        errors.append(
+            "source.contact.phone: 원문에 전화번호가 있지만 contact.phone이 비어 있습니다."
+        )
 
     if "제출서류" in source_text and not _has_value(
         normalized.documents.required_documents

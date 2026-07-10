@@ -52,3 +52,12 @@ class CategoryBackfillResult(BaseModel):
     """category_id가 비어있어 검사한 공고 수"""
     updated: int
     """실제로 category_id를 채운 공고 수"""
+
+
+class StatusRefreshResult(BaseModel):
+    """POST /internal/notices/refresh-status 응답"""
+
+    checked: int
+    """마감 처리되지 않아 검사한 공고 수"""
+    updated: int
+    """실제로 status가 바뀐 공고 수 (주로 마감일 경과로 인한 마감 처리)"""

@@ -1,6 +1,7 @@
-from datetime import date
+from datetime import date, datetime
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import Integer, cast, delete, func, select, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +49,54 @@ async def get_or_create_source(
     result = await session.execute(stmt)
     source_id = result.scalar_one()
     return await session.get_one(NoticeSource, source_id, populate_existing=True)
+
+
+async def get_max_notice_external_id(
+    session: AsyncSession, source_id: int
+) -> int | None:
+    """해당 출처에 저장된 공고 중 가장 큰 external_id(정수 변환)를 반환한다.
+
+    K-Startup처럼 external_id가 순수 숫자 문자열(pbanc_sn)인 출처에서,
+    "마지막으로 저장된 지점"을 조기종료 커서로 재활용하는 용도. 기업마당은
+    external_id가 "PBLN_..." 접두사가 붙은 문자열이라 이 함수를 쓸 수 없다
+    (get_max_bizinfo_registration_time을 대신 쓴다).
+    """
+    result = await session.execute(
+        select(func.max(cast(Notice.external_id, Integer))).where(
+            Notice.source_id == source_id
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_max_bizinfo_registration_time(
+    session: AsyncSession, source_id: int
+) -> datetime | None:
+    """저장된 기업마당 공고 중 원본 응답의 creatPnttm(등록시각) 최댓값을 반환한다.
+
+    get_max_notice_external_id와 같은 이유로, notice_source.updated_at
+    (수집 "시작" 시각)을 그대로 커서로 쓰지 않는다 — 그러면 페이지 중간에
+    수집이 실패해도 이미 시작 시각이 커밋돼버려서, 다음 수집이 실패
+    지점 이후를 영원히 건너뛸 위험이 있다. 대신 "실제로 저장에 성공한
+    데이터" 기준으로 커서를 계산해 자기 보정되게 한다 — 이번 수집이
+    일부만 성공해도 그만큼만 커서가 전진한다.
+
+    creatPnttm 형식("YYYY-MM-DD HH:MM:SS")은 고정 자릿수라 문자열
+    비교 순서가 시간 순서와 같아, SQL에서 문자열 그대로 MAX를 구해도
+    정확하다.
+    """
+    result = await session.execute(
+        select(func.max(cast(BizinfoRaw.field, JSONB)["creatPnttm"].astext))
+        .join(Notice, Notice.id == BizinfoRaw.notice_id)
+        .where(Notice.source_id == source_id)
+    )
+    max_str = result.scalar_one_or_none()
+    if max_str is None:
+        return None
+    try:
+        return datetime.strptime(max_str, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
 
 
 async def get_or_create_organization(session: AsyncSession, name: str) -> Organization:
@@ -312,6 +361,36 @@ async def set_notice_category(
     """공고의 통합 카테고리를 지정한다."""
     await session.execute(
         update(Notice).where(Notice.id == notice_id).values(category_id=category_id)
+    )
+
+
+async def get_notices_for_status_refresh(
+    session: AsyncSession,
+) -> list[tuple[int, date | None, date | None, str | None]]:
+    """마감 처리되지 않은 공고의 (id, 신청시작일, 신청종료일, 현재 상태) 목록을 반환한다.
+
+    "마감"은 종단 상태로 보고 대상에서 제외한다 — 한 번 마감으로
+    확정되면 신청기간이 다시 열리는 경우는 없다고 본다.
+    """
+    result = await session.execute(
+        select(
+            Notice.id,
+            Notice.application_start_date,
+            Notice.application_end_date,
+            Notice.status,
+        ).where(Notice.status.is_distinct_from("마감"))
+    )
+    return list(result.all())
+
+
+async def update_notice_status(
+    session: AsyncSession, notice_id: int, status: str, is_actionable: bool
+) -> None:
+    """공고의 모집 상태를 갱신한다 (마감일 경과 등으로 재계산된 값 반영)."""
+    await session.execute(
+        update(Notice)
+        .where(Notice.id == notice_id)
+        .values(status=status, is_actionable=is_actionable)
     )
 
 
