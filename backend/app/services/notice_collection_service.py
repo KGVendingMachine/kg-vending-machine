@@ -826,7 +826,9 @@ async def refresh_notice_statuses(session: AsyncSession) -> dict[str, int]:
         if new_status == "확인필요" and current_status == "모집중":
             continue
         if new_status != current_status:
-            await update_notice_status(session, notice_id, new_status, new_is_actionable)
+            await update_notice_status(
+                session, notice_id, new_status, new_is_actionable
+            )
             updated += 1
 
     await session.commit()

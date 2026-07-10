@@ -18,7 +18,10 @@ from app.api.notice_collection import (
     refresh_status,
     start_collection,
 )
-from app.schemas.notice_collection import CollectionJobStatus, CollectionJobStatusResponse
+from app.schemas.notice_collection import (
+    CollectionJobStatus,
+    CollectionJobStatusResponse,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -79,7 +82,9 @@ async def test_start_collection_allowed_when_previous_job_completed():
 
 
 async def test_get_collection_status_returns_stored_job():
-    stored = CollectionJobStatusResponse(job_id="job-1", status=CollectionJobStatus.RUNNING)
+    stored = CollectionJobStatusResponse(
+        job_id="job-1", status=CollectionJobStatus.RUNNING
+    )
     _JOBS["job-1"] = stored
 
     result = await get_collection_status("job-1")
