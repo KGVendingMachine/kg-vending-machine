@@ -1,6 +1,6 @@
-from datetime import date
+from datetime import date, datetime
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import Integer, cast, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +48,41 @@ async def get_or_create_source(
     result = await session.execute(stmt)
     source_id = result.scalar_one()
     return await session.get_one(NoticeSource, source_id, populate_existing=True)
+
+
+async def get_source_updated_at(
+    session: AsyncSession, source_name: str
+) -> datetime | None:
+    """출처의 마지막 수집(갱신) 시각을 반환한다. 출처가 아직 없으면 None
+    (첫 수집이라는 뜻 — 조기종료 없이 전체를 훑어야 함).
+
+    기업마당 조기종료 수집의 기준 시각으로 쓴다: get_or_create_source가
+    호출될 때마다 updated_at이 now()로 갱신되므로, 이 함수는 반드시
+    get_or_create_source를 호출하기 *전에* 불러야 "직전 실행 시각"을
+    얻을 수 있다.
+    """
+    result = await session.execute(
+        select(NoticeSource.updated_at).where(NoticeSource.source_name == source_name)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_max_notice_external_id(
+    session: AsyncSession, source_id: int
+) -> int | None:
+    """해당 출처에 저장된 공고 중 가장 큰 external_id(정수 변환)를 반환한다.
+
+    K-Startup처럼 external_id가 순수 숫자 문자열(pbanc_sn)인 출처에서,
+    "마지막으로 저장된 지점"을 조기종료 커서로 재활용하는 용도. 기업마당은
+    external_id가 "PBLN_..." 접두사가 붙은 문자열이라 이 함수를 쓸 수 없다
+    (get_source_updated_at을 대신 쓴다).
+    """
+    result = await session.execute(
+        select(func.max(cast(Notice.external_id, Integer))).where(
+            Notice.source_id == source_id
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_or_create_organization(session: AsyncSession, name: str) -> Organization:

@@ -7,9 +7,10 @@ conftest.db_session(SAVEPOINT 롤백) 위에서 검증한다.
 """
 
 import json
-from datetime import date
+from datetime import date, datetime
 
 import pytest
+from sqlalchemy import update
 
 from app.models.notice import Notice
 from app.models.notice_source import NoticeSource
@@ -18,6 +19,7 @@ from app.repositories.notice_repository import (
     get_notices_for_status_refresh,
     upsert_notice,
 )
+from app.services import notice_collection_service as svc
 from app.services.notice_collection_service import (
     _bizinfo_raw_category_key,
     _derive_status_from_dates,
@@ -437,3 +439,120 @@ async def test_refresh_skips_already_closed_notices(db_session):
     rows = await get_notices_for_status_refresh(db_session)
 
     assert notice_id not in {row[0] for row in rows}
+
+
+# ---------------------------------------------------------------------------
+# 조기종료 판단 (순수 함수 — DB/외부 API 없이 검증)
+#
+# collect_all_bizinfo_notices/collect_all_kstartup_notices 자체는 소스명이
+# "기업마당"/"K-Startup"으로 고정돼 있어, 라이브 검증에 이미 실제 데이터가
+# 쌓인 개발 DB에서는 그 실제 데이터가 조기종료 커서에 섞여 들어가 격리된
+# 단위 테스트가 불가능하다 (예: get_max_notice_external_id가 테스트가
+# 만든 값이 아니라 오늘 실제로 수집된 179xxx대 값을 집어버림). 그래서
+# 조기종료 "판단 로직"만 순수 함수로 뽑아 따로 검증하고, 전체 파이프라인
+# 동작은 실제 API로 라이브 검증했다(기업마당 1페이지, K-Startup 2페이지
+# 만에 조기종료 확인함).
+# ---------------------------------------------------------------------------
+
+
+def test_bizinfo_item_before_cutoff_true_when_older_than_stop_before():
+    item = {"creatPnttm": "2026-06-01 10:00:00"}
+    stop_before = datetime(2026, 6, 30, 0, 0, 0)
+
+    assert svc._bizinfo_item_before_cutoff(item, stop_before) is True
+
+
+def test_bizinfo_item_before_cutoff_false_within_buffer_window():
+    """stop_before보다 늦으면(버퍼 안) 아직 다시 확인해야 할 대상이다."""
+    item = {"creatPnttm": "2026-06-30 12:00:00"}
+    stop_before = datetime(2026, 6, 30, 0, 0, 0)
+
+    assert svc._bizinfo_item_before_cutoff(item, stop_before) is False
+
+
+def test_bizinfo_item_before_cutoff_false_when_no_cutoff():
+    """stop_before가 None이면(첫 수집) 조기종료 대상이 없다."""
+    item = {"creatPnttm": "2020-01-01 00:00:00"}
+
+    assert svc._bizinfo_item_before_cutoff(item, None) is False
+
+
+def test_kstartup_item_before_cutoff_true_when_id_at_or_below_threshold():
+    assert svc._kstartup_item_before_cutoff({"pbanc_sn": 800}, 800) is True
+    assert svc._kstartup_item_before_cutoff({"pbanc_sn": 700}, 800) is True
+
+
+def test_kstartup_item_before_cutoff_false_when_id_above_threshold():
+    assert svc._kstartup_item_before_cutoff({"pbanc_sn": 900}, 800) is False
+
+
+def test_kstartup_item_before_cutoff_false_when_no_cutoff():
+    assert svc._kstartup_item_before_cutoff({"pbanc_sn": 1}, None) is False
+
+
+# ---------------------------------------------------------------------------
+# 조기종료 커서 조회 함수 (DB 기반, 격리된 source_name으로 검증)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_source_updated_at_none_when_source_missing(db_session):
+    from app.repositories.notice_repository import get_source_updated_at
+
+    assert await get_source_updated_at(db_session, "존재하지않는출처") is None
+
+
+async def test_get_source_updated_at_returns_stored_value(db_session):
+    from app.repositories.notice_repository import get_source_updated_at
+
+    source = NoticeSource(
+        source_name="커서테스트_기업마당", base_url="https://example.com"
+    )
+    db_session.add(source)
+    await db_session.flush()
+    await db_session.execute(
+        update(NoticeSource)
+        .where(NoticeSource.id == source.id)
+        .values(updated_at=datetime(2026, 7, 1, 0, 0, 0))
+    )
+
+    result = await get_source_updated_at(db_session, "커서테스트_기업마당")
+
+    assert result == datetime(2026, 7, 1, 0, 0, 0)
+
+
+async def test_get_max_notice_external_id_none_when_no_notices(db_session):
+    from app.repositories.notice_repository import get_max_notice_external_id
+
+    source = NoticeSource(
+        source_name="커서테스트_케이스타트업1", base_url="https://example.com"
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    assert await get_max_notice_external_id(db_session, source.id) is None
+
+
+async def test_get_max_notice_external_id_returns_largest_numeric_id(db_session):
+    from app.repositories.notice_repository import get_max_notice_external_id
+
+    source = NoticeSource(
+        source_name="커서테스트_케이스타트업2", base_url="https://example.com"
+    )
+    db_session.add(source)
+    await db_session.flush()
+    for external_id in ("100", "500", "300"):
+        await upsert_notice(
+            db_session,
+            source_id=source.id,
+            external_id=external_id,
+            title="테스트 공고",
+            application_start_date=None,
+            application_end_date=None,
+            status="모집중",
+            is_actionable=True,
+            source_url=None,
+            apply_url=None,
+            summary_text=None,
+        )
+
+    assert await get_max_notice_external_id(db_session, source.id) == 500
