@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - run: uv sync --frozen
+
+      - run: uv run ruff check .
+
+      - run: uv run black --check .
+
+      # backend/tests/ 에 실제 테스트가 아직 없어서 exit code 5(no tests collected)를 임시로 허용한다.
+      # 테스트가 하나라도 추가되면 `|| [ $? -eq 5 ]` 부분을 제거할 것 (xuswns/cicd-guide.md 참고).
+      - run: uv run pytest || [ $? -eq 5 ]
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run build
