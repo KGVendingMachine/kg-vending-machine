@@ -6,6 +6,7 @@ uv sync                     # 의존성 설치 (.venv 자동 생성, Python 3.12
 cp .env.example .env        # 환경변수 파일 생성 (값은 필요시 docs/configuration.md 참고)
 docker compose up -d        # 로컬 postgres 컨테이너 기동
 uv run alembic upgrade head # 최신 스키마로 테이블 구성
+cd .. && backend/.venv/bin/pre-commit install  # 커밋 시 black/ruff 자동 검사 훅 등록
 ```
 
 ## 서버 실행

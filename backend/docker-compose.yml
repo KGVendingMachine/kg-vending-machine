@@ -1,4 +1,17 @@
 services:
+  backend:
+    build: .
+    container_name: kg-vending-backend
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - kg_vending_chroma:/app/data/chroma
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   postgres:
     image: postgres:16
     container_name: kg-vending-postgres
@@ -18,3 +31,4 @@ services:
 
 volumes:
   kg_vending_pgdata:
+  kg_vending_chroma:

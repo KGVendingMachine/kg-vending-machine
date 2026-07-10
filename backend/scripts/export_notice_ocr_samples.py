@@ -25,7 +25,9 @@ from app.ocr.extract import extract_text
 _SAMPLE_COUNT = 5
 _SOURCE_NAME = "기업마당"
 _SINCE_LAST_YEAR = date(datetime.now().year - 1, 1, 1)  # 작년 1/1부터 (올해 포함)
-_OUTPUT_PATH = Path(__file__).resolve().parent.parent / "data" / "notice_ocr_samples.json"
+_OUTPUT_PATH = (
+    Path(__file__).resolve().parent.parent / "data" / "notice_ocr_samples.json"
+)
 _DOWNLOAD_TIMEOUT_SECONDS = 30
 
 

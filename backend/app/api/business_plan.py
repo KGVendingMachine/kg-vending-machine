@@ -82,6 +82,8 @@ async def _execute_normalization_job(
     "/{business_plan_id}/normalizations",
     response_model=NormalizeJobAccepted,
     status_code=status.HTTP_202_ACCEPTED,
+    summary="사업계획서 정규화 시작",
+    description="사업계획서 원문을 LLM으로 정규화하는 작업을 백그라운드에서 시작한다.",
 )
 async def create_normalization(
     business_plan_id: int,
@@ -108,6 +110,8 @@ async def create_normalization(
 @router.get(
     "/{business_plan_id}/normalizations/{job_id}",
     response_model=NormalizeStatusResponse,
+    summary="사업계획서 정규화 상태 조회",
+    description="정규화 작업 상태와 결과(normalized_json, validation_result)를 조회한다.",
 )
 async def get_normalization_status(business_plan_id: int, job_id: str):
     job = _JOBS.get(job_id)

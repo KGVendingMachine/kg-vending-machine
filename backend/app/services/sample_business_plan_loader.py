@@ -76,9 +76,7 @@ def load_sample_business_plan(
     row = rows[sample_index]
     raw_text = row.get("raw_text")
     if not isinstance(raw_text, str) or not raw_text.strip():
-        raise SampleRawTextMissingError(
-            f"Sample index {sample_index} has no raw_text."
-        )
+        raise SampleRawTextMissingError(f"Sample index {sample_index} has no raw_text.")
 
     file_name = row.get("file_name")
     file_type = row.get("file_type")

@@ -13,12 +13,15 @@ from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
     delete_notice,
     find_notice_id_by_source_and_title,
+    get_category_mapping,
+    get_notices_missing_category,
     get_or_create_organization,
     get_or_create_source,
     replace_notice_region,
     replace_notice_target_type,
     save_attachment,
     save_raw,
+    set_notice_category,
     upsert_notice,
 )
 
@@ -230,6 +233,45 @@ def _within_collection_window(start_date: date | None) -> bool:
     return start_date.year >= date.today().year - 1
 
 
+# docs/notice-category-mapping.md, category_mapping 시드 데이터(0756e6c105fe) 기준 —
+# 통합 카테고리 "자금"에 매핑되는 원본 카테고리 원문 값. 지금은 자금만 수집하기로
+# 정해서, 나머지 카테고리(기술/수출·글로벌/인력 등)는 아예 저장하지 않는다.
+_BIZINFO_FUND_LCLAS = "금융"
+_KSTARTUP_FUND_CLSFC = {"정책자금", "융자ㆍ보증", "사업화"}
+
+
+def _is_bizinfo_fund_category(item: dict) -> bool:
+    return item.get("pldirSportRealmLclasCodeNm") == _BIZINFO_FUND_LCLAS
+
+
+def _is_kstartup_fund_category(item: dict) -> bool:
+    return item.get("supt_biz_clsfc") in _KSTARTUP_FUND_CLSFC
+
+
+def _bizinfo_raw_category_key(item: dict) -> str | None:
+    """category_mapping.raw_category와 매칭되는 키를 만든다.
+
+    기업마당은 대분류 기준이 원칙이지만, "경영"만 중분류까지 붙여야
+    한다 (docs/notice-category-mapping.md, 0756e6c105fe 시드 데이터 참고).
+    """
+    lclas = item.get("pldirSportRealmLclasCodeNm")
+    if not lclas:
+        return None
+    if lclas == "경영":
+        mlsfc = item.get("pldirSportRealmMlsfcCodeNm")
+        if not mlsfc:
+            return None
+        return f"BIZINFO:경영:{mlsfc}"
+    return f"BIZINFO:{lclas}"
+
+
+def _kstartup_raw_category_key(item: dict) -> str | None:
+    clsfc = item.get("supt_biz_clsfc")
+    if not clsfc:
+        return None
+    return f"KSTARTUP:{clsfc}"
+
+
 def _derive_status_from_dates(
     start_date: date | None, end_date: date | None, raw_period: str | None = None
 ) -> tuple[str, bool]:
@@ -255,12 +297,15 @@ async def _process_bizinfo_item(
     source_id: int,
     item: dict,
     collection_result: CollectionResult,
+    category_mapping: dict[str, int],
 ) -> None:
     """기업마당 공고 한 건을 처리해 collection_result에 결과를 반영한다."""
     if not isinstance(item, dict):
         return
     pblanc_id = item.get("pblancId")
     if not pblanc_id:
+        return
+    if not _is_bizinfo_fund_category(item):
         return
     external_id = str(pblanc_id)
 
@@ -293,6 +338,7 @@ async def _process_bizinfo_item(
                 # 확인되지 않아 notice_group_key는 비워둔다
                 # (K-Startup의 intg_pbanc_yn과 달리 별도 이슈로 조사 필요).
                 notice_group_key=None,
+                category_id=category_mapping.get(_bizinfo_raw_category_key(item)),
                 application_start_date=start_date,
                 application_end_date=end_date,
                 status=status,
@@ -364,11 +410,14 @@ async def collect_bizinfo_notices(
         base_url="https://www.bizinfo.go.kr",
         collect_type="API",
     )
+    category_mapping = await get_category_mapping(session)
     items = await fetch_bizinfo_notices(page=page)
 
     collection_result = CollectionResult()
     for item in items:
-        await _process_bizinfo_item(session, source.id, item, collection_result)
+        await _process_bizinfo_item(
+            session, source.id, item, collection_result, category_mapping
+        )
 
     await session.commit()
     return collection_result
@@ -387,6 +436,7 @@ async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult
         base_url="https://www.bizinfo.go.kr",
         collect_type="API",
     )
+    category_mapping = await get_category_mapping(session)
 
     collection_result = CollectionResult()
     page = 1
@@ -396,7 +446,9 @@ async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult
             break
 
         for item in items:
-            await _process_bizinfo_item(session, source.id, item, collection_result)
+            await _process_bizinfo_item(
+                session, source.id, item, collection_result, category_mapping
+            )
         await session.commit()
 
         logger.info(
@@ -415,11 +467,14 @@ async def _save_kstartup_attachments(
 ) -> None:
     """K-Startup 상세페이지를 크롤링해 첨부파일 메타데이터만 저장한다.
 
-    목록 API 응답엔 첨부파일 정보가 없어(app/crawler/kstartup_attachment_client.py
-    참고) 상세페이지를 한 번 더 열어야 한다. 파일명/URL/타입만 저장하고
-    텍스트 추출(OCR)은 하지 않는다 — 전체 공고를 다 OCR하면 비용이 크므로,
-    텍스트 추출은 매칭 후보로 좁혀진 공고에 한해 별도 단계에서 수행한다
-    (docs/matching-pipeline.md 4단계).
+    현재 수집 파이프라인(_process_kstartup_item)에서는 호출하지 않는다.
+    기업마당과 달리 K-Startup은 목록 API 응답에 첨부파일 정보가 없어
+    이 함수 자체가 상세페이지를 여는 크롤링이라(app/crawler/
+    kstartup_attachment_client.py 참고), 전체 공고에 대해 매번 돌리면
+    "매칭 후보로 좁혀진 것만 무거운 작업 한다"는 원칙에 어긋난다.
+    수집 시점이 아니라 매칭 후보로 좁혀진 공고에 대해서만, 2차 필터링
+    단계(docs/matching-pipeline.md 4단계)에서 호출하는 용도로 남겨둔다.
+    텍스트 추출(OCR)도 이 함수가 아니라 그 단계에서 별도로 수행한다.
 
     공고 저장 자체와는 독립적인 부가 작업이라, 실패해도 공고 저장 결과에는
     영향을 주지 않도록 별도 SAVEPOINT로 격리한다. 상세페이지 조회(외부 HTTP,
@@ -453,12 +508,15 @@ async def _process_kstartup_item(
     source_id: int,
     item: dict,
     collection_result: CollectionResult,
+    category_mapping: dict[str, int],
 ) -> None:
     """K-Startup 공고 한 건을 처리해 collection_result에 결과를 반영한다."""
     if not isinstance(item, dict):
         return
     pbanc_sn = item.get("pbanc_sn")
     if not pbanc_sn:
+        return
+    if not _is_kstartup_fund_category(item):
         return
     external_id = str(pbanc_sn)
 
@@ -514,6 +572,7 @@ async def _process_kstartup_item(
                 title=title,
                 organization_id=organization_id,
                 notice_group_key=notice_group_key,
+                category_id=category_mapping.get(_kstartup_raw_category_key(item)),
                 application_start_date=start_date,
                 application_end_date=end_date,
                 status=status,
@@ -544,8 +603,6 @@ async def _process_kstartup_item(
         collection_result.failed_ids.append(external_id)
         return
 
-    await _save_kstartup_attachments(session, notice_id, external_id)
-
     collection_result.saved_count += 1
 
 
@@ -562,11 +619,14 @@ async def collect_kstartup_notices(
         base_url="https://www.k-startup.go.kr",
         collect_type="API",
     )
+    category_mapping = await get_category_mapping(session)
     items = await fetch_kstartup_notices(page=page)
 
     collection_result = CollectionResult()
     for item in items:
-        await _process_kstartup_item(session, source.id, item, collection_result)
+        await _process_kstartup_item(
+            session, source.id, item, collection_result, category_mapping
+        )
 
     await session.commit()
     return collection_result
@@ -585,6 +645,7 @@ async def collect_all_kstartup_notices(session: AsyncSession) -> CollectionResul
         base_url="https://www.k-startup.go.kr",
         collect_type="API",
     )
+    category_mapping = await get_category_mapping(session)
 
     collection_result = CollectionResult()
     page = 1
@@ -594,7 +655,9 @@ async def collect_all_kstartup_notices(session: AsyncSession) -> CollectionResul
             break
 
         for item in items:
-            await _process_kstartup_item(session, source.id, item, collection_result)
+            await _process_kstartup_item(
+                session, source.id, item, collection_result, category_mapping
+            )
         await session.commit()
 
         logger.info(
@@ -606,3 +669,47 @@ async def collect_all_kstartup_notices(session: AsyncSession) -> CollectionResul
         page += 1
 
     return collection_result
+
+
+async def backfill_notice_categories(session: AsyncSession) -> dict[str, int]:
+    """category_id가 비어있는 기존 공고를 채운다 (일회성 보정).
+
+    _process_bizinfo_item/_process_kstartup_item에 category_id 매핑을
+    붙이기 전에 이미 저장돼 있던 공고들은 category_id가 NULL로 남는다.
+    외부 API를 다시 호출하지 않고, 그때 같이 저장해 둔 원본 응답
+    (bizinfo_raw/kstartup_raw.field)만으로 category_mapping과 대조해
+    채운다.
+    """
+    category_mapping = await get_category_mapping(session)
+    checked = 0
+    updated = 0
+
+    for raw_model_cls, raw_category_key in (
+        (BizinfoRaw, _bizinfo_raw_category_key),
+        (KstartupRaw, _kstartup_raw_category_key),
+    ):
+        rows = await get_notices_missing_category(session, raw_model_cls)
+        for notice_id, raw_field in rows:
+            checked += 1
+            # raw_field는 항상 save_raw()에서 json.dumps()로 채워지지만,
+            # 컬럼 자체는 NULL을 허용해서(레거시 데이터·수동 조작 가능성)
+            # 여기서 깨지면 json.loads가 예외를 던진다. 한 건 때문에
+            # 나머지 수천 건 백필이 통째로 실패하면 안 되므로(수집
+            # 파이프라인의 SAVEPOINT 격리와 같은 이유), 이 건만 건너뛴다.
+            try:
+                item = json.loads(raw_field)
+            except (TypeError, json.JSONDecodeError):
+                logger.warning(
+                    "category 백필 중 raw 데이터를 파싱하지 못했습니다 "
+                    "(notice_id=%s, raw_model=%s)",
+                    notice_id,
+                    raw_model_cls.__tablename__,
+                )
+                continue
+            category_id = category_mapping.get(raw_category_key(item))
+            if category_id is not None:
+                await set_notice_category(session, notice_id, category_id)
+                updated += 1
+
+    await session.commit()
+    return {"checked": checked, "updated": updated}
