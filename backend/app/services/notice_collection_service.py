@@ -13,6 +13,7 @@ from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
     delete_notice,
     find_notice_id_by_source_and_title,
+    get_category_mapping,
     get_or_create_organization,
     get_or_create_source,
     replace_notice_region,
@@ -245,6 +246,30 @@ def _is_kstartup_fund_category(item: dict) -> bool:
     return item.get("supt_biz_clsfc") in _KSTARTUP_FUND_CLSFC
 
 
+def _bizinfo_raw_category_key(item: dict) -> str | None:
+    """category_mapping.raw_category와 매칭되는 키를 만든다.
+
+    기업마당은 대분류 기준이 원칙이지만, "경영"만 중분류까지 붙여야
+    한다 (docs/notice-category-mapping.md, 0756e6c105fe 시드 데이터 참고).
+    """
+    lclas = item.get("pldirSportRealmLclasCodeNm")
+    if not lclas:
+        return None
+    if lclas == "경영":
+        mlsfc = item.get("pldirSportRealmMlsfcCodeNm")
+        if not mlsfc:
+            return None
+        return f"BIZINFO:경영:{mlsfc}"
+    return f"BIZINFO:{lclas}"
+
+
+def _kstartup_raw_category_key(item: dict) -> str | None:
+    clsfc = item.get("supt_biz_clsfc")
+    if not clsfc:
+        return None
+    return f"KSTARTUP:{clsfc}"
+
+
 def _derive_status_from_dates(
     start_date: date | None, end_date: date | None, raw_period: str | None = None
 ) -> tuple[str, bool]:
@@ -270,6 +295,7 @@ async def _process_bizinfo_item(
     source_id: int,
     item: dict,
     collection_result: CollectionResult,
+    category_mapping: dict[str, int],
 ) -> None:
     """기업마당 공고 한 건을 처리해 collection_result에 결과를 반영한다."""
     if not isinstance(item, dict):
@@ -310,6 +336,7 @@ async def _process_bizinfo_item(
                 # 확인되지 않아 notice_group_key는 비워둔다
                 # (K-Startup의 intg_pbanc_yn과 달리 별도 이슈로 조사 필요).
                 notice_group_key=None,
+                category_id=category_mapping.get(_bizinfo_raw_category_key(item)),
                 application_start_date=start_date,
                 application_end_date=end_date,
                 status=status,
@@ -381,11 +408,14 @@ async def collect_bizinfo_notices(
         base_url="https://www.bizinfo.go.kr",
         collect_type="API",
     )
+    category_mapping = await get_category_mapping(session)
     items = await fetch_bizinfo_notices(page=page)
 
     collection_result = CollectionResult()
     for item in items:
-        await _process_bizinfo_item(session, source.id, item, collection_result)
+        await _process_bizinfo_item(
+            session, source.id, item, collection_result, category_mapping
+        )
 
     await session.commit()
     return collection_result
@@ -404,6 +434,7 @@ async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult
         base_url="https://www.bizinfo.go.kr",
         collect_type="API",
     )
+    category_mapping = await get_category_mapping(session)
 
     collection_result = CollectionResult()
     page = 1
@@ -413,7 +444,9 @@ async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult
             break
 
         for item in items:
-            await _process_bizinfo_item(session, source.id, item, collection_result)
+            await _process_bizinfo_item(
+                session, source.id, item, collection_result, category_mapping
+            )
         await session.commit()
 
         logger.info(
@@ -473,6 +506,7 @@ async def _process_kstartup_item(
     source_id: int,
     item: dict,
     collection_result: CollectionResult,
+    category_mapping: dict[str, int],
 ) -> None:
     """K-Startup 공고 한 건을 처리해 collection_result에 결과를 반영한다."""
     if not isinstance(item, dict):
@@ -536,6 +570,7 @@ async def _process_kstartup_item(
                 title=title,
                 organization_id=organization_id,
                 notice_group_key=notice_group_key,
+                category_id=category_mapping.get(_kstartup_raw_category_key(item)),
                 application_start_date=start_date,
                 application_end_date=end_date,
                 status=status,
@@ -582,11 +617,14 @@ async def collect_kstartup_notices(
         base_url="https://www.k-startup.go.kr",
         collect_type="API",
     )
+    category_mapping = await get_category_mapping(session)
     items = await fetch_kstartup_notices(page=page)
 
     collection_result = CollectionResult()
     for item in items:
-        await _process_kstartup_item(session, source.id, item, collection_result)
+        await _process_kstartup_item(
+            session, source.id, item, collection_result, category_mapping
+        )
 
     await session.commit()
     return collection_result
@@ -605,6 +643,7 @@ async def collect_all_kstartup_notices(session: AsyncSession) -> CollectionResul
         base_url="https://www.k-startup.go.kr",
         collect_type="API",
     )
+    category_mapping = await get_category_mapping(session)
 
     collection_result = CollectionResult()
     page = 1
@@ -614,7 +653,9 @@ async def collect_all_kstartup_notices(session: AsyncSession) -> CollectionResul
             break
 
         for item in items:
-            await _process_kstartup_item(session, source.id, item, collection_result)
+            await _process_kstartup_item(
+                session, source.id, item, collection_result, category_mapping
+            )
         await session.commit()
 
         logger.info(
