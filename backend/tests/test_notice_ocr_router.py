@@ -7,15 +7,21 @@ api/notice_ocr.py의 순수 로직(_pick_ocr_target/_file_type_from_name)과
 """
 
 import pytest
+from fastapi import BackgroundTasks, HTTPException
 
 from app.api.notice_ocr import (
     _JOBS,
+    _execute_notice_ocr_job,
     _file_type_from_name,
     _has_active_job_for_notice,
     _pick_ocr_target,
+    get_notice_ocr_status,
+    start_notice_ocr,
 )
 from app.models.notice import NoticeAttachment
 from app.schemas.notice_ocr import NoticeOcrJobStatus, NoticeOcrJobStatusResponse
+
+pytestmark = pytest.mark.anyio
 
 
 @pytest.fixture(autouse=True)
@@ -97,3 +103,80 @@ def test_has_active_job_for_notice_false_when_job_completed():
     )
 
     assert _has_active_job_for_notice(42) is False
+
+
+# ---------------------------------------------------------------------------
+# start_notice_ocr
+# ---------------------------------------------------------------------------
+
+
+async def test_start_notice_ocr_returns_pending_and_schedules_task():
+    background_tasks = BackgroundTasks()
+
+    response = await start_notice_ocr(42, background_tasks)
+
+    assert response.status == NoticeOcrJobStatus.PENDING
+    assert _JOBS[response.job_id].notice_id == 42
+
+    assert len(background_tasks.tasks) == 1
+    task = background_tasks.tasks[0]
+    assert task.func is _execute_notice_ocr_job
+    assert task.args == (response.job_id, 42)
+
+
+async def test_start_notice_ocr_409_when_active_job_for_same_notice():
+    _JOBS["existing"] = NoticeOcrJobStatusResponse(
+        job_id="existing", notice_id=42, status=NoticeOcrJobStatus.RUNNING
+    )
+    background_tasks = BackgroundTasks()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await start_notice_ocr(42, background_tasks)
+
+    assert exc_info.value.status_code == 409
+    assert len(background_tasks.tasks) == 0
+
+
+async def test_start_notice_ocr_allowed_for_different_notice_while_one_running():
+    _JOBS["existing"] = NoticeOcrJobStatusResponse(
+        job_id="existing", notice_id=42, status=NoticeOcrJobStatus.RUNNING
+    )
+    background_tasks = BackgroundTasks()
+
+    response = await start_notice_ocr(99, background_tasks)
+
+    assert response.status == NoticeOcrJobStatus.PENDING
+
+
+# ---------------------------------------------------------------------------
+# get_notice_ocr_status
+# ---------------------------------------------------------------------------
+
+
+async def test_get_notice_ocr_status_returns_stored_job():
+    stored = NoticeOcrJobStatusResponse(
+        job_id="job-1", notice_id=42, status=NoticeOcrJobStatus.COMPLETED
+    )
+    _JOBS["job-1"] = stored
+
+    result = await get_notice_ocr_status(42, "job-1")
+
+    assert result is stored
+
+
+async def test_get_notice_ocr_status_404_when_job_id_unknown():
+    with pytest.raises(HTTPException) as exc_info:
+        await get_notice_ocr_status(42, "unknown-job")
+
+    assert exc_info.value.status_code == 404
+
+
+async def test_get_notice_ocr_status_404_when_notice_id_mismatch():
+    _JOBS["job-1"] = NoticeOcrJobStatusResponse(
+        job_id="job-1", notice_id=42, status=NoticeOcrJobStatus.COMPLETED
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_notice_ocr_status(999, "job-1")
+
+    assert exc_info.value.status_code == 404
