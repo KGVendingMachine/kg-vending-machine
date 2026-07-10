@@ -99,7 +99,9 @@ async def call_clova_ocr_bytes(file_bytes: bytes, image_format: str, name: str) 
                 page_texts = []
                 for image in images:
                     if image.get("inferResult") != "SUCCESS":
-                        raise RuntimeError(f"CLOVA OCR이 오류를 반환했습니다: {payload}")
+                        raise RuntimeError(
+                            f"CLOVA OCR이 오류를 반환했습니다: {payload}"
+                        )
                     page_texts.append(_fields_to_text(image.get("fields", [])))
                 return "\n".join(page_texts)
             except (httpx.HTTPError, ValueError, RuntimeError) as exc:

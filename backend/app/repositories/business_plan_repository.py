@@ -21,7 +21,9 @@ class BusinessPlanNotFoundError(Exception):
         super().__init__(f"BusinessPlan {business_plan_id} not found")
 
 
-async def get_by_id(session: AsyncSession, business_plan_id: int) -> BusinessPlan | None:
+async def get_by_id(
+    session: AsyncSession, business_plan_id: int
+) -> BusinessPlan | None:
     """Return a business_plan row by id, or None when it does not exist."""
     return await session.get(BusinessPlan, business_plan_id)
 

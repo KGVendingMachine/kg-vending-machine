@@ -26,8 +26,10 @@ SCHEMA_VERSION = "1.0"
 # 카테고리별 서브 스키마
 # ---------------------------------------------------------------------------
 
+
 class CompanyInfo(BaseModel):
     """기업 개요"""
+
     name: str | None = None
     ceo_name: str | None = None
     founded_year: int | None = None
@@ -39,6 +41,7 @@ class CompanyInfo(BaseModel):
 
 class ProblemInfo(BaseModel):
     """P - 문제 인식"""
+
     background: str | None = None
     """개발 동기, 시장 배경"""
     target_customer_pain_point: str | None = None
@@ -50,6 +53,7 @@ class ProblemInfo(BaseModel):
 
 class SolutionInfo(BaseModel):
     """S1 - 실현 가능성 (제품/서비스 포함)"""
+
     summary: str | None = None
     """비즈니스 모델(BM) 및 솔루션 개요"""
     product_description: str | None = None
@@ -64,6 +68,7 @@ class SolutionInfo(BaseModel):
 
 class MarketInfo(BaseModel):
     """시장 분석"""
+
     target_market: str | None = None
     market_size: str | None = None
     target_customer_persona: str | None = None
@@ -73,6 +78,7 @@ class MarketInfo(BaseModel):
 
 class FundingInfo(BaseModel):
     """S2 - 성장전략 및 자금 수요"""
+
     amount_requested: float | None = None
     use_of_funds: list[str] = Field(default_factory=list)
     """사업화 자금 사용 계획"""
@@ -83,6 +89,7 @@ class FundingInfo(BaseModel):
 
 class TeamInfo(BaseModel):
     """T - 팀 구성"""
+
     members: list[str] = Field(default_factory=list)
     capabilities: str | None = None
     """대표자 및 팀원 보유 경험, 기술력, 노하우"""
@@ -92,6 +99,7 @@ class TeamInfo(BaseModel):
 # ---------------------------------------------------------------------------
 # 정규화 결과 최상위 스키마
 # ---------------------------------------------------------------------------
+
 
 class NormalizedBusinessPlanSchema(BaseModel):
     schema_version: str = SCHEMA_VERSION
@@ -114,6 +122,7 @@ class ValidationResult(BaseModel):
 # 비동기 작업 상태
 # ---------------------------------------------------------------------------
 
+
 class JobStatus(str, Enum):
     PENDING = "pending"
     PROCESSING = "processing"
@@ -125,6 +134,7 @@ class JobStatus(str, Enum):
 # Request / Response 스키마
 # ---------------------------------------------------------------------------
 
+
 class NormalizeRequest(BaseModel):
     """
     운영 환경 기본 흐름: body 없이 호출 -> 서버가 business_plan.raw_text를
@@ -135,6 +145,7 @@ class NormalizeRequest(BaseModel):
     로직을 검증해보기 위해 남겨둠. 실 데이터 확보 후에는 이 필드를
     아예 제거하거나 관리자/디버그 전용 플래그로만 열어두는 것을 권장.
     """
+
     extracted_text: str | None = Field(
         default=None,
         description="[TEST ONLY] 실 데이터 확보 전, 임시 텍스트로 정규화를 테스트할 때만 사용",
@@ -143,6 +154,7 @@ class NormalizeRequest(BaseModel):
 
 class NormalizeJobAccepted(BaseModel):
     """POST /business-plans/{business_plan_id}/normalizations 응답 (202 Accepted)"""
+
     business_plan_id: int
     job_id: str
     status: JobStatus = JobStatus.PENDING
@@ -150,6 +162,7 @@ class NormalizeJobAccepted(BaseModel):
 
 class NormalizeStatusResponse(BaseModel):
     """GET /business-plans/{business_plan_id}/normalizations/{job_id} 응답"""
+
     business_plan_id: int
     job_id: str
     status: JobStatus
