@@ -1,5 +1,9 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import {
+  saveMyCompanyProfile,
+  type CompanyProfileUpdate,
+} from '../../api/companyProfile'
 import { NOTICE_CATEGORIES } from '../../mock/categories'
 import { PATHS } from '../../routes/paths'
 import styles from './CompanyProfilePage.module.css'
@@ -14,8 +18,34 @@ export function CompanyProfilePage() {
   const [companySize, setCompanySize] = useState('')
   const [employeeCount, setEmployeeCount] = useState('')
   const [annualRevenue, setAnnualRevenue] = useState('')
+  const [saving, setSaving] = useState(false)
 
   function goToUpload() {
+    navigate(PATHS.UPLOAD)
+  }
+
+  /**
+   * 지금은 폼-DB 형식이 딱 맞는 필드만 저장한다(대표자명·사업자등록번호·
+   * 기업규모·상시근로자수). 비운 필드는 payload에서 빼서 부분 갱신되게 한다.
+   * 업종·지역·설립연도·매출은 단위/코드 변환이 필요해 다음 라운드에서 붙인다.
+   */
+  async function handleSave() {
+    const payload: CompanyProfileUpdate = {}
+    if (representativeName.trim())
+      payload.representative_name = representativeName.trim()
+    if (businessRegistrationNumber.trim())
+      payload.business_registration_number = businessRegistrationNumber.trim()
+    if (companySize) payload.company_size = companySize
+    const employees = Number(employeeCount)
+    if (employeeCount.trim() && Number.isFinite(employees))
+      payload.employee_count = employees
+
+    setSaving(true)
+    try {
+      await saveMyCompanyProfile(payload)
+    } finally {
+      setSaving(false)
+    }
     navigate(PATHS.UPLOAD)
   }
 
@@ -134,9 +164,10 @@ export function CompanyProfilePage() {
             <button
               type="button"
               className={styles.primaryButton}
-              onClick={goToUpload}
+              onClick={handleSave}
+              disabled={saving}
             >
-              저장하고 계속 →
+              {saving ? '저장 중…' : '저장하고 계속 →'}
             </button>
           </div>
         </div>

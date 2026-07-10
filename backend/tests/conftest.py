@@ -30,7 +30,14 @@ async def db_session():
     async with engine.connect() as conn:
         await conn.begin()
 
-        session = AsyncSession(bind=conn, join_transaction_mode="create_savepoint")
+        # expire_on_commit=False로 운영 async_session_factory와 동일하게 맞춘다.
+        # 서비스가 commit한 뒤 속성 접근 시 sync lazy-load(MissingGreenlet)가
+        # 나지 않게 한다.
+        session = AsyncSession(
+            bind=conn,
+            join_transaction_mode="create_savepoint",
+            expire_on_commit=False,
+        )
         try:
             yield session
         finally:

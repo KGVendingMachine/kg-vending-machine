@@ -20,24 +20,45 @@
 """
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.models.user import User
 from app.repositories.user_repository import get_by_id
+from app.utils.auth_cookies import ACCESS_TOKEN_COOKIE_NAME
 from app.utils.jwt import ACCESS_TOKEN_TYPE, decode_token
 
-# Authorization: Bearer <token> 헤더에서 토큰을 뽑는다(Swagger Authorize 연동).
-bearer_scheme = HTTPBearer()
+# auto_error=False: 헤더가 없어도 여기서 401을 던지지 않는다. 토큰은 쿠키에도
+# 있을 수 있어(브라우저 흐름) 헤더 유무 판정은 아래에서 직접 한다. 이 스킴은
+# Swagger Authorize 버튼(수동 Bearer 테스트) 연동 용도로도 계속 필요하다.
+bearer_scheme = HTTPBearer(auto_error=False)
 
 ADMIN_ROLE = "ADMIN"
 ACTIVE_STATUS = "ACTIVE"
 
 
+def _extract_access_token(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None,
+) -> str | None:
+    """access token을 쿠키 우선, 없으면 Authorization: Bearer 헤더에서 뽑는다.
+
+    브라우저는 httpOnly 쿠키를 자동 전송하고(프론트 흐름), Swagger 등 수동
+    테스트는 Bearer 헤더를 쓴다. 둘 다 지원해 어느 쪽이든 인증되게 한다.
+    """
+    cookie_token = request.cookies.get(ACCESS_TOKEN_COOKIE_NAME)
+    if cookie_token:
+        return cookie_token
+    if credentials is not None:
+        return credentials.credentials
+    return None
+
+
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     session: AsyncSession = Depends(get_db),
 ) -> User:
     """access token을 검증하고 해당 유저를 반환한다.
@@ -52,8 +73,12 @@ async def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
 
+    token = _extract_access_token(request, credentials)
+    if token is None:
+        raise credentials_exception
+
     try:
-        payload = decode_token(credentials.credentials)
+        payload = decode_token(token)
     except jwt.InvalidTokenError as exc:
         raise credentials_exception from exc
 
