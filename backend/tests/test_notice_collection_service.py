@@ -15,7 +15,9 @@ from app.models.notice import Notice
 from app.models.notice_source import NoticeSource
 from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
+    get_notice_regions,
     get_notices_for_status_refresh,
+    replace_notice_region,
     upsert_notice,
 )
 from app.services import notice_collection_service as svc
@@ -33,6 +35,7 @@ from app.services.notice_collection_service import (
     _parse_kstartup_date,
     _parse_regions,
     _within_collection_window,
+    backfill_bizinfo_nationwide_regions,
     backfill_notice_categories,
     refresh_notice_statuses,
 )
@@ -684,3 +687,116 @@ async def test_get_max_notice_external_id_returns_largest_numeric_id(db_session)
         )
 
     assert await get_max_notice_external_id(db_session, source.id) == 500
+
+
+# ---------------------------------------------------------------------------
+# backfill_bizinfo_nationwide_regions (DB 기반)
+# ---------------------------------------------------------------------------
+
+_ALL_17_REGIONS_HASHTAGS = "금융,서울,부산,대구,인천,광주,대전,울산,세종,경기,강원,충북,충남,전북,전남,경북,경남,제주"
+
+
+async def test_backfill_bizinfo_region_adds_all_when_missing(db_session):
+    """17개 지역이 다 태그됐는데 전국(ALL)이 아직 없는 공고는 보정돼야 한다."""
+    source = await _create_source(db_session, "지역백필_전국추가")
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="region-backfill-1",
+        title="전국 대상인데 전국 태그 없는 공고",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+    # 백필 로직이 추가되기 전 상태 재현: 17개 지역만 저장돼 있고 전국은 없음
+    name_by_code = {
+        code: name for name, code in svc.REGION_CODE_BY_NAME.items() if code != "ALL"
+    }
+    seed_regions = list(name_by_code.items())
+    await replace_notice_region(db_session, notice_id, seed_regions)
+    db_session.add(
+        BizinfoRaw(
+            key="region-backfill-1",
+            field=json.dumps({"hashtags": _ALL_17_REGIONS_HASHTAGS}),
+            notice_id=notice_id,
+        )
+    )
+    await db_session.flush()
+
+    result = await backfill_bizinfo_nationwide_regions(db_session)
+
+    assert result["checked"] >= 1
+    assert result["updated"] >= 1
+    regions = await get_notice_regions(db_session, notice_id)
+    assert "전국" in regions
+
+
+async def test_backfill_bizinfo_region_skips_already_nationwide(db_session):
+    """이미 전국(ALL)이 있는 공고는 다시 세지 않는다."""
+    source = await _create_source(db_session, "지역백필_이미전국")
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="region-backfill-2",
+        title="이미 전국 태그 있는 공고",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+    await replace_notice_region(db_session, notice_id, [("ALL", "전국")])
+    db_session.add(
+        BizinfoRaw(
+            key="region-backfill-2",
+            field=json.dumps({"hashtags": _ALL_17_REGIONS_HASHTAGS}),
+            notice_id=notice_id,
+        )
+    )
+    await db_session.flush()
+
+    await backfill_bizinfo_nationwide_regions(db_session)
+
+    # 이미 전국이 있던 공고를 다시 건드려 중복/훼손시키지 않았는지 확인
+    # (DB 전체를 훑는 함수라 updated 총건수로는 이 공고 하나만 딱 집어
+    # 검증할 수 없어, 이 공고의 최종 상태를 직접 확인한다).
+    regions = await get_notice_regions(db_session, notice_id)
+    assert regions == ["전국"]
+
+
+async def test_backfill_bizinfo_region_skips_partial_region_coverage(db_session):
+    """17개 중 일부만 태그된 공고는 전국으로 보정하지 않는다."""
+    source = await _create_source(db_session, "지역백필_일부만")
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="region-backfill-3",
+        title="서울/부산만 대상인 공고",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+    await replace_notice_region(db_session, notice_id, [("11", "서울"), ("26", "부산")])
+    db_session.add(
+        BizinfoRaw(
+            key="region-backfill-3",
+            field=json.dumps({"hashtags": "금융,서울,부산"}),
+            notice_id=notice_id,
+        )
+    )
+    await db_session.flush()
+
+    await backfill_bizinfo_nationwide_regions(db_session)
+
+    regions = await get_notice_regions(db_session, notice_id)
+    assert "전국" not in regions

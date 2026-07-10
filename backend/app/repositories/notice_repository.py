@@ -411,6 +411,20 @@ async def get_notices_missing_category(
     return list(result.all())
 
 
+async def get_bizinfo_notices_with_raw(session: AsyncSession) -> list[tuple[int, str]]:
+    """기업마당 공고 전체의 (notice_id, 원본 raw JSON) 목록을 반환한다.
+
+    _parse_bizinfo_regions 로직이 바뀌었을 때(예: 전국 판정 추가) 이미
+    저장된 공고를 원본 hashtags 기준으로 재계산해 백필하는 용도.
+    """
+    result = await session.execute(
+        select(Notice.id, BizinfoRaw.field).join(
+            BizinfoRaw, BizinfoRaw.notice_id == Notice.id
+        )
+    )
+    return list(result.all())
+
+
 async def list_notices(
     session: AsyncSession,
     *,
