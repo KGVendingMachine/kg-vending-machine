@@ -24,6 +24,13 @@ async def get_or_create_source(
     DO NOTHING이 아니라 DO UPDATE를 쓰는 이유: DO NOTHING이면 이미 있는
     출처의 base_url/collect_type이 바뀌어도 호출자가 넘긴 최신 값이
     무시되고 예전 값이 그대로 남았다.
+
+    populate_existing=True가 필요한 이유: 이 세션에서 같은 source_id가
+    이미 한 번 로드된 적 있으면(예: 같은 세션 안에서 이 함수를 두 번
+    호출), SQLAlchemy identity map이 방금 DO UPDATE로 반영한 최신 값
+    대신 세션에 캐시된 예전 Python 객체를 그대로 돌려준다 — 위에서
+    DO UPDATE를 쓴 이유 자체가 무력화되는 셈이라 명시적으로 다시
+    읽어오게 한다.
     """
     stmt = (
         pg_insert(NoticeSource)
@@ -40,7 +47,7 @@ async def get_or_create_source(
     )
     result = await session.execute(stmt)
     source_id = result.scalar_one()
-    return await session.get_one(NoticeSource, source_id)
+    return await session.get_one(NoticeSource, source_id, populate_existing=True)
 
 
 async def get_or_create_organization(session: AsyncSession, name: str) -> Organization:
