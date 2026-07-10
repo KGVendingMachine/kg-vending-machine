@@ -15,6 +15,7 @@ from app.models.notice import Notice
 from app.models.notice_source import NoticeSource
 from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
+    get_notice_region_codes,
     get_notice_regions,
     get_notices_for_status_refresh,
     replace_notice_region,
@@ -37,6 +38,7 @@ from app.services.notice_collection_service import (
     _within_collection_window,
     backfill_bizinfo_nationwide_regions,
     backfill_notice_categories,
+    backfill_notice_region_codes,
     refresh_notice_statuses,
 )
 
@@ -177,65 +179,82 @@ def test_parse_bizinfo_regions_picks_only_region_tags_from_mixed_hashtags():
     assert regions == [("11", "서울"), ("26", "부산")]
 
 
-def test_parse_bizinfo_regions_normalizes_known_malformed_compound_tags():
-    """실제 응답에서 확인된 오류 태그("전남광주"/"전남광주통합특별시")를
-    "전남"으로 정정해 매핑한다."""
+def test_parse_bizinfo_regions_resolves_jeonnam_gwangju_directly():
+    """ "전남광주"/"전남광주통합특별시"는 원본 데이터 오류가 아니라
+    2026-07-01 전남·광주 통합으로 생긴 실제 새 행정구역명이다 — 예전엔
+    이걸 "전남"으로 정정하는 별칭 처리를 했었는데, 실제로는 별도 지역
+    코드로 직접 매핑해야 한다."""
     regions = _parse_bizinfo_regions("전남광주,여수시,전남광주통합특별시")
-    assert regions == [("46", "전남")]
+    assert regions == [("90", "전남광주")]
 
 
-def test_parse_bizinfo_regions_adds_all_when_every_region_tagged():
-    """기업마당은 "전국" 태그 대신 광역자치단체 17개를 전부 나열하는
-    방식으로 전국 대상을 표현한다(실제 응답으로 확인함). 17개가 다 있으면
-    K-Startup과 같은 기준(region_code=ALL)으로도 조회되도록 "전국"을
-    추가해야 한다."""
-    all_region_names = [
-        "서울",
-        "부산",
-        "대구",
-        "인천",
-        "광주",
-        "대전",
-        "울산",
-        "세종",
-        "경기",
-        "충북",
-        "충남",
-        "전남",
-        "경북",
-        "경남",
-        "제주",
-        "강원",
-        "전북",
-    ]
-    assert len(all_region_names) == len(svc._ALL_REGION_CODES)
+_LEGACY_ALL_REGION_NAMES = [
+    "서울",
+    "부산",
+    "대구",
+    "인천",
+    "광주",
+    "대전",
+    "울산",
+    "세종",
+    "경기",
+    "강원",
+    "충북",
+    "충남",
+    "전북",
+    "전남",
+    "경북",
+    "경남",
+    "제주",
+]
 
-    regions = _parse_bizinfo_regions("금융,2026," + ",".join(all_region_names))
+_CURRENT_ALL_REGION_NAMES = [
+    "서울",
+    "부산",
+    "대구",
+    "인천",
+    "대전",
+    "울산",
+    "세종",
+    "경기",
+    "강원",
+    "충북",
+    "충남",
+    "전북",
+    "전남광주통합특별시",
+    "경북",
+    "경남",
+    "제주",
+]
+
+
+def test_parse_bizinfo_regions_adds_all_for_legacy_17_region_set():
+    """2026-07-01 통합 이전 수집된 공고는 전남·광주가 따로 있는 옛 17개
+    체계로 전국을 표현한다. 17개가 다 있으면 K-Startup과 같은 기준
+    (region_code=ALL)으로도 조회되도록 "전국"을 추가해야 한다."""
+    assert len(_LEGACY_ALL_REGION_NAMES) == len(svc._ALL_REGION_CODES_LEGACY)
+
+    regions = _parse_bizinfo_regions("금융,2026," + ",".join(_LEGACY_ALL_REGION_NAMES))
 
     codes = {code for code, _ in regions}
-    assert codes == svc._ALL_REGION_CODES | {"ALL"}
+    assert codes == svc._ALL_REGION_CODES_LEGACY | {"ALL"}
+
+
+def test_parse_bizinfo_regions_adds_all_for_current_16_region_set():
+    """통합 이후 수집된 공고는 "전남광주통합특별시" 하나로 합쳐진 새
+    16개 체계로 전국을 표현할 수 있다. 이 경우도 전국으로 인정해야 한다."""
+    assert len(_CURRENT_ALL_REGION_NAMES) == len(svc._ALL_REGION_CODES_CURRENT)
+
+    regions = _parse_bizinfo_regions("금융,2026," + ",".join(_CURRENT_ALL_REGION_NAMES))
+
+    codes = {code for code, _ in regions}
+    assert codes == svc._ALL_REGION_CODES_CURRENT | {"ALL"}
 
 
 def test_parse_bizinfo_regions_no_all_when_one_region_missing():
-    """17개 중 하나라도 빠지면 전국으로 간주하지 않는다."""
-    all_but_jeju = [
-        "서울",
-        "부산",
-        "대구",
-        "인천",
-        "광주",
-        "대전",
-        "울산",
-        "세종",
-        "경기",
-        "충북",
-        "충남",
-        "전남",
-        "경북",
-        "경남",
-        "강원",
-        "전북",
-    ]
+    """옛 17개 체계 기준으로 하나라도 빠지면(그리고 통합코드도 없으면)
+    전국으로 간주하지 않는다."""
+    all_but_jeju = [name for name in _LEGACY_ALL_REGION_NAMES if name != "제주"]
 
     regions = _parse_bizinfo_regions(",".join(all_but_jeju))
 
@@ -800,3 +819,108 @@ async def test_backfill_bizinfo_region_skips_partial_region_coverage(db_session)
 
     regions = await get_notice_regions(db_session, notice_id)
     assert "전국" not in regions
+
+
+# ---------------------------------------------------------------------------
+# backfill_notice_region_codes (DB 기반)
+# ---------------------------------------------------------------------------
+
+
+async def test_backfill_region_codes_fixes_wrong_gangwon_code(db_session):
+    """강원이 옛날엔 51로 잘못 저장돼 있었다. 원본 supt_regin을 다시 읽어
+    42로 정정해야 한다."""
+    source = await _create_source(db_session, "코드백필_강원_기업마당")
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="code-backfill-1",
+        title="강원 대상 공고",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+    # 백필 로직 전 상태 재현: 강원이 잘못된 코드(51)로 저장돼 있음
+    await replace_notice_region(db_session, notice_id, [("51", "강원")])
+    db_session.add(
+        BizinfoRaw(
+            key="code-backfill-1",
+            field=json.dumps({"hashtags": "금융,강원"}),
+            notice_id=notice_id,
+        )
+    )
+    await db_session.flush()
+
+    result = await backfill_notice_region_codes(db_session)
+
+    assert result["checked"] >= 1
+    assert result["updated"] >= 1
+    codes = await get_notice_region_codes(db_session, notice_id)
+    assert codes == {"42"}
+
+
+async def test_backfill_region_codes_resolves_jeonnam_gwangju_for_kstartup(db_session):
+    """K-Startup 쪽도 같은 REGION_CODE_BY_NAME을 쓰므로, supt_regin에
+    "전남광주통합특별시"가 있으면 정상 코드로 재계산돼야 한다."""
+    source = await _create_source(db_session, "코드백필_전남광주_케이스타트업")
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="code-backfill-2",
+        title="전남광주통합특별시 대상 공고",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+    db_session.add(
+        KstartupRaw(
+            key="code-backfill-2",
+            field=json.dumps({"supt_regin": "전남광주통합특별시"}),
+            notice_id=notice_id,
+        )
+    )
+    await db_session.flush()
+
+    await backfill_notice_region_codes(db_session)
+
+    codes = await get_notice_region_codes(db_session, notice_id)
+    assert codes == {"90"}
+
+
+async def test_backfill_region_codes_skips_already_correct_notice(db_session):
+    """이미 정확한 코드로 저장돼 있으면 다시 건드리지 않는다(멱등)."""
+    source = await _create_source(db_session, "코드백필_이미정확")
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="code-backfill-3",
+        title="이미 정확한 공고",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+    await replace_notice_region(db_session, notice_id, [("11", "서울")])
+    db_session.add(
+        BizinfoRaw(
+            key="code-backfill-3",
+            field=json.dumps({"hashtags": "금융,서울"}),
+            notice_id=notice_id,
+        )
+    )
+    await db_session.flush()
+
+    await backfill_notice_region_codes(db_session)
+
+    codes = await get_notice_region_codes(db_session, notice_id)
+    assert codes == {"11"}

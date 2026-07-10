@@ -425,6 +425,20 @@ async def get_bizinfo_notices_with_raw(session: AsyncSession) -> list[tuple[int,
     return list(result.all())
 
 
+async def get_kstartup_notices_with_raw(session: AsyncSession) -> list[tuple[int, str]]:
+    """K-Startup 공고 전체의 (notice_id, 원본 raw JSON) 목록을 반환한다.
+
+    get_bizinfo_notices_with_raw와 같은 이유(REGION_CODE_BY_NAME 정정 시
+    저장된 공고를 원본 supt_regin 기준으로 재계산해 백필하는 용도).
+    """
+    result = await session.execute(
+        select(Notice.id, KstartupRaw.field).join(
+            KstartupRaw, KstartupRaw.notice_id == Notice.id
+        )
+    )
+    return list(result.all())
+
+
 async def list_notices(
     session: AsyncSession,
     *,
@@ -516,6 +530,18 @@ async def get_notice_regions(session: AsyncSession, notice_id: int) -> list[str]
         select(NoticeRegion.region_name).where(NoticeRegion.notice_id == notice_id)
     )
     return list(result.scalars().all())
+
+
+async def get_notice_region_codes(session: AsyncSession, notice_id: int) -> set[str]:
+    """공고에 저장된 region_code 집합을 반환한다.
+
+    get_notice_regions(이름 목록)와 별개로, 지역 코드 정정 백필에서
+    "재계산한 결과가 기존과 실제로 다른지"를 정확히 비교하는 용도.
+    """
+    result = await session.execute(
+        select(NoticeRegion.region_code).where(NoticeRegion.notice_id == notice_id)
+    )
+    return set(result.scalars().all())
 
 
 async def get_notice_attachments(

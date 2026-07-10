@@ -36,6 +36,7 @@ from app.schemas.notice_collection import (
     CollectionJobAccepted,
     CollectionJobStatus,
     CollectionJobStatusResponse,
+    RegionCodeBackfillResult,
     SourceCollectionResult,
     StatusRefreshResult,
 )
@@ -43,6 +44,7 @@ from app.services.notice_collection_service import (
     CollectionResult,
     backfill_bizinfo_nationwide_regions,
     backfill_notice_categories,
+    backfill_notice_region_codes,
     collect_all_bizinfo_notices,
     collect_all_kstartup_notices,
     refresh_notice_statuses,
@@ -224,3 +226,20 @@ async def refresh_status(session: AsyncSession = Depends(get_db)):
 async def backfill_bizinfo_region(session: AsyncSession = Depends(get_db)):
     result = await backfill_bizinfo_nationwide_regions(session)
     return BizinfoRegionBackfillResult(**result)
+
+
+@router.post(
+    "/backfill-region-codes",
+    response_model=RegionCodeBackfillResult,
+    summary="공고 지역 코드 전체 보정",
+    description=(
+        "강원(51→42)/전북(52→45) 코드가 처음부터 잘못 저장돼 있던 것과, "
+        "2026-07-01 전남·광주 통합으로 새로 생긴 '전남광주통합특별시' "
+        "지역명을 반영해, 기업마당·K-Startup 공고 전체의 지역 코드를 "
+        "저장된 원본(hashtags/supt_regin) 기준으로 재계산해 보정한다. "
+        "외부 API를 다시 호출하지 않는다."
+    ),
+)
+async def backfill_region_codes(session: AsyncSession = Depends(get_db)):
+    result = await backfill_notice_region_codes(session)
+    return RegionCodeBackfillResult(**result)

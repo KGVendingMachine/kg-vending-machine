@@ -17,6 +17,7 @@ from app.api.notice_collection import (
     _run_collection_job,
     backfill_bizinfo_region,
     backfill_category,
+    backfill_region_codes,
     get_collection_status,
     refresh_status,
     start_collection,
@@ -165,6 +166,19 @@ async def test_refresh_status_returns_checked_and_updated_counts(db_session):
 
 async def test_backfill_bizinfo_region_returns_checked_and_updated_counts(db_session):
     result = await backfill_bizinfo_region(session=db_session)
+
+    assert result.checked >= 0
+    assert result.updated >= 0
+    assert result.updated <= result.checked
+
+
+# ---------------------------------------------------------------------------
+# backfill_region_codes
+# ---------------------------------------------------------------------------
+
+
+async def test_backfill_region_codes_returns_checked_and_updated_counts(db_session):
+    result = await backfill_region_codes(session=db_session)
 
     assert result.checked >= 0
     assert result.updated >= 0
