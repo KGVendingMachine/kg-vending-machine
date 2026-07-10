@@ -156,6 +156,16 @@ _BIZINFO_REGION_TAG_ALIASES = {
     "전남광주통합특별시": "전남",
 }
 
+# 기업마당 hashtags에는 K-Startup의 supt_regin="전국" 같은 전국 대상
+# 표현이 따로 없다 — 실제 응답으로 확인함: 전국 대상 공고는 "전국" 태그
+# 하나 대신 광역자치단체 17개를 전부 나열하는 방식으로 표현된다(예:
+# "금융,서울,부산,대구,...,제주,..."). 이 17개가 다 태그돼 있으면
+# K-Startup과 동일한 기준(region_code=ALL)으로도 조회되도록 "전국"을
+# 함께 추가한다.
+_ALL_REGION_CODES = frozenset(
+    code for code in REGION_CODE_BY_NAME.values() if code != "ALL"
+)
+
 
 def _parse_bizinfo_regions(hashtags: str | None) -> list[tuple[str, str]]:
     """기업마당 hashtags 필드에서 지역명과 일치하는 태그만 골라낸다.
@@ -176,6 +186,8 @@ def _parse_bizinfo_regions(hashtags: str | None) -> list[tuple[str, str]]:
             continue
         seen_codes.add(region_code)
         regions.append((region_code, tag))
+    if "ALL" not in seen_codes and _ALL_REGION_CODES <= seen_codes:
+        regions.append(("ALL", "전국"))
     return regions
 
 
