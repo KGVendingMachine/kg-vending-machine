@@ -12,9 +12,11 @@ import pytest
 
 from app.models.business_plan import BusinessPlan
 from app.models.company import CompanyProfile
+from app.models.user import User
 from app.repositories.business_plan_repository import (
     BusinessPlanNotFoundError,
     get_by_id,
+    get_owned_by_user,
     get_raw_text,
     list_recent,
     save_normalization_result,
@@ -85,6 +87,38 @@ async def test_save_normalization_result_raises_when_plan_missing(db_session):
         await save_normalization_result(
             db_session, business_plan_id=999_999, normalized_json={}
         )
+
+
+async def test_get_owned_by_user_returns_plan_for_owner(
+    db_session, test_user, test_company_profile
+):
+    plan = await _create_business_plan(db_session, test_company_profile)
+
+    result = await get_owned_by_user(db_session, plan.id, test_user.id)
+
+    assert result is not None
+    assert result.id == plan.id
+
+
+async def test_get_owned_by_user_returns_none_for_other_user(
+    db_session, test_company_profile
+):
+    """다른 유저 소유의 계획서는 존재해도 None(호출부에서 404 처리)."""
+    plan = await _create_business_plan(db_session, test_company_profile)
+
+    other_user = User(kakao_id="other-kakao-id")
+    db_session.add(other_user)
+    await db_session.flush()
+
+    result = await get_owned_by_user(db_session, plan.id, other_user.id)
+
+    assert result is None
+
+
+async def test_get_owned_by_user_returns_none_when_plan_missing(db_session, test_user):
+    result = await get_owned_by_user(db_session, 999_999, test_user.id)
+
+    assert result is None
 
 
 async def test_list_recent_orders_by_created_at_desc_and_respects_limit(

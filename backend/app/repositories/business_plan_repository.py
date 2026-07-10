@@ -11,6 +11,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_plan import BusinessPlan
+from app.models.company import CompanyProfile
 
 
 class BusinessPlanNotFoundError(Exception):
@@ -52,6 +53,26 @@ async def get_by_id(
 ) -> BusinessPlan | None:
     """Return a business_plan row by id, or None when it does not exist."""
     return await session.get(BusinessPlan, business_plan_id)
+
+
+async def get_owned_by_user(
+    session: AsyncSession, business_plan_id: int, user_id: int
+) -> BusinessPlan | None:
+    """Return the business_plan only if it belongs to the user.
+
+    Ownership goes business_plan -> company_profile -> user. Returns None when
+    the plan does not exist OR belongs to someone else, so callers can answer
+    404 either way without leaking whether another user's plan exists.
+    """
+    result = await session.execute(
+        select(BusinessPlan)
+        .join(CompanyProfile, BusinessPlan.company_profile_id == CompanyProfile.id)
+        .where(
+            BusinessPlan.id == business_plan_id,
+            CompanyProfile.user_id == user_id,
+        )
+    )
+    return result.scalar_one_or_none()
 
 
 async def get_raw_text(session: AsyncSession, business_plan_id: int) -> str | None:
