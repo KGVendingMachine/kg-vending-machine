@@ -15,11 +15,12 @@ docs/matching-pipeline.md 관례(관리자=/admin, 내부 모듈=/internal)를 �
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import async_session_factory
+from app.db.session import async_session_factory, get_db
 from app.schemas.notice_collection import (
+    CategoryBackfillResult,
     CollectionJobAccepted,
     CollectionJobStatus,
     CollectionJobStatusResponse,
@@ -27,6 +28,7 @@ from app.schemas.notice_collection import (
 )
 from app.services.notice_collection_service import (
     CollectionResult,
+    backfill_notice_categories,
     collect_all_bizinfo_notices,
     collect_all_kstartup_notices,
 )
@@ -160,3 +162,18 @@ async def get_collection_status(job_id: str):
             detail="해당 job_id의 수집 작업을 찾을 수 없습니다.",
         )
     return job
+
+
+@router.post(
+    "/backfill-category",
+    response_model=CategoryBackfillResult,
+    summary="기존 공고 category_id 보정",
+    description=(
+        "category_id 자동 매핑이 붙기 전에 저장돼 category_id가 비어있는 "
+        "공고를 찾아, 이미 저장된 원본 응답(raw)만으로 다시 채운다. "
+        "외부 API를 호출하지 않아 빠르게 끝나므로 동기로 처리한다."
+    ),
+)
+async def backfill_category(session: AsyncSession = Depends(get_db)):
+    result = await backfill_notice_categories(session)
+    return CategoryBackfillResult(**result)

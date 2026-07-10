@@ -43,3 +43,12 @@ class CollectionJobStatusResponse(BaseModel):
     bizinfo_result: SourceCollectionResult | None = None
     kstartup_result: SourceCollectionResult | None = None
     error_message: str | None = None
+
+
+class CategoryBackfillResult(BaseModel):
+    """POST /internal/notices/backfill-category 응답"""
+
+    checked: int
+    """category_id가 비어있어 검사한 공고 수"""
+    updated: int
+    """실제로 category_id를 채운 공고 수"""

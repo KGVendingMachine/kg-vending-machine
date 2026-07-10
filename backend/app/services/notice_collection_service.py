@@ -14,12 +14,14 @@ from app.repositories.notice_repository import (
     delete_notice,
     find_notice_id_by_source_and_title,
     get_category_mapping,
+    get_notices_missing_category,
     get_or_create_organization,
     get_or_create_source,
     replace_notice_region,
     replace_notice_target_type,
     save_attachment,
     save_raw,
+    set_notice_category,
     upsert_notice,
 )
 
@@ -667,3 +669,33 @@ async def collect_all_kstartup_notices(session: AsyncSession) -> CollectionResul
         page += 1
 
     return collection_result
+
+
+async def backfill_notice_categories(session: AsyncSession) -> dict[str, int]:
+    """category_id가 비어있는 기존 공고를 채운다 (일회성 보정).
+
+    _process_bizinfo_item/_process_kstartup_item에 category_id 매핑을
+    붙이기 전에 이미 저장돼 있던 공고들은 category_id가 NULL로 남는다.
+    외부 API를 다시 호출하지 않고, 그때 같이 저장해 둔 원본 응답
+    (bizinfo_raw/kstartup_raw.field)만으로 category_mapping과 대조해
+    채운다.
+    """
+    category_mapping = await get_category_mapping(session)
+    checked = 0
+    updated = 0
+
+    for raw_model_cls, raw_category_key in (
+        (BizinfoRaw, _bizinfo_raw_category_key),
+        (KstartupRaw, _kstartup_raw_category_key),
+    ):
+        rows = await get_notices_missing_category(session, raw_model_cls)
+        for notice_id, raw_field in rows:
+            checked += 1
+            item = json.loads(raw_field)
+            category_id = category_mapping.get(raw_category_key(item))
+            if category_id is not None:
+                await set_notice_category(session, notice_id, category_id)
+                updated += 1
+
+    await session.commit()
+    return {"checked": checked, "updated": updated}

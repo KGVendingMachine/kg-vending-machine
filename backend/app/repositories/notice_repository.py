@@ -308,6 +308,23 @@ async def set_notice_category(
     )
 
 
+async def get_notices_missing_category(
+    session: AsyncSession, raw_model_cls
+) -> list[tuple[int, str]]:
+    """category_id가 비어있는 공고의 (notice_id, 원본 raw JSON) 목록을 반환한다.
+
+    raw_model_cls는 BizinfoRaw 또는 KstartupRaw — 출처별로 원본 카테고리
+    필드명이 달라 호출자가 어느 raw 테이블을 볼지 골라서 넘긴다. raw
+    테이블과 조인하므로 결과는 자연히 해당 출처의 공고로 한정된다.
+    """
+    result = await session.execute(
+        select(Notice.id, raw_model_cls.field)
+        .join(raw_model_cls, raw_model_cls.notice_id == Notice.id)
+        .where(Notice.category_id.is_(None))
+    )
+    return list(result.all())
+
+
 async def list_notices(
     session: AsyncSession,
     *,
