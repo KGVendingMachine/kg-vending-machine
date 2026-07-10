@@ -14,6 +14,7 @@ from app.repositories.notice_repository import (
     delete_notice,
     find_notice_id_by_source_and_title,
     get_category_mapping,
+    get_notices_for_status_refresh,
     get_notices_missing_category,
     get_or_create_organization,
     get_or_create_source,
@@ -22,6 +23,7 @@ from app.repositories.notice_repository import (
     save_attachment,
     save_raw,
     set_notice_category,
+    update_notice_status,
     upsert_notice,
 )
 
@@ -710,6 +712,39 @@ async def backfill_notice_categories(session: AsyncSession) -> dict[str, int]:
             if category_id is not None:
                 await set_notice_category(session, notice_id, category_id)
                 updated += 1
+
+    await session.commit()
+    return {"checked": checked, "updated": updated}
+
+
+async def refresh_notice_statuses(session: AsyncSession) -> dict[str, int]:
+    """마감일이 지났는데 status가 아직 갱신 안 된 공고를 오늘 날짜 기준으로
+    다시 계산한다 (수집 시점에만 계산해서 저장해두는 값이라, 재수집 없이는
+    시간이 지나도 저절로 안 바뀜).
+
+    외부 API를 다시 호출하지 않고, 이미 저장된 application_start_date/
+    application_end_date만으로 재계산한다 — 날짜 자체는 수집 이후 바뀌지
+    않으므로 이 값만으로 충분하다. 단, "확인필요"였던 공고를 "모집중"으로
+    바꿔줬던 상시모집 판단(reqstBeginEndDe의 "상시"/"예산 소진" 등 키워드,
+    _is_rolling_open)은 원본 문자열을 다시 안 부르면 재현할 수 없어서,
+    재계산 결과가 "확인필요"인데 기존 상태가 "모집중"이면 건드리지 않는다
+    (상시모집 공고가 여기서 잘못 마감 취급되는 걸 막기 위함).
+
+    지금은 직접 호출하는 용도이고, 나중에 만들 스케줄러가 주기적으로
+    호출해서 마감 처리를 최신 상태로 유지하는 데 쓴다.
+    """
+    checked = 0
+    updated = 0
+
+    rows = await get_notices_for_status_refresh(session)
+    for notice_id, start_date, end_date, current_status in rows:
+        checked += 1
+        new_status, new_is_actionable = _derive_status_from_dates(start_date, end_date)
+        if new_status == "확인필요" and current_status == "모집중":
+            continue
+        if new_status != current_status:
+            await update_notice_status(session, notice_id, new_status, new_is_actionable)
+            updated += 1
 
     await session.commit()
     return {"checked": checked, "updated": updated}

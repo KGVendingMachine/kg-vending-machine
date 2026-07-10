@@ -14,7 +14,10 @@ import pytest
 from app.models.notice import Notice
 from app.models.notice_source import NoticeSource
 from app.models.raw import BizinfoRaw, KstartupRaw
-from app.repositories.notice_repository import upsert_notice
+from app.repositories.notice_repository import (
+    get_notices_for_status_refresh,
+    upsert_notice,
+)
 from app.services.notice_collection_service import (
     _bizinfo_raw_category_key,
     _derive_status_from_dates,
@@ -29,6 +32,7 @@ from app.services.notice_collection_service import (
     _parse_regions,
     _within_collection_window,
     backfill_notice_categories,
+    refresh_notice_statuses,
 )
 
 pytestmark = pytest.mark.anyio
@@ -336,3 +340,100 @@ async def test_backfill_skips_malformed_raw_json_without_aborting_batch(db_sessi
     assert broken.category_id is None
     assert ok.category_id is not None
     assert result["checked"] >= 2
+
+
+# ---------------------------------------------------------------------------
+# refresh_notice_statuses (DB 기반)
+# ---------------------------------------------------------------------------
+
+
+async def test_refresh_closes_notice_whose_end_date_has_passed(db_session):
+    source = await _create_source(db_session, "상태갱신_마감")
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="refresh-closed",
+        title="마감됐어야 하는 공고",
+        application_start_date=date(2020, 1, 1),
+        application_end_date=date(2020, 1, 31),
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+
+    result = await refresh_notice_statuses(db_session)
+
+    notice = await db_session.get(Notice, notice_id)
+    assert notice.status == "마감"
+    assert notice.is_actionable is False
+    assert result["updated"] >= 1
+
+
+async def test_refresh_leaves_open_notice_untouched(db_session):
+    source = await _create_source(db_session, "상태갱신_모집중유지")
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="refresh-open",
+        title="아직 열려있는 공고",
+        application_start_date=date(2020, 1, 1),
+        application_end_date=date(2099, 1, 1),
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+
+    await refresh_notice_statuses(db_session)
+
+    notice = await db_session.get(Notice, notice_id)
+    assert notice.status == "모집중"
+    assert notice.is_actionable is True
+
+
+async def test_refresh_does_not_downgrade_rolling_open_notice_to_확인필요(db_session):
+    """종료일 없는 상시모집 공고는 raw_period 정보 없이 재계산하면 '확인필요'로
+    잘못 떨어지므로, 기존 '모집중'을 그대로 유지해야 한다."""
+    source = await _create_source(db_session, "상태갱신_상시모집")
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="refresh-rolling",
+        title="상시모집 공고",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+
+    await refresh_notice_statuses(db_session)
+
+    notice = await db_session.get(Notice, notice_id)
+    assert notice.status == "모집중"
+
+
+async def test_refresh_skips_already_closed_notices(db_session):
+    source = await _create_source(db_session, "상태갱신_이미마감")
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="refresh-already-closed",
+        title="이미 마감 처리된 공고",
+        application_start_date=date(2020, 1, 1),
+        application_end_date=date(2020, 1, 31),
+        status="마감",
+        is_actionable=False,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+
+    rows = await get_notices_for_status_refresh(db_session)
+
+    assert notice_id not in {row[0] for row in rows}

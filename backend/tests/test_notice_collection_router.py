@@ -15,6 +15,7 @@ from app.api.notice_collection import (
     _execute_collection_job,
     backfill_category,
     get_collection_status,
+    refresh_status,
     start_collection,
 )
 from app.schemas.notice_collection import CollectionJobStatus, CollectionJobStatusResponse
@@ -100,6 +101,19 @@ async def test_get_collection_status_404_when_unknown():
 
 async def test_backfill_category_returns_checked_and_updated_counts(db_session):
     result = await backfill_category(session=db_session)
+
+    assert result.checked >= 0
+    assert result.updated >= 0
+    assert result.updated <= result.checked
+
+
+# ---------------------------------------------------------------------------
+# refresh_status
+# ---------------------------------------------------------------------------
+
+
+async def test_refresh_status_returns_checked_and_updated_counts(db_session):
+    result = await refresh_status(session=db_session)
 
     assert result.checked >= 0
     assert result.updated >= 0

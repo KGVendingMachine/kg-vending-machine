@@ -315,6 +315,36 @@ async def set_notice_category(
     )
 
 
+async def get_notices_for_status_refresh(
+    session: AsyncSession,
+) -> list[tuple[int, date | None, date | None, str | None]]:
+    """마감 처리되지 않은 공고의 (id, 신청시작일, 신청종료일, 현재 상태) 목록을 반환한다.
+
+    "마감"은 종단 상태로 보고 대상에서 제외한다 — 한 번 마감으로
+    확정되면 신청기간이 다시 열리는 경우는 없다고 본다.
+    """
+    result = await session.execute(
+        select(
+            Notice.id,
+            Notice.application_start_date,
+            Notice.application_end_date,
+            Notice.status,
+        ).where(Notice.status.is_distinct_from("마감"))
+    )
+    return list(result.all())
+
+
+async def update_notice_status(
+    session: AsyncSession, notice_id: int, status: str, is_actionable: bool
+) -> None:
+    """공고의 모집 상태를 갱신한다 (마감일 경과 등으로 재계산된 값 반영)."""
+    await session.execute(
+        update(Notice)
+        .where(Notice.id == notice_id)
+        .values(status=status, is_actionable=is_actionable)
+    )
+
+
 async def get_notices_missing_category(
     session: AsyncSession, raw_model_cls
 ) -> list[tuple[int, str]]:
