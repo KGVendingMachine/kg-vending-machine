@@ -489,7 +489,20 @@ async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult
         base_url="https://www.bizinfo.go.kr",
         collect_type="API",
     )
-    since = await get_max_bizinfo_registration_time(session, source.id)
+    try:
+        # bizinfo_raw.field를 SQL에서 jsonb로 캐스팅하는 쿼리라, 혹시라도
+        # 유효하지 않은 JSON이 섞여 있으면 이 문장 자체가 실패한다.
+        # Postgres는 실패한 문장이 있으면 롤백 전까지 트랜잭션 전체를
+        # 막아버리므로, SAVEPOINT로 감싸서 실패해도 이 지점까지만
+        # 롤백되고 이후 페이지 처리·커밋에는 영향이 없게 한다.
+        async with session.begin_nested():
+            since = await get_max_bizinfo_registration_time(session, source.id)
+    except Exception:
+        logger.warning(
+            "기업마당 조기종료 커서 계산 실패, 이번 수집은 조기종료 없이 전체를 훑습니다",
+            exc_info=True,
+        )
+        since = None
     stop_before = since - _BIZINFO_EARLY_STOP_BUFFER if since is not None else None
     category_mapping = await get_category_mapping(session)
 
