@@ -18,9 +18,7 @@ class MatchLog(Base):
     company_profile_id: Mapped[int] = mapped_column(
         ForeignKey("company_profile.id"), nullable=False
     )
-    business_plan_id: Mapped[int | None] = mapped_column(
-        ForeignKey("business_plan.id")
-    )
+    business_plan_id: Mapped[int | None] = mapped_column(ForeignKey("business_plan.id"))
     """NULL 가능"""
     run_status: Mapped[str | None] = mapped_column(String(20))
     """진행중/완료/실패"""

@@ -85,9 +85,7 @@ def upgrade() -> None:
     )
     op.add_column(
         "company_profile",
-        sa.Column(
-            "business_registration_number", sa.String(length=20), nullable=True
-        ),
+        sa.Column("business_registration_number", sa.String(length=20), nullable=True),
     )
     op.add_column(
         "company_profile",

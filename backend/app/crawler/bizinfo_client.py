@@ -54,3 +54,29 @@ async def fetch_bizinfo_notices(page: int = 1) -> list[dict]:
     raise RuntimeError(
         f"BizInfo API 요청이 {settings.BIZINFO_MAX_RETRIES}회 모두 실패했습니다"
     ) from last_error
+
+
+async def download_bizinfo_attachment(file_url: str) -> bytes:
+    """기업마당 첨부파일 URL(getImageFile.do?...)에서 실제 파일을 받는다.
+
+    기업마당은 목록 API 응답에 다운로드 URL이 바로 들어있어(K-Startup처럼
+    상세페이지를 열 필요 없음), URL만 있으면 바로 GET으로 받아온다.
+    """
+    settings = get_settings()
+    last_error: Exception | None = None
+    async with httpx.AsyncClient(
+        timeout=settings.BIZINFO_REQUEST_TIMEOUT_SECONDS
+    ) as client:
+        for attempt in range(1, settings.BIZINFO_MAX_RETRIES + 1):
+            try:
+                response = await client.get(file_url, follow_redirects=True)
+                response.raise_for_status()
+                return response.content
+            except httpx.HTTPError as exc:
+                last_error = exc
+                if attempt < settings.BIZINFO_MAX_RETRIES:
+                    await asyncio.sleep(attempt)
+
+    raise RuntimeError(
+        f"기업마당 첨부파일 다운로드가 {settings.BIZINFO_MAX_RETRIES}회 모두 실패했습니다"
+    ) from last_error

@@ -14,13 +14,14 @@ class Settings(BaseSettings):
     DEBUG: bool = True
 
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]
+    FRONTEND_URL: str = "http://localhost:5173"
+    """카카오 로그인 완료 후 되돌아갈 프론트 주소."""
 
     POSTGRES_USER: str = "kg_vending"
     POSTGRES_PASSWORD: str = "1234"
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
     POSTGRES_DB: str = "kg_vending"
-
 
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o-mini"
@@ -56,7 +57,8 @@ class Settings(BaseSettings):
     """카카오 개발자 콘솔의 REST API 키"""
     KAKAO_CLIENT_SECRET: str = ""
     """활성화한 경우에만 사용. 비어 있으면 토큰 교환 시 전송하지 않는다."""
-    KAKAO_REDIRECT_URI: str = "http://localhost:5173/auth/callback"
+    KAKAO_REDIRECT_URI: str = "http://localhost:8000/api/auth/kakao/callback"
+    KAKAO_AUTHORIZE_URL: str = "https://kauth.kakao.com/oauth/authorize"
     KAKAO_TOKEN_URL: str = "https://kauth.kakao.com/oauth/token"
     KAKAO_USER_INFO_URL: str = "https://kapi.kakao.com/v2/user/me"
     KAKAO_REQUEST_TIMEOUT_SECONDS: int = 10

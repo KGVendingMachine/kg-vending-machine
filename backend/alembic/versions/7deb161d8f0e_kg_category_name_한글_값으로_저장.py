@@ -5,15 +5,14 @@ Revises: 8c2d2294fd17
 Create Date: 2026-07-09 13:37:42.341726
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
-
 
 # revision identifiers, used by Alembic.
-revision: str = '7deb161d8f0e'
-down_revision: Union[str, Sequence[str], None] = '8c2d2294fd17'
+revision: str = "7deb161d8f0e"
+down_revision: Union[str, Sequence[str], None] = "8c2d2294fd17"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -42,9 +41,7 @@ def upgrade() -> None:
         + ", ".join(f"'{ko}'" for ko in NAME_KO_BY_EN.values())
         + ")"
     )
-    case_expr = " ".join(
-        f"WHEN '{en}' THEN '{ko}'" for en, ko in NAME_KO_BY_EN.items()
-    )
+    case_expr = " ".join(f"WHEN '{en}' THEN '{ko}'" for en, ko in NAME_KO_BY_EN.items())
     op.execute(
         "ALTER TABLE kg_category "
         "ALTER COLUMN name TYPE category_name "
@@ -61,9 +58,7 @@ def downgrade() -> None:
         + ", ".join(f"'{en}'" for en in NAME_KO_BY_EN.keys())
         + ")"
     )
-    case_expr = " ".join(
-        f"WHEN '{ko}' THEN '{en}'" for en, ko in NAME_KO_BY_EN.items()
-    )
+    case_expr = " ".join(f"WHEN '{ko}' THEN '{en}'" for en, ko in NAME_KO_BY_EN.items())
     op.execute(
         "ALTER TABLE kg_category "
         "ALTER COLUMN name TYPE category_name "

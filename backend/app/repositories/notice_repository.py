@@ -4,7 +4,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.category import CategoryMapping
+from app.models.category import CategoryMapping, KgCategory
 from app.models.notice import Notice, NoticeAttachment, NoticeRegion, NoticeTargetType
 from app.models.notice_source import NoticeSource
 from app.models.organization import Organization
@@ -24,6 +24,13 @@ async def get_or_create_source(
     DO NOTHING이 아니라 DO UPDATE를 쓰는 이유: DO NOTHING이면 이미 있는
     출처의 base_url/collect_type이 바뀌어도 호출자가 넘긴 최신 값이
     무시되고 예전 값이 그대로 남았다.
+
+    populate_existing=True가 필요한 이유: 이 세션에서 같은 source_id가
+    이미 한 번 로드된 적 있으면(예: 같은 세션 안에서 이 함수를 두 번
+    호출), SQLAlchemy identity map이 방금 DO UPDATE로 반영한 최신 값
+    대신 세션에 캐시된 예전 Python 객체를 그대로 돌려준다 — 위에서
+    DO UPDATE를 쓴 이유 자체가 무력화되는 셈이라 명시적으로 다시
+    읽어오게 한다.
     """
     stmt = (
         pg_insert(NoticeSource)
@@ -40,7 +47,7 @@ async def get_or_create_source(
     )
     result = await session.execute(stmt)
     source_id = result.scalar_one()
-    return await session.get_one(NoticeSource, source_id)
+    return await session.get_one(NoticeSource, source_id, populate_existing=True)
 
 
 async def get_or_create_organization(session: AsyncSession, name: str) -> Organization:
@@ -75,6 +82,7 @@ async def upsert_notice(
     title: str | None,
     organization_id: int | None = None,
     notice_group_key: str | None = None,
+    category_id: int | None = None,
     application_start_date: date | None,
     application_end_date: date | None,
     status: str | None,
@@ -104,6 +112,7 @@ async def upsert_notice(
             title=title,
             organization_id=organization_id,
             notice_group_key=notice_group_key,
+            category_id=category_id,
             application_start_date=application_start_date,
             application_end_date=application_end_date,
             status=status,
@@ -118,6 +127,7 @@ async def upsert_notice(
                 "title": title,
                 "organization_id": organization_id,
                 "notice_group_key": notice_group_key,
+                "category_id": category_id,
                 "application_start_date": application_start_date,
                 "application_end_date": application_end_date,
                 "status": status,
@@ -273,6 +283,18 @@ async def save_attachment(
     await session.execute(stmt)
 
 
+async def set_attachment_parsed_text(
+    session: AsyncSession, attachment_id: int, parsed_text: str
+) -> None:
+    """첨부파일 OCR 결과를 저장한다. save_attachment의 upsert는 재수집 시
+    parsed_text를 건드리지 않으므로, OCR 결과 저장은 이 함수로 따로 한다."""
+    await session.execute(
+        update(NoticeAttachment)
+        .where(NoticeAttachment.id == attachment_id)
+        .values(parsed_text=parsed_text)
+    )
+
+
 async def get_category_mapping(session: AsyncSession) -> dict[str, int]:
     """원본 카테고리 키(예: "BIZINFO:금융") → kg_category.id 딕셔너리를 반환한다.
 
@@ -291,3 +313,122 @@ async def set_notice_category(
     await session.execute(
         update(Notice).where(Notice.id == notice_id).values(category_id=category_id)
     )
+
+
+async def get_notices_missing_category(
+    session: AsyncSession, raw_model_cls
+) -> list[tuple[int, str]]:
+    """category_id가 비어있는 공고의 (notice_id, 원본 raw JSON) 목록을 반환한다.
+
+    raw_model_cls는 BizinfoRaw 또는 KstartupRaw — 출처별로 원본 카테고리
+    필드명이 달라 호출자가 어느 raw 테이블을 볼지 골라서 넘긴다. raw
+    테이블과 조인하므로 결과는 자연히 해당 출처의 공고로 한정된다.
+    """
+    result = await session.execute(
+        select(Notice.id, raw_model_cls.field)
+        .join(raw_model_cls, raw_model_cls.notice_id == Notice.id)
+        .where(Notice.category_id.is_(None))
+    )
+    return list(result.all())
+
+
+async def list_notices(
+    session: AsyncSession,
+    *,
+    source_name: str | None = None,
+    category_name: str | None = None,
+    region_code: str | None = None,
+    exclude_closed: bool = False,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[tuple[Notice, str, str | None]], int]:
+    """조건에 맞는 공고 목록((Notice, 출처명, 카테고리명) 튜플)과 전체 건수를 반환한다.
+
+    notice_region은 공고당 여러 행이라, LIMIT 걸기 전에 JOIN하면 지역이
+    여러 개인 공고가 페이지네이션 개수를 왜곡한다(행이 늘어나 LIMIT 안에
+    다른 공고가 덜 들어옴). region_code 필터는 유니크 제약(notice_id,
+    region_code) 덕에 공고당 최대 1행만 매치되니 걸어도 안전하지만,
+    지역 목록 자체는 여기서 같이 안 뽑고 호출자가 notice_id로 따로
+    조회해야 한다.
+    """
+    query = (
+        select(Notice, NoticeSource.source_name, KgCategory.name)
+        .join(NoticeSource, NoticeSource.id == Notice.source_id)
+        .outerjoin(KgCategory, KgCategory.id == Notice.category_id)
+    )
+    if region_code:
+        query = query.join(
+            NoticeRegion,
+            (NoticeRegion.notice_id == Notice.id)
+            & (NoticeRegion.region_code == region_code),
+        )
+    if source_name:
+        query = query.where(NoticeSource.source_name == source_name)
+    if category_name:
+        query = query.where(KgCategory.name == category_name)
+    if exclude_closed:
+        query = query.where(Notice.status.is_distinct_from("마감"))
+
+    total = await session.scalar(
+        select(func.count()).select_from(query.with_only_columns(Notice.id).subquery())
+    )
+
+    result = await session.execute(
+        query.order_by(Notice.id.desc()).limit(limit).offset(offset)
+    )
+    return list(result.all()), total or 0
+
+
+async def get_notice_regions_by_ids(
+    session: AsyncSession, notice_ids: list[int]
+) -> dict[int, list[str]]:
+    """notice_id -> 지역명 목록 딕셔너리. list_notices 결과에 붙여쓰는 용도."""
+    if not notice_ids:
+        return {}
+    result = await session.execute(
+        select(NoticeRegion.notice_id, NoticeRegion.region_name).where(
+            NoticeRegion.notice_id.in_(notice_ids)
+        )
+    )
+    regions: dict[int, list[str]] = {}
+    for notice_id, region_name in result.all():
+        regions.setdefault(notice_id, []).append(region_name)
+    return regions
+
+
+async def get_notice_detail(
+    session: AsyncSession, notice_id: int
+) -> tuple[Notice, str, str | None] | None:
+    """공고 하나를 (Notice, 출처명, 카테고리명) 튜플로 반환한다. 없으면 None."""
+    result = await session.execute(
+        select(Notice, NoticeSource.source_name, KgCategory.name)
+        .join(NoticeSource, NoticeSource.id == Notice.source_id)
+        .outerjoin(KgCategory, KgCategory.id == Notice.category_id)
+        .where(Notice.id == notice_id)
+    )
+    return result.first()
+
+
+async def get_notice_target_types(session: AsyncSession, notice_id: int) -> list[str]:
+    result = await session.execute(
+        select(NoticeTargetType.target_type).where(
+            NoticeTargetType.notice_id == notice_id
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def get_notice_regions(session: AsyncSession, notice_id: int) -> list[str]:
+    result = await session.execute(
+        select(NoticeRegion.region_name).where(NoticeRegion.notice_id == notice_id)
+    )
+    return list(result.scalars().all())
+
+
+async def get_notice_attachments(
+    session: AsyncSession, notice_id: int
+) -> list[NoticeAttachment]:
+    result = await session.execute(
+        select(NoticeAttachment).where(NoticeAttachment.notice_id == notice_id)
+    )
+    return list(result.scalars().all())
