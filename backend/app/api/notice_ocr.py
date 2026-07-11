@@ -233,8 +233,22 @@ async def _run_notice_ocr_job(job_id: str, notice_id: int) -> None:
         Path(tmp_path).unlink(missing_ok=True)
 
     async with async_session_factory() as session:
-        await set_attachment_parsed_text(session, attachment_id, text)
+        saved = await set_attachment_parsed_text(session, attachment_id, text)
         await session.commit()
+
+    if not saved:
+        # 다운로드·OCR이 도는 동안 "기업마당 우선 정책"으로 이 공고 자체가
+        # 정리(cascade 삭제)됐을 수 있다 — 이 경우 COMPLETED로 잘못
+        # 보고하면 실제로는 저장 안 된 결과를 저장됐다고 오인하게 된다.
+        _JOBS[job_id] = NoticeOcrJobStatusResponse(
+            job_id=job_id,
+            notice_id=notice_id,
+            status=NoticeOcrJobStatus.FAILED,
+            attachment_id=attachment_id,
+            error_message="OCR은 끝났지만 첨부파일이 더 이상 존재하지 않아 저장하지 못했습니다"
+            "(다른 출처의 중복 공고로 정리됐을 수 있습니다).",
+        )
+        return
 
     _JOBS[job_id] = NoticeOcrJobStatusResponse(
         job_id=job_id,

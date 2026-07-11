@@ -334,14 +334,21 @@ async def save_attachment(
 
 async def set_attachment_parsed_text(
     session: AsyncSession, attachment_id: int, parsed_text: str
-) -> None:
+) -> bool:
     """첨부파일 OCR 결과를 저장한다. save_attachment의 upsert는 재수집 시
-    parsed_text를 건드리지 않으므로, OCR 결과 저장은 이 함수로 따로 한다."""
-    await session.execute(
+    parsed_text를 건드리지 않으므로, OCR 결과 저장은 이 함수로 따로 한다.
+
+    반환값(True/False)으로 실제로 반영된 행이 있었는지 알려준다 —
+    다운로드·OCR(수십~백여 초)이 도는 동안 "기업마당 우선 정책"으로 이
+    첨부파일의 공고 자체가 지워질 수 있어(notice_collection_service의
+    중복 정리 로직 참고), 그 경우 0행이 반영되고 호출자가 이를 구분해
+    처리해야 한다."""
+    result = await session.execute(
         update(NoticeAttachment)
         .where(NoticeAttachment.id == attachment_id)
         .values(parsed_text=parsed_text)
     )
+    return result.rowcount > 0
 
 
 async def get_category_mapping(session: AsyncSession) -> dict[str, int]:

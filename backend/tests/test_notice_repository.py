@@ -271,6 +271,31 @@ async def test_save_attachment_upsert_does_not_clobber_parsed_text(db_session):
     assert reloaded.parsed_text == "OCR 결과 텍스트"
 
 
+async def test_set_attachment_parsed_text_returns_true_when_row_updated(db_session):
+    source = await _create_source(db_session, "저장성공출처")
+    notice_id = await _create_notice(db_session, source, external_id="attach-2")
+    await save_attachment(
+        db_session, notice_id, "공고문.pdf", "https://a.com/f.pdf", "PDF"
+    )
+    attachments = await get_notice_attachments(db_session, notice_id)
+
+    saved = await set_attachment_parsed_text(db_session, attachments[0].id, "텍스트")
+
+    assert saved is True
+
+
+async def test_set_attachment_parsed_text_returns_false_when_attachment_gone(
+    db_session,
+):
+    """다운로드·OCR이 도는 동안 "기업마당 우선 정책"으로 공고 자체가
+    cascade 삭제됐다면 attachment_id가 더 이상 존재하지 않는다 — 이 경우
+    호출자(notice_ocr)가 COMPLETED로 잘못 보고하지 않도록 False를 반환해야
+    한다."""
+    saved = await set_attachment_parsed_text(db_session, 999_999_999, "텍스트")
+
+    assert saved is False
+
+
 # ---------------------------------------------------------------------------
 # list_notices
 # ---------------------------------------------------------------------------
