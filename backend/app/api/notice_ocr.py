@@ -4,6 +4,13 @@ api/notice_ocr.py
 공고 첨부파일 OCR 트리거 라우터.
 POST /internal/notices/{notice_id}/ocr             -> OCR 작업 시작 (202 Accepted)
 GET  /internal/notices/{notice_id}/ocr/{job_id}     -> 작업 상태/결과 조회
+POST /internal/notices/ocr/batch                   -> 여러 공고 OCR 작업 일괄 시작 (202 Accepted)
+
+배치 트리거는 매칭 파이프라인이 1차 필터링을 통과한 후보 여러 건에 대해
+한 번에 OCR을 걸어야 하는 상황(및 AI 팀 개발·검증용 실데이터 확보)을 위한
+것으로, 공고 하나씩 반복 호출하는 것과 동작은 동일하고 요청 한 번으로
+묶어주는 것뿐이다 — 이미 진행 중인 공고는 새로 트리거하지 않고 기존
+job을 그대로 반환한다.
 
 docs/matching-pipeline.md 4단계(2차 필터링)의 "매칭 후보로 좁혀진 공고에
 한해 첨부파일 크롤링·OCR" 단계를 공고 하나 단위로 수행한다. K-Startup은
@@ -40,6 +47,9 @@ from app.repositories.notice_repository import (
     set_attachment_parsed_text,
 )
 from app.schemas.notice_ocr import (
+    NoticeOcrBatchJobItem,
+    NoticeOcrBatchTriggerRequest,
+    NoticeOcrBatchTriggerResponse,
     NoticeOcrJobAccepted,
     NoticeOcrJobStatus,
     NoticeOcrJobStatusResponse,
@@ -224,12 +234,38 @@ async def _execute_notice_ocr_job(job_id: str, notice_id: int) -> None:
         )
 
 
-def _has_active_job_for_notice(notice_id: int) -> bool:
-    return any(
-        job.notice_id == notice_id
-        and job.status in (NoticeOcrJobStatus.PENDING, NoticeOcrJobStatus.RUNNING)
-        for job in _JOBS.values()
+def _active_job_for_notice(notice_id: int) -> NoticeOcrJobStatusResponse | None:
+    return next(
+        (
+            job
+            for job in _JOBS.values()
+            if job.notice_id == notice_id
+            and job.status in (NoticeOcrJobStatus.PENDING, NoticeOcrJobStatus.RUNNING)
+        ),
+        None,
     )
+
+
+def _has_active_job_for_notice(notice_id: int) -> bool:
+    return _active_job_for_notice(notice_id) is not None
+
+
+def _start_notice_ocr_job(
+    notice_id: int, background_tasks: BackgroundTasks
+) -> NoticeOcrJobStatusResponse:
+    """공고 하나에 대한 OCR job을 새로 만들어 백그라운드로 실행시킨다.
+
+    단건 트리거(start_notice_ocr)와 배치 트리거가 동일한 시작 로직을
+    쓰도록 공용화했다 — 동시 트리거 가드(진행 중이면 재사용)는 호출자가
+    각자의 방식(단건은 409, 배치는 기존 job 그대로 반환)으로 처리한다.
+    """
+    job_id = str(uuid.uuid4())
+    job = NoticeOcrJobStatusResponse(
+        job_id=job_id, notice_id=notice_id, status=NoticeOcrJobStatus.PENDING
+    )
+    _JOBS[job_id] = job
+    background_tasks.add_task(_execute_notice_ocr_job, job_id, notice_id)
+    return job
 
 
 @router.post(
@@ -249,12 +285,33 @@ async def start_notice_ocr(notice_id: int, background_tasks: BackgroundTasks):
             detail="이미 이 공고에 대한 OCR 작업이 진행 중입니다.",
         )
 
-    job_id = str(uuid.uuid4())
-    _JOBS[job_id] = NoticeOcrJobStatusResponse(
-        job_id=job_id, notice_id=notice_id, status=NoticeOcrJobStatus.PENDING
-    )
-    background_tasks.add_task(_execute_notice_ocr_job, job_id, notice_id)
-    return NoticeOcrJobAccepted(job_id=job_id, status=NoticeOcrJobStatus.PENDING)
+    job = _start_notice_ocr_job(notice_id, background_tasks)
+    return NoticeOcrJobAccepted(job_id=job.job_id, status=job.status)
+
+
+@router.post(
+    "/ocr/batch",
+    response_model=NoticeOcrBatchTriggerResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="공고 첨부파일 OCR 배치 시작",
+    description=(
+        "여러 공고에 대해 한 번에 OCR을 트리거한다. 이미 진행 중인 공고는 "
+        "새로 시작하지 않고 기존 job을 그대로 반환한다."
+    ),
+)
+async def start_notice_ocr_batch(
+    request: NoticeOcrBatchTriggerRequest, background_tasks: BackgroundTasks
+):
+    items = []
+    for notice_id in dict.fromkeys(request.notice_ids):  # 순서 유지하며 중복 제거
+        existing = _active_job_for_notice(notice_id)
+        job = existing or _start_notice_ocr_job(notice_id, background_tasks)
+        items.append(
+            NoticeOcrBatchJobItem(
+                notice_id=notice_id, job_id=job.job_id, status=job.status
+            )
+        )
+    return NoticeOcrBatchTriggerResponse(items=items)
 
 
 @router.get(

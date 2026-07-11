@@ -17,9 +17,14 @@ from app.api.notice_ocr import (
     _pick_ocr_target,
     get_notice_ocr_status,
     start_notice_ocr,
+    start_notice_ocr_batch,
 )
 from app.models.notice import NoticeAttachment
-from app.schemas.notice_ocr import NoticeOcrJobStatus, NoticeOcrJobStatusResponse
+from app.schemas.notice_ocr import (
+    NoticeOcrBatchTriggerRequest,
+    NoticeOcrJobStatus,
+    NoticeOcrJobStatusResponse,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -233,3 +238,49 @@ async def test_get_notice_ocr_status_404_when_notice_id_mismatch():
         await get_notice_ocr_status(999, "job-1")
 
     assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# start_notice_ocr_batch
+# ---------------------------------------------------------------------------
+
+
+async def test_start_notice_ocr_batch_starts_a_job_per_notice():
+    background_tasks = BackgroundTasks()
+
+    response = await start_notice_ocr_batch(
+        NoticeOcrBatchTriggerRequest(notice_ids=[1, 2, 3]), background_tasks
+    )
+
+    assert [item.notice_id for item in response.items] == [1, 2, 3]
+    assert all(item.status == NoticeOcrJobStatus.PENDING for item in response.items)
+    assert len(background_tasks.tasks) == 3
+
+
+async def test_start_notice_ocr_batch_dedupes_notice_ids():
+    background_tasks = BackgroundTasks()
+
+    response = await start_notice_ocr_batch(
+        NoticeOcrBatchTriggerRequest(notice_ids=[1, 1, 2]), background_tasks
+    )
+
+    assert [item.notice_id for item in response.items] == [1, 2]
+    assert len(background_tasks.tasks) == 2
+
+
+async def test_start_notice_ocr_batch_reuses_existing_active_job_instead_of_409():
+    _JOBS["existing"] = NoticeOcrJobStatusResponse(
+        job_id="existing", notice_id=1, status=NoticeOcrJobStatus.RUNNING
+    )
+    background_tasks = BackgroundTasks()
+
+    response = await start_notice_ocr_batch(
+        NoticeOcrBatchTriggerRequest(notice_ids=[1, 2]), background_tasks
+    )
+
+    reused, new = response.items
+    assert reused.job_id == "existing"
+    assert reused.status == NoticeOcrJobStatus.RUNNING
+    assert new.notice_id == 2
+    # 이미 진행 중인 공고는 새로 트리거하지 않으므로 신규 공고 1건만 스케줄됨
+    assert len(background_tasks.tasks) == 1
