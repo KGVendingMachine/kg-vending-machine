@@ -21,6 +21,18 @@ _SUPPORTED_FORMATS = {
 # "Request invalid: No more than 10 pages." 오류를 반환함).
 _CLOVA_MAX_PDF_PAGES = 10
 
+# CLOVA 계정 전체(도메인) 기준 동시 호출 제한 (2026-07-11 실측 확인: 10개
+# 동시 호출 중 6개가 400 "API are limited to 5 API calls per domain at the
+# same time"로 거부됨 — 초당/분당이 아니라 순수 동시 실행 개수 제한이다).
+# 문서 하나의 임베드 이미지 OCR(extract.py의 _append_embedded_image_text)과
+# 배치 OCR 트리거로 여러 공고를 동시 처리할 때의 본문 OCR이 전부 이 계정
+# 하나를 공유하므로, 호출 지점(여기 call_clova_ocr_bytes)에서 전역으로
+# 5개까지만 동시 실행되게 막아야 한다 — extract.py/notice_ocr.py 각자
+# 자기 범위 안에서만 5로 제한하면(예: 문서 하나당 이미지 5개 동시 +
+# 배치로 공고 5개 동시) 계정 전체로는 실제 한도를 훌쩍 넘길 수 있다.
+_CLOVA_MAX_CONCURRENT_CALLS = 5
+_clova_call_semaphore = asyncio.Semaphore(_CLOVA_MAX_CONCURRENT_CALLS)
+
 
 async def fetch_clova_ocr_text(file_path: str) -> str:
     """Naver CLOVA OCR(General)로 문서(PDF/이미지)에서 텍스트를 추출한다.
@@ -84,9 +96,12 @@ async def call_clova_ocr_bytes(file_bytes: bytes, image_format: str, name: str) 
     async with httpx.AsyncClient(timeout=settings.CLOVA_OCR_TIMEOUT_SECONDS) as client:
         for attempt in range(1, settings.CLOVA_OCR_MAX_RETRIES + 1):
             try:
-                response = await client.post(
-                    settings.CLOVA_OCR_INVOKE_URL, json=request_body, headers=headers
-                )
+                async with _clova_call_semaphore:
+                    response = await client.post(
+                        settings.CLOVA_OCR_INVOKE_URL,
+                        json=request_body,
+                        headers=headers,
+                    )
                 response.raise_for_status()
                 payload = response.json()
                 images = payload.get("images")

@@ -41,9 +41,12 @@ def file_type_for_suffix(suffix: str) -> str:
 # CLOVA OCR이 그대로 받아주는 이미지 포맷 (bmp/gif 등은 여기 없으면 png로 변환)
 _CLOVA_NATIVE_FORMATS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 # 임베드 이미지가 많은 PDF(수십 개)에서 순차 처리하면 문서 하나에 2분 넘게
-# 걸려서(실측: 이미지 48개, 122초) 동시에 여러 개씩 보낸다. 너무 크게
-# 잡으면 CLOVA API에 순간적으로 부하가 몰릴 수 있어 5개로 제한한다.
-_MAX_CONCURRENT_IMAGE_OCR = 5
+# 걸려서(실측: 이미지 48개, 122초) 동시에 여러 개씩 보낸다. 실제 동시
+# 실행 개수 제한(계정 전체 기준 5개, 2026-07-11 실측)은
+# clova_ocr_client.call_clova_ocr_bytes 안에서 전역으로 걸려있으므로
+# 여기서는 그냥 다 동시에 요청해도 된다 — 초과분은 그쪽 세마포어에서
+# 대기했다가 순서대로 실행된다. 문서 단위로 또 세마포어를 걸면(예: 여기
+# 5개 + 배치로 공고 5개 동시) 계정 전체 한도를 오히려 넘기기 쉬워진다.
 
 
 async def extract_text(file_path: str) -> tuple[str, str]:
@@ -204,17 +207,14 @@ async def _append_embedded_image_text(
         unique_images.append((data, ext))
     images = unique_images
 
-    semaphore = asyncio.Semaphore(_MAX_CONCURRENT_IMAGE_OCR)
-
     async def _ocr_isolated(data: bytes, ext: str) -> str:
-        async with semaphore:
-            try:
-                return await _ocr_image_bytes(data, ext)
-            except Exception:
-                # 로고·아이콘처럼 글자가 없는 이미지는 CLOVA가 NO_TEXT
-                # 오류를 낸다. 이미지 하나가 실패해도 나머지 이미지
-                # 처리가 전부 죽지 않도록 항목별로 격리한다.
-                return ""
+        try:
+            return await _ocr_image_bytes(data, ext)
+        except Exception:
+            # 로고·아이콘처럼 글자가 없는 이미지는 CLOVA가 NO_TEXT
+            # 오류를 낸다. 이미지 하나가 실패해도 나머지 이미지
+            # 처리가 전부 죽지 않도록 항목별로 격리한다.
+            return ""
 
     results = await asyncio.gather(*(_ocr_isolated(data, ext) for data, ext in images))
     ocr_texts = [t for t in results if t]
