@@ -16,6 +16,7 @@ from app.repositories.notice_repository import (
     delete_notice,
     find_notice_ids_by_source_title_and_dates,
     get_notice_attachments,
+    get_notice_attachments_by_ids,
     get_notice_detail,
     get_notice_regions,
     get_notice_regions_by_ids,
@@ -344,6 +345,31 @@ async def test_set_attachment_parsed_text_returns_false_when_attachment_gone(
     saved = await set_attachment_parsed_text(db_session, 999_999_999, "텍스트")
 
     assert saved is False
+
+
+async def test_get_notice_attachments_by_ids_batches_multiple_notices(db_session):
+    """OCR 배치 트리거(POST /internal/notices/ocr/batch)로 여러 공고를 한 번에
+    돌린 뒤, notice_id마다 get_notice_attachments를 따로 호출하지 않고 한
+    번에 parsed_text까지 가져올 수 있어야 한다."""
+    source = await _create_source(db_session, "첨부배치조회출처")
+    notice_a = await _create_notice(db_session, source, external_id="batch-attach-a")
+    notice_b = await _create_notice(db_session, source, external_id="batch-attach-b")
+    await save_attachment(db_session, notice_a, "a.pdf", "https://a.com/a.pdf", "PDF")
+    await save_attachment(db_session, notice_b, "b.pdf", "https://a.com/b.pdf", "PDF")
+    attachments_a = await get_notice_attachments(db_session, notice_a)
+    await set_attachment_parsed_text(db_session, attachments_a[0].id, "A 원문")
+
+    by_notice = await get_notice_attachments_by_ids(db_session, [notice_a, notice_b])
+
+    assert set(by_notice.keys()) == {notice_a, notice_b}
+    assert by_notice[notice_a][0].parsed_text == "A 원문"
+    assert by_notice[notice_b][0].parsed_text is None
+
+
+async def test_get_notice_attachments_by_ids_returns_empty_dict_for_empty_input(
+    db_session,
+):
+    assert await get_notice_attachments_by_ids(db_session, []) == {}
 
 
 # ---------------------------------------------------------------------------
