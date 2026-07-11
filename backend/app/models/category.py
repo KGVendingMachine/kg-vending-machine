@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Identity, String
+from sqlalchemy import DateTime, ForeignKey, Identity, String, UniqueConstraint
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy import func
 from sqlalchemy.orm import Mapped, mapped_column
@@ -44,6 +44,9 @@ class KgCategory(Base):
 
 class CategoryMapping(Base):
     __tablename__ = "category_mapping"
+    __table_args__ = (
+        UniqueConstraint("raw_category", name="uq_category_mapping_raw_category"),
+    )
 
     id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
     raw_category: Mapped[str] = mapped_column(String(100), nullable=False)

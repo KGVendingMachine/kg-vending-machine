@@ -143,8 +143,18 @@ class HWPLoader(BaseLoader):
 
     @staticmethod
     def _remove_control_characters(s: str) -> str:
-        """OCR·인코딩 과정에서 섞여 들어오는 깨진 제어문자를 제거한다."""
-        return "".join(ch for ch in s if unicodedata.category(ch)[0] != "C")
+        """OCR·인코딩 과정에서 섞여 들어오는 깨진 제어문자를 제거한다.
+
+        "\\n"도 유니코드 카테고리상 제어문자(Cc)라, 필터링 없이 그대로
+        걸러내면 문단 구분을 위해 "\\n".join으로 이미 넣어둔 개행까지
+        지워져 모든 문단이 구분자 없이 이어붙는 문제가 있었다(실제 HWP
+        샘플로 확인: "...동의서" + "전남창조경제혁신센터는..."가 "...동의서전남창조경제혁신센터는..."로
+        붙어버림). "\\n"은 보존하고 "\\r"은 버려서(원본에 섞여 있는
+        "\\r\\n"이 "\\n" 하나로 정리되게) 나머지 진짜 깨진 제어문자만 제거한다.
+        """
+        return "".join(
+            ch for ch in s if ch == "\n" or unicodedata.category(ch)[0] != "C"
+        )
 
     @staticmethod
     def _parse_record_header(header_bytes: bytes) -> tuple[int, int, int]:

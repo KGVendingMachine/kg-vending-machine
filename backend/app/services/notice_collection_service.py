@@ -12,7 +12,7 @@ from app.crawler.kstartup_client import fetch_kstartup_notices
 from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
     delete_notice,
-    find_notice_id_by_source_and_title,
+    find_notice_ids_by_source_title_and_dates,
     get_bizinfo_notices_with_raw,
     get_category_mapping,
     get_kstartup_notices_with_raw,
@@ -451,15 +451,22 @@ async def _process_bizinfo_item(
                     _file_type_from_name(file_name),
                 )
 
-            # 기업마당·K-Startup에 같은 사업이 각자 다른 external_id로
-            # 중복 등록되는 경우, 제목이 같으면 기업마당을 우선한다.
-            # K-Startup을 먼저 수집해서 이미 저장돼 있었더라도 여기서
-            # 정리한다.
-            if title:
-                duplicate_id = await find_notice_id_by_source_and_title(
-                    session, KSTARTUP_SOURCE_NAME, title
+            # 기업마당·K-Startup에 같은 사업의 같은 회차가 각자 다른
+            # external_id로 중복 등록되는 경우, 제목+신청기간이 같으면
+            # 기업마당을 우선한다. K-Startup을 먼저 수집해서 이미
+            # 저장돼 있었더라도 여기서 정리한다.
+            #
+            # 제목만 보고 지우면 안 된다 — 정기 반복되는 모집 공고는
+            # 회차마다 제목을 그대로 재사용해(실제 DB 확인: 신청기간이
+            # 전혀 안 겹치는 회차 8개가 완전히 같은 제목), 제목만 일치
+            # 조건으로 삼으면 지금 이 회차와 무관한 과거 회차까지 통째로
+            # 지워버린다. start_date/end_date가 둘 다 있어야만(신청기간을
+            # 못 구한 공고는 비교 자체가 불가능하므로) 판정한다.
+            if title and start_date is not None and end_date is not None:
+                duplicate_ids = await find_notice_ids_by_source_title_and_dates(
+                    session, KSTARTUP_SOURCE_NAME, title, start_date, end_date
                 )
-                if duplicate_id is not None:
+                for duplicate_id in duplicate_ids:
                     logger.info(
                         "기업마당 우선 정책으로 K-Startup 중복 공고 삭제: %r", title
                     )
@@ -651,22 +658,29 @@ async def _process_kstartup_item(
     start_date = _parse_kstartup_date(item.get("pbanc_rcpt_bgng_dt"))
     if not _within_collection_window(start_date):
         return
+    end_date = _parse_kstartup_date(item.get("pbanc_rcpt_end_dt"))
 
-    # 기업마당·K-Startup에 같은 사업이 각자 다른 external_id로 중복
-    # 등록되는 경우, 제목이 같으면 기업마당을 우선한다. 기업마당이
-    # 이미 수집돼 있으면 이 K-Startup 항목은 저장하지 않는다.
+    # 기업마당·K-Startup에 같은 사업의 같은 회차가 각자 다른
+    # external_id로 중복 등록되는 경우, 제목+신청기간이 같으면 기업마당을
+    # 우선한다. 기업마당이 이미 수집돼 있으면 이 K-Startup 항목은
+    # 저장하지 않는다.
+    #
+    # 제목만 보고 건너뛰면 안 된다 — 정기 반복되는 모집 공고는 회차마다
+    # 제목을 그대로 재사용해(실제 DB 확인: 신청기간이 전혀 안 겹치는
+    # 회차 8개가 완전히 같은 제목), 제목만 일치 조건으로 삼으면 기업마당에
+    # 예전 회차만 있어도 지금 새로 올라온 회차 저장을 건너뛰어 버린다
+    # (누락). start_date/end_date가 둘 다 있어야만 판정한다.
     title = item.get("biz_pbanc_nm")
-    if title:
-        duplicate_id = await find_notice_id_by_source_and_title(
-            session, BIZINFO_SOURCE_NAME, title
+    if title and start_date is not None and end_date is not None:
+        duplicate_ids = await find_notice_ids_by_source_title_and_dates(
+            session, BIZINFO_SOURCE_NAME, title, start_date, end_date
         )
-        if duplicate_id is not None:
+        if duplicate_ids:
             logger.info("기업마당 우선 정책으로 K-Startup 중복 공고 건너뜀: %r", title)
             return
 
     try:
         async with session.begin_nested():
-            end_date = _parse_kstartup_date(item.get("pbanc_rcpt_end_dt"))
             rcrt_prgs_yn = item.get("rcrt_prgs_yn")
             if rcrt_prgs_yn == "Y":
                 status, is_actionable = "모집중", True

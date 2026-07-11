@@ -4,11 +4,12 @@ schemas/notice_ocr.py
 공고 첨부파일 OCR 트리거 API 스키마.
 POST /internal/notices/{notice_id}/ocr             -> OCR 작업 시작 (202 Accepted)
 GET  /internal/notices/{notice_id}/ocr/{job_id}     -> 작업 상태/결과 조회
+POST /internal/notices/ocr/batch                   -> 여러 공고 OCR 작업 일괄 시작 (202 Accepted)
 """
 
 from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class NoticeOcrJobStatus(str, Enum):
@@ -40,3 +41,20 @@ class NoticeOcrJobStatusResponse(BaseModel):
     file_name: str | None = None
     char_count: int | None = None
     error_message: str | None = None
+
+
+class NoticeOcrBatchTriggerRequest(BaseModel):
+    # 상한 없이 받으면 실수로(또는 대량 시드용으로) 수천 건을 한 번에 넣어
+    # CLOVA 비용이 크게 나가고 배치 하나가 몇 시간씩 걸릴 수 있어 30건으로
+    # 제한한다(2026-07-11 결정).
+    notice_ids: list[int] = Field(min_length=1, max_length=30)
+
+
+class NoticeOcrBatchJobItem(BaseModel):
+    notice_id: int
+    job_id: str
+    status: NoticeOcrJobStatus
+
+
+class NoticeOcrBatchTriggerResponse(BaseModel):
+    items: list[NoticeOcrBatchJobItem]

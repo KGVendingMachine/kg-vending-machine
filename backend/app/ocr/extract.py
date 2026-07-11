@@ -105,7 +105,13 @@ async def extract_text(file_path: str) -> tuple[str, str]:
     else:
         text = await fetch_clova_ocr_text(file_path)
 
-    return text, file_type
+    # PostgreSQL은 인코딩과 무관하게 text/varchar 컬럼에 NUL(0x00) 바이트를
+    # 아예 저장하지 못한다(CharacterNotInRepertoireError). 실제 사업계획서
+    # PDF 샘플에서 pdfplumber가 이 바이트를 뽑아내는 경우를 확인함(2026-07-11,
+    # 공고 OCR 배치 트리거 테스트 중) — 이 함수 결과를 그대로 DB text
+    # 컬럼에 저장하는 모든 호출자(공고 OCR, 사업계획서 분석)에 영향을
+    # 주므로 반환 직전에 한 곳에서 제거한다.
+    return text.replace("\x00", ""), file_type
 
 
 def _load_hwp_text(file_path: str) -> str:

@@ -4,6 +4,7 @@ from sqlalchemy import Integer, cast, delete, func, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from app.models.category import CategoryMapping, KgCategory
 from app.models.notice import Notice, NoticeAttachment, NoticeRegion, NoticeTargetType
@@ -244,22 +245,43 @@ async def replace_notice_region(
         )
 
 
-async def find_notice_id_by_source_and_title(
-    session: AsyncSession, source_name: str, title: str
-) -> int | None:
-    """특정 출처(source_name)에서 제목이 정확히 일치하는 공고의 id를 찾는다.
+async def find_notice_ids_by_source_title_and_dates(
+    session: AsyncSession,
+    source_name: str,
+    title: str,
+    start_date: date | None,
+    end_date: date | None,
+) -> list[int]:
+    """특정 출처(source_name)에서 제목과 신청기간(시작일·종료일)이 모두
+    일치하는 공고 id를 전부 찾는다.
 
     기업마당과 K-Startup에 같은 사업이 각자 다른 external_id로 중복
-    등록되는 경우가 있어, 제목 기준으로 다른 출처의 공고를 찾기 위해
-    쓴다. 소스별 유일 키(external_id)가 서로 달라 그것만으로는
-    중복을 판단할 수 없다.
+    등록되는 경우, 제목 기준으로 다른 출처의 공고를 찾아 정리/스킵하는데
+    쓴다. 소스별 유일 키(external_id)가 서로 달라 그것만으로는 중복을
+    판단할 수 없기 때문인데, **제목만으로도 부족하다** — 실제 DB로
+    확인해보니 정기 반복되는 모집 공고가 매 회차 제목을 그대로 재사용해,
+    신청기간이 전혀 겹치지 않는 회차 8개가 완전히 같은 제목으로 존재하는
+    경우가 있었다. 제목만 보고 중복 판정하면 서로 다른 회차의 기록을
+    같은 사업의 교차 등록으로 오인해 지우거나(실제로는 지우면 안 될
+    과거 회차 삭제) 새 회차 저장을 건너뛰는(실제로는 저장해야 할 새
+    회차 누락) 문제가 생긴다. 제목과 신청기간이 전부 같아야 "같은
+    회차가 두 출처에 교차 등록된 것"으로 본다.
+
+    start_date/end_date 중 하나라도 없으면(파싱 실패 등) 호출자가 이
+    함수를 부르지 않고 건너뛰는 것을 전제로 한다 — 날짜 없이 제목만
+    비교하면 위 문제가 그대로 재현되기 때문이다.
     """
     result = await session.execute(
         select(Notice.id)
         .join(NoticeSource, Notice.source_id == NoticeSource.id)
-        .where(NoticeSource.source_name == source_name, Notice.title == title)
+        .where(
+            NoticeSource.source_name == source_name,
+            Notice.title == title,
+            Notice.application_start_date == start_date,
+            Notice.application_end_date == end_date,
+        )
     )
-    return result.scalars().first()
+    return list(result.scalars().all())
 
 
 async def delete_notice(session: AsyncSession, notice_id: int) -> None:
@@ -334,14 +356,21 @@ async def save_attachment(
 
 async def set_attachment_parsed_text(
     session: AsyncSession, attachment_id: int, parsed_text: str
-) -> None:
+) -> bool:
     """첨부파일 OCR 결과를 저장한다. save_attachment의 upsert는 재수집 시
-    parsed_text를 건드리지 않으므로, OCR 결과 저장은 이 함수로 따로 한다."""
-    await session.execute(
+    parsed_text를 건드리지 않으므로, OCR 결과 저장은 이 함수로 따로 한다.
+
+    반환값(True/False)으로 실제로 반영된 행이 있었는지 알려준다 —
+    다운로드·OCR(수십~백여 초)이 도는 동안 "기업마당 우선 정책"으로 이
+    첨부파일의 공고 자체가 지워질 수 있어(notice_collection_service의
+    중복 정리 로직 참고), 그 경우 0행이 반영되고 호출자가 이를 구분해
+    처리해야 한다."""
+    result = await session.execute(
         update(NoticeAttachment)
         .where(NoticeAttachment.id == attachment_id)
         .values(parsed_text=parsed_text)
     )
+    return result.rowcount > 0
 
 
 async def get_category_mapping(session: AsyncSession) -> dict[str, int]:
@@ -549,5 +578,34 @@ async def get_notice_attachments(
 ) -> list[NoticeAttachment]:
     result = await session.execute(
         select(NoticeAttachment).where(NoticeAttachment.notice_id == notice_id)
+    )
+    return list(result.scalars().all())
+
+
+async def get_notice_attachments_for_display(
+    session: AsyncSession, notice_id: int
+) -> list[NoticeAttachment]:
+    """공고 상세 조회처럼 parsed_text(OCR 원문)가 필요 없는 화면용으로
+    첨부파일 목록을 가져온다.
+
+    parsed_text는 첨부파일당 최대 수백 KB까지 나가는데(실측), 상세 조회
+    API 응답(NoticeAttachmentInfo)에는 파일명/URL/파일유형만 나가고
+    parsed_text는 아예 쓰이지 않는다. get_notice_attachments를 그대로
+    쓰면 응답에 쓰지도 않을 이 큰 컬럼을 매번 DB에서 읽어오게 되므로,
+    load_only로 실제 쓰는 컬럼만 가져온다. OCR 작업(notice_ocr.py)처럼
+    parsed_text 자체가 필요한 곳은 여전히 get_notice_attachments를 써야
+    한다."""
+    result = await session.execute(
+        select(NoticeAttachment)
+        .where(NoticeAttachment.notice_id == notice_id)
+        .options(
+            load_only(
+                NoticeAttachment.id,
+                NoticeAttachment.notice_id,
+                NoticeAttachment.file_name,
+                NoticeAttachment.file_url,
+                NoticeAttachment.file_type,
+            )
+        )
     )
     return list(result.scalars().all())

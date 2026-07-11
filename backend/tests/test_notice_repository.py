@@ -5,6 +5,8 @@ repositories/notice_repository.py의 공고(notice) 관련 함수 테스트.
 conftest.db_session(SAVEPOINT 롤백) 위에서 실제 DB로 검증한다.
 """
 
+from datetime import date
+
 import pytest
 
 from app.models.notice import Notice, NoticeAttachment
@@ -12,7 +14,7 @@ from app.models.notice_source import NoticeSource
 from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
     delete_notice,
-    find_notice_id_by_source_and_title,
+    find_notice_ids_by_source_title_and_dates,
     get_notice_attachments,
     get_notice_detail,
     get_notice_regions,
@@ -185,25 +187,73 @@ async def test_get_notices_missing_category_scoped_to_given_raw_model(db_session
 
 
 # ---------------------------------------------------------------------------
-# find_notice_id_by_source_and_title / delete_notice
+# find_notice_ids_by_source_title_and_dates / delete_notice
 # ---------------------------------------------------------------------------
 
 
-async def test_find_notice_id_by_source_and_title_matches_exact_title(db_session):
+async def test_find_notice_ids_by_source_title_and_dates_matches_exact_title_and_dates(
+    db_session,
+):
     source = await _create_source(db_session, "제목검색출처")
     notice_id = await _create_notice(
-        db_session, source, external_id="title-1", title="정확히 일치하는 제목"
+        db_session,
+        source,
+        external_id="title-1",
+        title="정확히 일치하는 제목",
+        application_start_date=date(2026, 1, 1),
+        application_end_date=date(2026, 1, 31),
     )
 
-    found = await find_notice_id_by_source_and_title(
-        db_session, "제목검색출처", "정확히 일치하는 제목"
+    found = await find_notice_ids_by_source_title_and_dates(
+        db_session,
+        "제목검색출처",
+        "정확히 일치하는 제목",
+        date(2026, 1, 1),
+        date(2026, 1, 31),
     )
-    not_found = await find_notice_id_by_source_and_title(
-        db_session, "제목검색출처", "다른 제목"
+    not_found_by_title = await find_notice_ids_by_source_title_and_dates(
+        db_session, "제목검색출처", "다른 제목", date(2026, 1, 1), date(2026, 1, 31)
     )
 
-    assert found == notice_id
-    assert not_found is None
+    assert found == [notice_id]
+    assert not_found_by_title == []
+
+
+async def test_find_notice_ids_by_source_title_and_dates_ignores_same_title_different_round(
+    db_session,
+):
+    """같은 출처 안에서도 제목이 같은 공고가 여러 건일 수 있다(실제 DB에서
+    확인: 매달 반복되는 K-Startup 모집 공고가 제목을 그대로 재사용해,
+    신청기간이 전혀 안 겹치는 회차 8개가 완전히 같은 제목으로 존재).
+    제목만 보고 매칭하면 지금 회차와 무관한 다른 회차까지 중복으로
+    오인하므로, 신청기간까지 같아야 매칭돼야 한다."""
+    source = await _create_source(db_session, "복수제목출처")
+    this_round = await _create_notice(
+        db_session,
+        source,
+        external_id="round-2",
+        title="반복되는 모집 공고",
+        application_start_date=date(2026, 3, 1),
+        application_end_date=date(2026, 3, 31),
+    )
+    await _create_notice(
+        db_session,
+        source,
+        external_id="round-1",
+        title="반복되는 모집 공고",
+        application_start_date=date(2026, 1, 1),
+        application_end_date=date(2026, 1, 31),
+    )
+
+    found = await find_notice_ids_by_source_title_and_dates(
+        db_session,
+        "복수제목출처",
+        "반복되는 모집 공고",
+        date(2026, 3, 1),
+        date(2026, 3, 31),
+    )
+
+    assert found == [this_round]
 
 
 async def test_delete_notice_removes_related_rows(db_session):
@@ -269,6 +319,31 @@ async def test_save_attachment_upsert_does_not_clobber_parsed_text(db_session):
     )
     assert reloaded.file_name == "new_name.pdf"
     assert reloaded.parsed_text == "OCR 결과 텍스트"
+
+
+async def test_set_attachment_parsed_text_returns_true_when_row_updated(db_session):
+    source = await _create_source(db_session, "저장성공출처")
+    notice_id = await _create_notice(db_session, source, external_id="attach-2")
+    await save_attachment(
+        db_session, notice_id, "공고문.pdf", "https://a.com/f.pdf", "PDF"
+    )
+    attachments = await get_notice_attachments(db_session, notice_id)
+
+    saved = await set_attachment_parsed_text(db_session, attachments[0].id, "텍스트")
+
+    assert saved is True
+
+
+async def test_set_attachment_parsed_text_returns_false_when_attachment_gone(
+    db_session,
+):
+    """다운로드·OCR이 도는 동안 "기업마당 우선 정책"으로 공고 자체가
+    cascade 삭제됐다면 attachment_id가 더 이상 존재하지 않는다 — 이 경우
+    호출자(notice_ocr)가 COMPLETED로 잘못 보고하지 않도록 False를 반환해야
+    한다."""
+    saved = await set_attachment_parsed_text(db_session, 999_999_999, "텍스트")
+
+    assert saved is False
 
 
 # ---------------------------------------------------------------------------

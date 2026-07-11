@@ -7,7 +7,7 @@ _TOTAL_SAMPLE_COUNT건을 채우는 게 목표다. 기업마당은 목록 API �
 첨부파일이 이미 있어(수집 시점에 채워짐) DB 조회만 하면 되지만,
 K-Startup은 목록 API에 첨부파일 정보가 없어 상세페이지를 크롤링해
 첨부파일을 먼저 찾는다(app/crawler/kstartup_attachment_client.py,
-notice_ocr.py의 _ensure_kstartup_attachments와 같은 방식) — 기업마당
+notice_ocr.py의 _save_kstartup_attachments와 같은 방식) — 기업마당
 쪽에서 목표치를 못 채우면 그 부족분만큼 K-Startup을 크롤링해서라도
 채운다.
 

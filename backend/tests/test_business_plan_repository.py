@@ -235,17 +235,24 @@ async def test_set_analysis_step_and_finish_analysis_update_row(
 async def test_list_recent_orders_by_created_at_desc_and_respects_limit(
     db_session, test_company_profile
 ):
+    # list_recent는 회사/사용자 필터 없이 "전체 중 최신"을 보는 관리자용
+    # 함수라(설계 의도), 이 테스트는 실제 개발 DB에 이미 있는 다른
+    # business_plan 행들과 같은 테이블에서 order by created_at desc 결과를
+    # 확인하게 된다. 과거 날짜(예: 2026-01-01)를 쓰면 실사용으로 쌓인
+    # "오늘"자 데이터가 항상 더 최근이라 이 테스트가 만드는 행이 절대
+    # 1등이 될 수 없어 실패한다 — 실DB에 쌓일 수 없는 미래 날짜를 써서
+    # 이 테스트가 만든 두 행이 항상 최신순 앞자리를 차지하게 한다.
     older = await _create_business_plan(
         db_session,
         test_company_profile,
         title="older",
-        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc).replace(tzinfo=None),
+        created_at=datetime(2099, 1, 1, tzinfo=timezone.utc).replace(tzinfo=None),
     )
     newer = await _create_business_plan(
         db_session,
         test_company_profile,
         title="newer",
-        created_at=datetime(2026, 6, 1, tzinfo=timezone.utc).replace(tzinfo=None),
+        created_at=datetime(2099, 6, 1, tzinfo=timezone.utc).replace(tzinfo=None),
     )
 
     result = await list_recent(db_session, limit=1)
