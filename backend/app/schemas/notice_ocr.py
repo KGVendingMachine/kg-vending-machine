@@ -58,3 +58,7 @@ class NoticeOcrBatchJobItem(BaseModel):
 
 class NoticeOcrBatchTriggerResponse(BaseModel):
     items: list[NoticeOcrBatchJobItem]
+
+
+class NoticeOcrBatchStatusResponse(BaseModel):
+    items: list[NoticeOcrJobStatusResponse]

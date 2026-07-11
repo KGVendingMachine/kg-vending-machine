@@ -30,7 +30,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crawler.bizinfo_client import download_bizinfo_attachment
@@ -49,6 +49,7 @@ from app.repositories.notice_repository import (
 )
 from app.schemas.notice_ocr import (
     NoticeOcrBatchJobItem,
+    NoticeOcrBatchStatusResponse,
     NoticeOcrBatchTriggerRequest,
     NoticeOcrBatchTriggerResponse,
     NoticeOcrJobAccepted,
@@ -413,6 +414,28 @@ async def start_notice_ocr_batch(
     if new_jobs:
         background_tasks.add_task(_run_batch_notice_ocr_jobs, new_jobs)
     return NoticeOcrBatchTriggerResponse(items=items)
+
+
+@router.get(
+    "/ocr/batch/status",
+    response_model=NoticeOcrBatchStatusResponse,
+    summary="공고 첨부파일 OCR 배치 상태 일괄 조회",
+    description=(
+        "배치 트리거(POST /ocr/batch) 응답의 job_id 목록으로 진행 상태를 한 번에 "
+        "조회한다. 트리거는 여러 건을 한 번에 시작할 수 있는데 상태 확인은 "
+        "건마다 따로 해야 하는 비대칭을 없애기 위한 용도. 존재하지 않는 "
+        "job_id는 조용히 결과에서 빠진다(단건 조회의 404와 다름 — 배치 중 "
+        "일부만 잘못된 job_id를 보내도 나머지 조회 자체가 실패하지 않게 함). "
+        "job_ids를 아예 안 보내면(호출자가 자기 쪽에서 이미 완료 처리한 job을 "
+        "다 걸러내고 남은 게 없는 경우 등) 422 대신 빈 목록을 반환한다."
+    ),
+)
+async def get_notice_ocr_batch_status(job_ids: list[str] = Query(default=[])):
+    # 배치 트리거(start_notice_ocr_batch)가 notice_id 중복을 순서 유지하며
+    # 제거하는 것과 동일하게, 같은 job_id가 여러 번 들어와도 응답에
+    # 중복으로 나가지 않게 한다.
+    items = [_JOBS[job_id] for job_id in dict.fromkeys(job_ids) if job_id in _JOBS]
+    return NoticeOcrBatchStatusResponse(items=items)
 
 
 @router.get(
