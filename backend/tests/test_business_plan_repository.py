@@ -131,9 +131,7 @@ async def test_get_owned_by_user_returns_none_when_plan_missing(db_session, test
 
 
 def _stale_before(minutes: int = 10) -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
-        minutes=minutes
-    )
+    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=minutes)
 
 
 async def test_try_claim_analysis_claims_when_never_started(

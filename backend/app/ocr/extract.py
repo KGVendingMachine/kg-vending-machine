@@ -36,6 +36,8 @@ def file_type_for_suffix(suffix: str) -> str:
     분석이 "IMAGE"로 덮어써 값이 어긋났다.
     """
     return _FILE_TYPE_BY_SUFFIX[suffix]
+
+
 # CLOVA OCR이 그대로 받아주는 이미지 포맷 (bmp/gif 등은 여기 없으면 png로 변환)
 _CLOVA_NATIVE_FORMATS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 # 임베드 이미지가 많은 PDF(수십 개)에서 순차 처리하면 문서 하나에 2분 넘게
