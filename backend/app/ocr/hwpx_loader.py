@@ -36,6 +36,25 @@ def _reject_unsafe_xml(xml_data: bytes) -> None:
         )
 
 
+# 압축 해제 폭탄(zip bomb) 방지용 상한. 실측: 100KB짜리 압축 항목을 제한
+# 없이 풀면 100MB로 부풀어 오름(0.3초) — HWPX는 사업계획서 업로드로 로그인한
+# 일반 사용자가 직접 올릴 수 있는 파일이라, 압축률이 비정상적으로 높은 ZIP
+# 항목 하나로 서버 메모리를 고갈시키는 게 가능했다. 실제 문서의 본문 XML·
+# 임베드 이미지가 이 크기를 넘는 경우는 없다고 보고 넉넉하게 잡은 값.
+_MAX_UNCOMPRESSED_ENTRY_SIZE = 100 * 1024 * 1024
+
+
+def _read_zip_entry_safely(zf: zipfile.ZipFile, name: str) -> bytes:
+    """압축 해제 전 선언된 크기(ZipInfo.file_size)를 먼저 확인해, 과도하게
+    큰 항목은 실제로 풀어보지도 않고 거부한다."""
+    info = zf.getinfo(name)
+    if info.file_size > _MAX_UNCOMPRESSED_ENTRY_SIZE:
+        raise RuntimeError(
+            f"HWPX 내부 파일이 너무 큽니다: {name} ({info.file_size} bytes)"
+        )
+    return zf.read(name)
+
+
 def extract_embedded_images(file_path: str) -> list[tuple[bytes, str]]:
     """HWPX 안에 그림으로 삽입된 표/차트 등의 원본 이미지를 꺼낸다.
 
@@ -51,7 +70,7 @@ def extract_embedded_images(file_path: str) -> list[tuple[bytes, str]]:
                 continue
             ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
             if ext in _IMAGE_EXTENSIONS:
-                images.append((zf.read(name), ext))
+                images.append((_read_zip_entry_safely(zf, name), ext))
     return images
 
 
@@ -84,7 +103,7 @@ class HWPXLoader(BaseLoader):
                 )
 
                 for section_file in section_files:
-                    xml_data = zf.read(section_file)
+                    xml_data = _read_zip_entry_safely(zf, section_file)
                     _reject_unsafe_xml(xml_data)
                     root = ET.fromstring(xml_data)
 

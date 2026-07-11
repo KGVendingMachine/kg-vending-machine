@@ -53,6 +53,20 @@ def test_hwpx_loader_rejects_doctype_entity_expansion_bomb(tmp_path):
         HWPXLoader(path).load()
 
 
+def test_hwpx_loader_rejects_entries_larger_than_size_cap(tmp_path, monkeypatch):
+    """압축 해제 폭탄(zip bomb) 방지 확인. 실제로 몇백MB짜리 파일을 만들
+    필요 없이 상한을 낮춰서, 선언된 크기가 상한을 넘는 항목을 실제로
+    압축 해제하기 전에 거부하는지만 검증한다(실측: 100KB 압축 항목을
+    제한 없이 풀면 100MB로 부풀어 오름, 0.3초)."""
+    import app.ocr.hwpx_loader as loader_module
+
+    monkeypatch.setattr(loader_module, "_MAX_UNCOMPRESSED_ENTRY_SIZE", 10)
+    path = _make_hwpx(b"<root>this content is longer than 10 bytes</root>", tmp_path)
+
+    with pytest.raises(RuntimeError, match="너무 큽니다"):
+        HWPXLoader(path).load()
+
+
 def test_hwpx_loader_wraps_malformed_xml_as_runtime_error(tmp_path):
     path = _make_hwpx(b"<not-closed>", tmp_path)
 

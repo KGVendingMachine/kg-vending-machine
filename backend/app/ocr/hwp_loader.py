@@ -11,6 +11,24 @@ from langchain_core.documents import Document
 
 _IMAGE_EXTENSIONS = (".bmp", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff")
 
+# 압축 해제 폭탄(zlib bomb) 방지용 상한. 실측: 100KB짜리 압축 스트림을
+# 제한 없이 풀면 100MB로 부풀어 오름(0.25초) — HWP는 사업계획서 업로드로
+# 로그인한 일반 사용자가 직접 올릴 수 있는 파일이라, 압축률이 비정상적으로
+# 높은 스트림을 넣어 서버 메모리를 고갈시키는 게 가능했다. 실제 문서의
+# BodyText 섹션·임베드 이미지가 이 크기를 넘는 경우는 없다고 보고 넉넉하게
+# 잡은 값.
+_MAX_DECOMPRESSED_SIZE = 100 * 1024 * 1024
+
+
+def _zlib_decompress_safely(data: bytes) -> bytes:
+    """HWP 스펙 고정값 -15(raw deflate)로 풀되, 결과가 _MAX_DECOMPRESSED_SIZE를
+    넘으면 예외를 던져 무제한 압축 해제를 막는다."""
+    decompressor = zlib.decompressobj(-15)
+    result = decompressor.decompress(data, _MAX_DECOMPRESSED_SIZE)
+    if decompressor.unconsumed_tail:
+        raise ValueError("HWP 스트림 압축 해제 결과가 허용 크기를 초과했습니다.")
+    return result
+
 
 def _is_compressed(load_file: olefile.OleFileIO) -> bool:
     with load_file.openstream("FileHeader") as header:
@@ -48,8 +66,8 @@ def extract_embedded_images(file_path: str) -> list[tuple[bytes, str]]:
                 data = stream.read()
             if compressed:
                 try:
-                    data = zlib.decompress(data, -15)
-                except zlib.error:
+                    data = _zlib_decompress_safely(data)
+                except (zlib.error, ValueError):
                     pass
             images.append((data, ext))
     return images
@@ -112,7 +130,7 @@ class HWPLoader(BaseLoader):
         # HWP는 zlib deflate로 압축돼 있는 경우가 많다. -15는 raw deflate
         # (zlib 헤더 없음)를 의미하며 HWP 포맷 스펙상 고정값이다.
         unpacked_data = (
-            zlib.decompress(data, -15) if _is_compressed(load_file) else data
+            _zlib_decompress_safely(data) if _is_compressed(load_file) else data
         )
 
         text = []
