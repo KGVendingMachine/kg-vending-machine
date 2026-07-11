@@ -17,6 +17,44 @@ def _section_number(name: str) -> int:
 _IMAGE_EXTENSIONS = (".bmp", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff")
 
 
+def _reject_unsafe_xml(xml_data: bytes) -> None:
+    """XML 엔티티 확장 공격("billion laughs") 방지.
+
+    정상적인 HWPX 본문 XML(Contents/section*.xml)은 그냥 문단·서식 마크업이라
+    DOCTYPE/커스텀 엔티티를 쓸 이유가 없다. 그런데 표준 라이브러리
+    xml.etree.ElementTree는 엔티티 확장 개수·깊이에 제한을 두지 않아서, 이
+    로더가 그대로 파싱하는 파일(사업계획서 업로드로 사용자가 직접 올리는
+    .hwpx도 포함 — ZIP 안의 XML이라 여기로 그대로 들어옴)에 악의적으로 중첩
+    엔티티를 넣으면 몇백 바이트짜리 파일이 파싱 시점에 기하급수적으로
+    부풀어(실측: 365바이트 → 30만자, 깊이 몇 단만 더 늘려도 기가바이트 단위)
+    서버 메모리를 고갈시킬 수 있다(DoS). DOCTYPE 선언 자체를 막아 원천
+    차단한다 — 정상 HWPX 파일은 DOCTYPE이 없으므로 오탐 위험이 없다.
+    """
+    if b"<!DOCTYPE" in xml_data:
+        raise RuntimeError(
+            "HWPX 문서에서 허용되지 않는 XML 선언(DOCTYPE)이 발견됐습니다."
+        )
+
+
+# 압축 해제 폭탄(zip bomb) 방지용 상한. 실측: 100KB짜리 압축 항목을 제한
+# 없이 풀면 100MB로 부풀어 오름(0.3초) — HWPX는 사업계획서 업로드로 로그인한
+# 일반 사용자가 직접 올릴 수 있는 파일이라, 압축률이 비정상적으로 높은 ZIP
+# 항목 하나로 서버 메모리를 고갈시키는 게 가능했다. 실제 문서의 본문 XML·
+# 임베드 이미지가 이 크기를 넘는 경우는 없다고 보고 넉넉하게 잡은 값.
+_MAX_UNCOMPRESSED_ENTRY_SIZE = 100 * 1024 * 1024
+
+
+def _read_zip_entry_safely(zf: zipfile.ZipFile, name: str) -> bytes:
+    """압축 해제 전 선언된 크기(ZipInfo.file_size)를 먼저 확인해, 과도하게
+    큰 항목은 실제로 풀어보지도 않고 거부한다."""
+    info = zf.getinfo(name)
+    if info.file_size > _MAX_UNCOMPRESSED_ENTRY_SIZE:
+        raise RuntimeError(
+            f"HWPX 내부 파일이 너무 큽니다: {name} ({info.file_size} bytes)"
+        )
+    return zf.read(name)
+
+
 def extract_embedded_images(file_path: str) -> list[tuple[bytes, str]]:
     """HWPX 안에 그림으로 삽입된 표/차트 등의 원본 이미지를 꺼낸다.
 
@@ -32,7 +70,7 @@ def extract_embedded_images(file_path: str) -> list[tuple[bytes, str]]:
                 continue
             ext = "." + name.rsplit(".", 1)[-1].lower() if "." in name else ""
             if ext in _IMAGE_EXTENSIONS:
-                images.append((zf.read(name), ext))
+                images.append((_read_zip_entry_safely(zf, name), ext))
     return images
 
 
@@ -65,7 +103,8 @@ class HWPXLoader(BaseLoader):
                 )
 
                 for section_file in section_files:
-                    xml_data = zf.read(section_file)
+                    xml_data = _read_zip_entry_safely(zf, section_file)
+                    _reject_unsafe_xml(xml_data)
                     root = ET.fromstring(xml_data)
 
                     # HWPX(OWPML) 표준의 텍스트 태그는 보통 't' 또는 네임스페이스를

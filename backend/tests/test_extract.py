@@ -138,6 +138,46 @@ async def test_image_conversion_does_not_block_event_loop(monkeypatch):
     assert tick_count >= 5
 
 
+async def test_pdf_native_extraction_times_out_instead_of_hanging_forever(
+    monkeypatch, tmp_path
+):
+    """실제로 재현함(2026-07-12): 100KB짜리 FlateDecode 압축 스트림을 극단적으로
+    압축해 넣은 PDF를 pdfplumber.extract_text()에 넘기면 30초+ 동안 CPU를
+    점유한 채 끝나지 않았다(압축 해제 폭탄, hwp/hwpx의 zlib/zip bomb와 같은
+    문제지만 pdfplumber/pypdf 내부라 우리가 직접 크기 제한을 걸 수 없다).
+    사업계획서 업로드로 로그인한 일반 사용자가 도달 가능한 DoS 벡터라
+    처리 시간 자체에 상한(asyncio.wait_for)을 걸어, 시간 초과 시 CLOVA
+    OCR 폴백으로 넘어가고(빈 문자열 취급) 요청 자체가 무한정 멈추지
+    않게 해야 한다."""
+    file_path = tmp_path / "sample.pdf"
+    file_path.write_bytes(b"dummy")
+
+    monkeypatch.setattr(extract_module, "_PDF_EXTRACTION_TIMEOUT_SECONDS", 0.05)
+
+    def hanging_extract_native_pdf_text(path: str) -> str:
+        time.sleep(_BLOCKING_DURATION_SECONDS)  # 상한(0.05초)보다 훨씬 긺
+        return "이 값은 절대 안 쓰여야 한다"
+
+    async def fake_fetch_clova_ocr_text(path: str) -> str:
+        return "CLOVA 폴백 텍스트"
+
+    monkeypatch.setattr(
+        extract_module, "_extract_native_pdf_text", hanging_extract_native_pdf_text
+    )
+    monkeypatch.setattr(
+        extract_module, "fetch_clova_ocr_text", fake_fetch_clova_ocr_text
+    )
+
+    t0 = time.monotonic()
+    text, file_type = await extract_text(str(file_path))
+    elapsed = time.monotonic() - t0
+
+    assert text == "CLOVA 폴백 텍스트"
+    # 상한(0.05초) 근처에서 끝나야 한다 — 실제 블로킹 시간(0.3초)까지
+    # 기다렸다면 시간 초과가 작동하지 않은 것.
+    assert elapsed < _BLOCKING_DURATION_SECONDS
+
+
 async def test_extract_text_strips_nul_bytes(monkeypatch, tmp_path):
     """PostgreSQL은 인코딩과 무관하게 text/varchar 컬럼에 NUL(0x00) 바이트를
     저장하지 못한다(CharacterNotInRepertoireError). 실제 공고 PDF 샘플에서

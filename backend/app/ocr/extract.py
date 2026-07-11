@@ -27,6 +27,20 @@ _FILE_TYPE_BY_SUFFIX = {
 # 동일하게 두어(단일 소스), 업로드는 됐는데 OCR 단계에서 못 여는 상황을 막는다.
 SUPPORTED_UPLOAD_SUFFIXES = frozenset(_FILE_TYPE_BY_SUFFIX)
 
+# pdfplumber/pypdf의 PDF 내부 압축 스트림 처리에는 결과 크기·처리 시간
+# 제한이 없다(hwp_loader/hwpx_loader와 같은 문제). 실제로 재현함: 100KB
+# 짜리 FlateDecode 스트림 하나를 극단적으로 압축해 넣은 PDF를
+# pdfplumber.extract_text()에 넘기면 30초+ 동안 CPU를 점유한 채 끝나지
+# 않았다. 사업계획서 업로드로 로그인한 일반 사용자가 직접 올릴 수 있는
+# 파일이라 실제 도달 가능한 DoS 벡터다. hwp/hwpx처럼 결과 크기 자체를
+# 제한할 방법이 라이브러리 내부에 없어(우리가 직접 압축 해제 호출을
+# 하는 게 아니라 pdfplumber/pypdf 안에서 일어남), 대신 처리 시간에
+# 상한을 걸어 요청이 무한정 멈추지 않게 한다 — asyncio.to_thread로 돌린
+# 스레드 자체는 시간 초과 후에도 계속 실행되지만(강제 종료 불가), 적어도
+# 이 요청은 실패로 넘어가 CLOVA OCR 폴백으로 진행되거나 사용자에게
+# 오류로 보고된다.
+_PDF_EXTRACTION_TIMEOUT_SECONDS = 30
+
 
 def file_type_for_suffix(suffix: str) -> str:
     """business_plan.file_type에 저장할 값 (예: ".jpg" -> "IMAGE").
@@ -87,10 +101,14 @@ async def extract_text(file_path: str) -> tuple[str, str]:
         text = await _append_embedded_image_text(text, images)
     elif suffix == ".pdf":
         try:
-            native_text = await asyncio.to_thread(_extract_native_pdf_text, file_path)
+            native_text = await asyncio.wait_for(
+                asyncio.to_thread(_extract_native_pdf_text, file_path),
+                timeout=_PDF_EXTRACTION_TIMEOUT_SECONDS,
+            )
         except Exception:
-            # PdfReader가 아예 못 여는 파일(암호화·손상 등)이면 빈 문자열로
-            # 두고 아래 분기에서 CLOVA OCR로 넘어가게 한다.
+            # PdfReader/pdfplumber가 아예 못 여는 파일(암호화·손상 등)이거나
+            # 압축 해제 폭탄으로 시간 초과된 경우 빈 문자열로 두고 아래
+            # 분기에서 CLOVA OCR로 넘어가게 한다.
             native_text = ""
         if len(native_text) < get_settings().PDF_OCR_TEXT_THRESHOLD:
             # 네이티브 텍스트가 거의 없으면 스캔본으로 보고 페이지 전체를
@@ -101,9 +119,15 @@ async def extract_text(file_path: str) -> tuple[str, str]:
             # 네이티브 텍스트는 있어도 본문에 그림으로 삽입된 차트·스크린샷은
             # 텍스트로 안 잡힌다 (실제 샘플에서 쿠팡 판매 스크린샷 확인함) —
             # HWP/HWPX와 동일하게 임베드 이미지를 보완 OCR한다.
-            images = await asyncio.to_thread(
-                _extract_images_safely, _extract_pdf_images, file_path
-            )
+            try:
+                images = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        _extract_images_safely, _extract_pdf_images, file_path
+                    ),
+                    timeout=_PDF_EXTRACTION_TIMEOUT_SECONDS,
+                )
+            except Exception:
+                images = []
             text = await _append_embedded_image_text(native_text, images)
     else:
         text = await fetch_clova_ocr_text(file_path)
