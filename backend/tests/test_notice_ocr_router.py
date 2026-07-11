@@ -16,6 +16,7 @@ from app.api.notice_ocr import (
     _has_active_job_for_notice,
     _pick_ocr_target,
     _run_batch_notice_ocr_jobs,
+    get_notice_ocr_batch_status,
     get_notice_ocr_status,
     start_notice_ocr,
     start_notice_ocr_batch,
@@ -357,3 +358,44 @@ async def test_start_notice_ocr_batch_schedules_no_task_when_all_jobs_already_ac
 
     assert response.items[0].job_id == "existing"
     assert len(background_tasks.tasks) == 0
+
+
+# ---------------------------------------------------------------------------
+# get_notice_ocr_batch_status
+# ---------------------------------------------------------------------------
+
+
+async def test_get_notice_ocr_batch_status_returns_requested_jobs_in_order():
+    """배치 트리거는 여러 건을 한 번에 시작할 수 있는데, 상태 확인은 건마다
+    따로 해야 하는 비대칭이 있었다 — 이를 없애기 위한 일괄 조회."""
+    _JOBS["job-a"] = NoticeOcrJobStatusResponse(
+        job_id="job-a", notice_id=1, status=NoticeOcrJobStatus.COMPLETED, char_count=10
+    )
+    _JOBS["job-b"] = NoticeOcrJobStatusResponse(
+        job_id="job-b", notice_id=2, status=NoticeOcrJobStatus.RUNNING
+    )
+
+    response = await get_notice_ocr_batch_status(job_ids=["job-a", "job-b"])
+
+    assert [item.job_id for item in response.items] == ["job-a", "job-b"]
+    assert response.items[0].status == NoticeOcrJobStatus.COMPLETED
+    assert response.items[1].status == NoticeOcrJobStatus.RUNNING
+
+
+async def test_get_notice_ocr_batch_status_silently_skips_unknown_job_ids():
+    """단건 조회(get_notice_ocr_status)는 모르는 job_id면 404를 내지만,
+    배치 조회는 그중 일부가 잘못돼도 나머지 조회 자체가 실패하면 안 되므로
+    조용히 결과에서 뺀다."""
+    _JOBS["job-a"] = NoticeOcrJobStatusResponse(
+        job_id="job-a", notice_id=1, status=NoticeOcrJobStatus.COMPLETED
+    )
+
+    response = await get_notice_ocr_batch_status(job_ids=["job-a", "존재하지-않는-job"])
+
+    assert [item.job_id for item in response.items] == ["job-a"]
+
+
+async def test_get_notice_ocr_batch_status_returns_empty_items_for_empty_input():
+    response = await get_notice_ocr_batch_status(job_ids=[])
+
+    assert response.items == []
