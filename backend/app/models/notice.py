@@ -112,6 +112,11 @@ class NoticeChunk(Base):
 
 class NoticeAttachment(Base):
     __tablename__ = "notice_attachment"
+    __table_args__ = (
+        UniqueConstraint(
+            "notice_id", "file_url", name="uq_notice_attachment_notice_id_file_url"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
     notice_id: Mapped[int] = mapped_column(ForeignKey("notice.id"), nullable=False)
