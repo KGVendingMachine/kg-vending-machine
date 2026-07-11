@@ -245,42 +245,41 @@ async def replace_notice_region(
         )
 
 
-async def find_notice_id_by_source_and_title(
-    session: AsyncSession, source_name: str, title: str
-) -> int | None:
-    """특정 출처(source_name)에서 제목이 정확히 일치하는 공고가 있는지 확인한다
-    (있으면 그중 하나의 id). 존재 여부만 boolean처럼 쓰는 호출자용 —
-    실제로 몇 건이 매칭되는지, 어느 것을 골랐는지가 중요하면
-    find_notice_ids_by_source_and_title를 대신 쓴다.
+async def find_notice_ids_by_source_title_and_dates(
+    session: AsyncSession,
+    source_name: str,
+    title: str,
+    start_date: date | None,
+    end_date: date | None,
+) -> list[int]:
+    """특정 출처(source_name)에서 제목과 신청기간(시작일·종료일)이 모두
+    일치하는 공고 id를 전부 찾는다.
 
     기업마당과 K-Startup에 같은 사업이 각자 다른 external_id로 중복
-    등록되는 경우가 있어, 제목 기준으로 다른 출처의 공고를 찾기 위해
-    쓴다. 소스별 유일 키(external_id)가 서로 달라 그것만으로는
-    중복을 판단할 수 없다.
+    등록되는 경우, 제목 기준으로 다른 출처의 공고를 찾아 정리/스킵하는데
+    쓴다. 소스별 유일 키(external_id)가 서로 달라 그것만으로는 중복을
+    판단할 수 없기 때문인데, **제목만으로도 부족하다** — 실제 DB로
+    확인해보니 정기 반복되는 모집 공고가 매 회차 제목을 그대로 재사용해,
+    신청기간이 전혀 겹치지 않는 회차 8개가 완전히 같은 제목으로 존재하는
+    경우가 있었다. 제목만 보고 중복 판정하면 서로 다른 회차의 기록을
+    같은 사업의 교차 등록으로 오인해 지우거나(실제로는 지우면 안 될
+    과거 회차 삭제) 새 회차 저장을 건너뛰는(실제로는 저장해야 할 새
+    회차 누락) 문제가 생긴다. 제목과 신청기간이 전부 같아야 "같은
+    회차가 두 출처에 교차 등록된 것"으로 본다.
+
+    start_date/end_date 중 하나라도 없으면(파싱 실패 등) 호출자가 이
+    함수를 부르지 않고 건너뛰는 것을 전제로 한다 — 날짜 없이 제목만
+    비교하면 위 문제가 그대로 재현되기 때문이다.
     """
     result = await session.execute(
         select(Notice.id)
         .join(NoticeSource, Notice.source_id == NoticeSource.id)
-        .where(NoticeSource.source_name == source_name, Notice.title == title)
-    )
-    return result.scalars().first()
-
-
-async def find_notice_ids_by_source_and_title(
-    session: AsyncSession, source_name: str, title: str
-) -> list[int]:
-    """특정 출처(source_name)에서 제목이 정확히 일치하는 공고 id를 전부 찾는다.
-
-    같은 출처 안에서도 같은 제목이 여러 번 등장할 수 있다(실제 DB 확인:
-    K-Startup에 동일 제목의 정기 모집 공고가 8건까지 있는 경우도 있음
-    — 매달 반복되는 모집 공고가 제목을 그대로 재사용하는 경우가 흔함).
-    find_notice_id_by_source_and_title처럼 첫 건 하나만 반환하면, 삭제
-    같은 작업에서 나머지 동일 제목 공고가 정리 안 된 채 남는다.
-    """
-    result = await session.execute(
-        select(Notice.id)
-        .join(NoticeSource, Notice.source_id == NoticeSource.id)
-        .where(NoticeSource.source_name == source_name, Notice.title == title)
+        .where(
+            NoticeSource.source_name == source_name,
+            Notice.title == title,
+            Notice.application_start_date == start_date,
+            Notice.application_end_date == end_date,
+        )
     )
     return list(result.scalars().all())
 
