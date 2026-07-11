@@ -48,8 +48,13 @@ def _extract_profile(user_info: dict) -> dict:
     }
 
 
-async def login_with_kakao(session: AsyncSession, code: str) -> dict[str, str]:
-    """인가 코드로 로그인을 처리하고 자체 JWT 토큰 쌍을 반환한다."""
+async def login_with_kakao(session: AsyncSession, code: str) -> dict[str, str | int]:
+    """인가 코드로 로그인을 처리하고 자체 JWT 토큰 쌍을 반환한다.
+
+    user_id도 함께 돌려준다 - 로그인 콜백이 로그인 직후 리다이렉트 대상을
+    결정하려면(예: 기업 프로필 작성 여부) 토큰 발급과 별개로 유저를 알아야
+    한다. TokenResponse에는 없는 필드라 extra로 무시된다.
+    """
     kakao_token = await kakao_client.exchange_code_for_token(code)
     user_info = await kakao_client.fetch_kakao_user(kakao_token)
     fields = _extract_profile(user_info)
@@ -65,6 +70,7 @@ async def login_with_kakao(session: AsyncSession, code: str) -> dict[str, str]:
         "access_token": create_access_token(user.id, role=user.role),
         "refresh_token": create_refresh_token(user.id),
         "token_type": "bearer",
+        "user_id": user.id,
     }
 
 

@@ -21,6 +21,7 @@ from app.schemas.auth import (
     TokenResponse,
     UserResponse,
 )
+from app.services import company_service
 from app.services.auth_service import (
     InactiveAccountError,
     RefreshTokenError,
@@ -136,7 +137,15 @@ async def kakao_login_callback(
     except InactiveAccountError:
         return _to_login_with_error("inactive_account")
 
-    response = RedirectResponse(f"{settings.FRONTEND_URL}/company-profile")
+    # 기업 프로필을 이미 작성한 유저는 그 페이지를 건너뛰고 바로 업로드로
+    # 보낸다. 미작성/신규 유저만 프로필 작성 페이지로 보낸다.
+    profile = await company_service.get_my_profile(session, tokens["user_id"])
+    next_path = (
+        "/upload"
+        if company_service.is_profile_complete(profile)
+        else "/company-profile"
+    )
+    response = RedirectResponse(f"{settings.FRONTEND_URL}{next_path}")
     set_access_cookie(response, tokens["access_token"])
     set_refresh_cookie(response, tokens["refresh_token"])
     response.delete_cookie(STATE_COOKIE_NAME)

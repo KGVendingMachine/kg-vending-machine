@@ -15,6 +15,18 @@ async def get_my_profile(session: AsyncSession, user_id: int) -> CompanyProfile 
     return await company_repository.get_primary_by_user(session, user_id)
 
 
+def is_profile_complete(profile: CompanyProfile | None) -> bool:
+    """프로필 작성이 실질적으로 끝났다고 볼 수 있는지 판단한다.
+
+    upsert_primary는 빈 필드로도 row를 만들 수 있어 "row가 존재한다"만으로는
+    작성 완료를 보장하지 못한다. 대표자명/사업자등록번호 중 하나라도 채워져
+    있으면 실제로 입력을 진행한 것으로 본다.
+    """
+    if profile is None:
+        return False
+    return bool(profile.representative_name or profile.business_registration_number)
+
+
 async def save_my_profile(
     session: AsyncSession, user_id: int, fields: dict
 ) -> CompanyProfile:
