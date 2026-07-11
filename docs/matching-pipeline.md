@@ -83,7 +83,7 @@
     OCR과 완전히 같은 함수를 재사용하므로, 공고문도 CLOVA OCR을 바로 부르지 않고
     네이티브 텍스트(pdfplumber/HWP·HWPX 로더)를 먼저 시도한다.
 - **1차 필터링 통과 후보 여러 건을 한 번에 OCR 돌리는 법 (2026-07-11 추가, `app/api/notice_ocr.py` 담당 영역)**: 1차 필터링 결과가 보통 공고 하나가 아니라 여러 건이므로, 후보마다 `POST /internal/notices/{notice_id}/ocr`를 반복 호출하는 대신 아래 배치 흐름을 쓴다.
-  1. `POST /internal/notices/ocr/batch` — body에 `{"notice_ids": [1, 2, 3, ...]}` (최대 30건). 이미 진행 중인 공고는 (단건 트리거의 409와 달리) 새로 시작하지 않고 기존 job을 그대로 응답에 포함하므로, 배치 호출 자체가 실패하는 일은 없다.
+  1. `POST /internal/notices/ocr/batch` — body에 `{"notice_ids": [1, 2, 3, ...]}` (**한 번의 호출당 최대 30건** — 전체 처리 가능 건수 제한이 아니라 요청 하나의 상한이다). 이미 진행 중인 공고는 (단건 트리거의 409와 달리) 새로 시작하지 않고 기존 job을 그대로 응답에 포함하므로, 배치 호출 자체가 실패하는 일은 없다. 1차 필터링 후보가 30건을 넘으면 API가 알아서 나눠 처리해주지 않으므로(31건 이상은 그냥 400으로 거부됨), **호출하는 쪽이 30건 단위로 쪼개 여러 번 호출해야 한다.**
   2. 응답의 `items[].job_id`로 `GET /internal/notices/{notice_id}/ocr/{job_id}`를 폴링해 전부 `COMPLETED`(또는 `FAILED`/`NO_ATTACHMENT`/`UNSUPPORTED_FORMAT`)가 될 때까지 기다린다.
   3. 결과 텍스트(`notice_attachment.parsed_text`)를 실제로 읽을 때는 `notice_id`마다 따로 조회하지 말고 `app/repositories/notice_repository.py`의 `get_notice_attachments_by_ids(session, notice_ids)`로 한 번에 가져온다(N+1 쿼리 방지, `get_notice_regions_by_ids`와 같은 패턴).
 - 왜 텍스트 추출·임베딩은 1차 필터링 후에만 하는가: PDF OCR + 임베딩은 비용이 크기 때문에, 명백히 부적합한 공고까지 전부 처리하지 않기 위함이다 (첨부파일 메타데이터 자체는 위처럼 수집 시점에 미리 채워두지만, 텍스트 추출까지 미리 하지는 않는다).
