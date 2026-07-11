@@ -305,6 +305,18 @@ def _has_active_job_for_notice(notice_id: int) -> bool:
     return _active_job_for_notice(notice_id) is not None
 
 
+def _create_pending_job(notice_id: int) -> NoticeOcrJobStatusResponse:
+    """PENDING 상태의 job을 만들어 _JOBS에 등록한다 (백그라운드 실행은 등록하지
+    않음). 단건/배치 트리거 둘 다 여기서 job을 만들고, 실행 방식(백그라운드
+    태스크를 개별로 등록할지 묶어서 등록할지)만 호출자가 다르게 가져간다."""
+    job_id = str(uuid.uuid4())
+    job = NoticeOcrJobStatusResponse(
+        job_id=job_id, notice_id=notice_id, status=NoticeOcrJobStatus.PENDING
+    )
+    _JOBS[job_id] = job
+    return job
+
+
 def _start_notice_ocr_job(
     notice_id: int, background_tasks: BackgroundTasks
 ) -> NoticeOcrJobStatusResponse:
@@ -313,12 +325,8 @@ def _start_notice_ocr_job(
     단건 트리거(start_notice_ocr)에서만 쓴다 — 배치 트리거는 여러 건을
     동시에 돌려야 해서 _run_batch_notice_ocr_jobs를 따로 쓴다(아래 참고).
     """
-    job_id = str(uuid.uuid4())
-    job = NoticeOcrJobStatusResponse(
-        job_id=job_id, notice_id=notice_id, status=NoticeOcrJobStatus.PENDING
-    )
-    _JOBS[job_id] = job
-    background_tasks.add_task(_execute_notice_ocr_job, job_id, notice_id)
+    job = _create_pending_job(notice_id)
+    background_tasks.add_task(_execute_notice_ocr_job, job.job_id, notice_id)
     return job
 
 
@@ -394,14 +402,11 @@ async def start_notice_ocr_batch(
             )
             continue
 
-        job_id = str(uuid.uuid4())
-        _JOBS[job_id] = NoticeOcrJobStatusResponse(
-            job_id=job_id, notice_id=notice_id, status=NoticeOcrJobStatus.PENDING
-        )
-        new_jobs.append((job_id, notice_id))
+        job = _create_pending_job(notice_id)
+        new_jobs.append((job.job_id, notice_id))
         items.append(
             NoticeOcrBatchJobItem(
-                notice_id=notice_id, job_id=job_id, status=NoticeOcrJobStatus.PENDING
+                notice_id=notice_id, job_id=job.job_id, status=job.status
             )
         )
 
