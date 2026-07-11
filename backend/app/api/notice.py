@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.repositories.notice_repository import (
-    get_notice_attachments,
+    get_notice_attachments_for_display,
     get_notice_detail,
     get_notice_regions,
     get_notice_regions_by_ids,
@@ -93,7 +93,7 @@ async def get_notice(
 
     regions = await get_notice_regions(session, notice_id)
     target_types = await get_notice_target_types(session, notice_id)
-    attachments = await get_notice_attachments(session, notice_id)
+    attachments = await get_notice_attachments_for_display(session, notice_id)
 
     return NoticeDetail(
         id=notice.id,

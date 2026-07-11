@@ -4,6 +4,7 @@ from sqlalchemy import Integer, cast, delete, func, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from app.models.category import CategoryMapping, KgCategory
 from app.models.notice import Notice, NoticeAttachment, NoticeRegion, NoticeTargetType
@@ -556,5 +557,34 @@ async def get_notice_attachments(
 ) -> list[NoticeAttachment]:
     result = await session.execute(
         select(NoticeAttachment).where(NoticeAttachment.notice_id == notice_id)
+    )
+    return list(result.scalars().all())
+
+
+async def get_notice_attachments_for_display(
+    session: AsyncSession, notice_id: int
+) -> list[NoticeAttachment]:
+    """공고 상세 조회처럼 parsed_text(OCR 원문)가 필요 없는 화면용으로
+    첨부파일 목록을 가져온다.
+
+    parsed_text는 첨부파일당 최대 수백 KB까지 나가는데(실측), 상세 조회
+    API 응답(NoticeAttachmentInfo)에는 파일명/URL/파일유형만 나가고
+    parsed_text는 아예 쓰이지 않는다. get_notice_attachments를 그대로
+    쓰면 응답에 쓰지도 않을 이 큰 컬럼을 매번 DB에서 읽어오게 되므로,
+    load_only로 실제 쓰는 컬럼만 가져온다. OCR 작업(notice_ocr.py)처럼
+    parsed_text 자체가 필요한 곳은 여전히 get_notice_attachments를 써야
+    한다."""
+    result = await session.execute(
+        select(NoticeAttachment)
+        .where(NoticeAttachment.notice_id == notice_id)
+        .options(
+            load_only(
+                NoticeAttachment.id,
+                NoticeAttachment.notice_id,
+                NoticeAttachment.file_name,
+                NoticeAttachment.file_url,
+                NoticeAttachment.file_type,
+            )
+        )
     )
     return list(result.scalars().all())
