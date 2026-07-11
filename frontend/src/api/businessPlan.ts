@@ -1,10 +1,24 @@
-import { ApiError } from './client'
+import { apiFetch, ApiError } from './client'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
 /** 사업계획서 파일 업로드 결과. 생성된 business_plan row의 id를 돌려받는다. */
 export interface BusinessPlanUploadResult {
   id: number
+}
+
+/** GET /business-plans/me 응답. 로그인한 유저가 마지막으로 업로드한 사업계획서. */
+export interface BusinessPlanSummary {
+  id: number
+  title: string | null
+  file_type: string | null
+  uploaded_at: string
+  analysis_status: 'pending' | 'processing' | 'completed' | 'failed' | null
+}
+
+/** 로그인한 유저가 마지막으로 업로드한 사업계획서를 조회한다. 없으면 null. */
+export function getMyBusinessPlan(): Promise<BusinessPlanSummary | null> {
+  return apiFetch<BusinessPlanSummary | null>('/api/business-plans/me')
 }
 
 /**

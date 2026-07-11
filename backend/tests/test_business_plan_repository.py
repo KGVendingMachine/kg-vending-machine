@@ -17,6 +17,7 @@ from app.repositories.business_plan_repository import (
     BusinessPlanNotFoundError,
     finish_analysis,
     get_by_id,
+    get_latest_by_company_profile,
     get_owned_by_user,
     get_raw_text,
     list_recent,
@@ -252,3 +253,50 @@ async def test_list_recent_orders_by_created_at_desc_and_respects_limit(
     assert len(result) == 1
     assert result[0].id == newer.id
     assert result[0].id != older.id
+
+
+async def test_get_latest_by_company_profile_returns_none_when_no_plans(
+    db_session, test_company_profile
+):
+    result = await get_latest_by_company_profile(db_session, test_company_profile.id)
+
+    assert result is None
+
+
+async def test_get_latest_by_company_profile_returns_most_recently_uploaded(
+    db_session, test_company_profile
+):
+    older = await _create_business_plan(
+        db_session,
+        test_company_profile,
+        title="older",
+        uploaded_at=datetime(2026, 1, 1, tzinfo=timezone.utc).replace(tzinfo=None),
+    )
+    newer = await _create_business_plan(
+        db_session,
+        test_company_profile,
+        title="newer",
+        uploaded_at=datetime(2026, 6, 1, tzinfo=timezone.utc).replace(tzinfo=None),
+    )
+
+    result = await get_latest_by_company_profile(db_session, test_company_profile.id)
+
+    assert result is not None
+    assert result.id == newer.id
+    assert result.id != older.id
+
+
+async def test_get_latest_by_company_profile_ignores_other_profiles(
+    db_session, test_user, test_company_profile
+):
+    other_user = User(kakao_id="other-kakao-id")
+    db_session.add(other_user)
+    await db_session.flush()
+    other_profile = CompanyProfile(user_id=other_user.id)
+    db_session.add(other_profile)
+    await db_session.flush()
+    await _create_business_plan(db_session, other_profile, title="other's plan")
+
+    result = await get_latest_by_company_profile(db_session, test_company_profile.id)
+
+    assert result is None

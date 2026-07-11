@@ -149,6 +149,18 @@ class BusinessPlanUploadResponse(BaseModel):
     file_type: str | None = None
 
 
+class BusinessPlanSummaryResponse(BaseModel):
+    """GET /business-plans/me 응답. 파일 원본 경로(file_url)는 노출하지 않는다."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str | None = None
+    file_type: str | None = None
+    uploaded_at: datetime
+    analysis_status: JobStatus | None = None
+
+
 class NormalizeRequest(BaseModel):
     """
     운영 환경 기본 흐름: body 없이 호출 -> 서버가 business_plan.raw_text를

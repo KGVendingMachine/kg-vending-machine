@@ -76,6 +76,19 @@ async def get_owned_by_user(
     return result.scalar_one_or_none()
 
 
+async def get_latest_by_company_profile(
+    session: AsyncSession, company_profile_id: int
+) -> BusinessPlan | None:
+    """해당 기업 프로필의 가장 최근 업로드 business_plan을 반환한다."""
+    result = await session.execute(
+        select(BusinessPlan)
+        .where(BusinessPlan.company_profile_id == company_profile_id)
+        .order_by(BusinessPlan.uploaded_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_raw_text(session: AsyncSession, business_plan_id: int) -> str | None:
     """
     Return raw_text for normalization.
