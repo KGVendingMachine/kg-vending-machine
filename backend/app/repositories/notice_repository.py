@@ -582,6 +582,28 @@ async def get_notice_attachments(
     return list(result.scalars().all())
 
 
+async def get_notice_attachments_by_ids(
+    session: AsyncSession, notice_ids: list[int]
+) -> dict[int, list[NoticeAttachment]]:
+    """여러 공고의 첨부파일(parsed_text 포함)을 notice_id -> 목록으로 묶어 반환한다.
+
+    OCR 배치 트리거(POST /internal/notices/ocr/batch)로 여러 공고를 한 번에
+    돌린 뒤, 그 결과(parsed_text)를 가져다 쓰는 쪽(예: 2차 필터링 임베딩
+    적재)이 notice_id마다 get_notice_attachments를 따로 호출하면 배치
+    건수만큼 쿼리가 나간다(N+1). get_notice_regions_by_ids와 같은 패턴으로
+    한 번에 가져온다. parsed_text가 필요 없으면
+    get_notice_attachments_for_display를 쓴다."""
+    if not notice_ids:
+        return {}
+    result = await session.execute(
+        select(NoticeAttachment).where(NoticeAttachment.notice_id.in_(notice_ids))
+    )
+    attachments_by_notice: dict[int, list[NoticeAttachment]] = {}
+    for attachment in result.scalars().all():
+        attachments_by_notice.setdefault(attachment.notice_id, []).append(attachment)
+    return attachments_by_notice
+
+
 async def get_notice_attachments_for_display(
     session: AsyncSession, notice_id: int
 ) -> list[NoticeAttachment]:
