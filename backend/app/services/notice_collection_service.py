@@ -13,6 +13,7 @@ from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
     delete_notice,
     find_notice_id_by_source_and_title,
+    find_notice_ids_by_source_and_title,
     get_bizinfo_notices_with_raw,
     get_category_mapping,
     get_kstartup_notices_with_raw,
@@ -455,11 +456,16 @@ async def _process_bizinfo_item(
             # 중복 등록되는 경우, 제목이 같으면 기업마당을 우선한다.
             # K-Startup을 먼저 수집해서 이미 저장돼 있었더라도 여기서
             # 정리한다.
+            #
+            # 같은 제목의 K-Startup 공고가 여러 건일 수 있어(실제 DB
+            # 확인: 매달 반복되는 모집 공고가 제목을 그대로 재사용해
+            # 8건까지 쌓인 경우도 있음) 첫 건 하나만 지우면 나머지가
+            # 안 지워진 채 남는다 — 매칭되는 전부를 지운다.
             if title:
-                duplicate_id = await find_notice_id_by_source_and_title(
+                duplicate_ids = await find_notice_ids_by_source_and_title(
                     session, KSTARTUP_SOURCE_NAME, title
                 )
-                if duplicate_id is not None:
+                for duplicate_id in duplicate_ids:
                     logger.info(
                         "기업마당 우선 정책으로 K-Startup 중복 공고 삭제: %r", title
                     )

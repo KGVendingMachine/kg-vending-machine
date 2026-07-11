@@ -13,6 +13,7 @@ from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
     delete_notice,
     find_notice_id_by_source_and_title,
+    find_notice_ids_by_source_and_title,
     get_notice_attachments,
     get_notice_detail,
     get_notice_regions,
@@ -204,6 +205,31 @@ async def test_find_notice_id_by_source_and_title_matches_exact_title(db_session
 
     assert found == notice_id
     assert not_found is None
+
+
+async def test_find_notice_ids_by_source_and_title_returns_all_matches(db_session):
+    """같은 출처 안에서도 제목이 같은 공고가 여러 건일 수 있다(실제 DB에서
+    확인: 매달 반복되는 K-Startup 모집 공고가 제목을 그대로 재사용해 여러
+    건 쌓인 경우). find_notice_id_by_source_and_title(단수)로 첫 건만
+    지우면 나머지가 정리 안 된 채 남으므로, 복수형은 매칭되는 전부를
+    반환해야 한다."""
+    source = await _create_source(db_session, "복수제목출처")
+    first_id = await _create_notice(
+        db_session, source, external_id="dup-1", title="반복되는 모집 공고"
+    )
+    second_id = await _create_notice(
+        db_session, source, external_id="dup-2", title="반복되는 모집 공고"
+    )
+    other_id = await _create_notice(
+        db_session, source, external_id="dup-3", title="다른 제목"
+    )
+
+    found = await find_notice_ids_by_source_and_title(
+        db_session, "복수제목출처", "반복되는 모집 공고"
+    )
+
+    assert set(found) == {first_id, second_id}
+    assert other_id not in found
 
 
 async def test_delete_notice_removes_related_rows(db_session):

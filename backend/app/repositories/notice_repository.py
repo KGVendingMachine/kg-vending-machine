@@ -248,7 +248,10 @@ async def replace_notice_region(
 async def find_notice_id_by_source_and_title(
     session: AsyncSession, source_name: str, title: str
 ) -> int | None:
-    """특정 출처(source_name)에서 제목이 정확히 일치하는 공고의 id를 찾는다.
+    """특정 출처(source_name)에서 제목이 정확히 일치하는 공고가 있는지 확인한다
+    (있으면 그중 하나의 id). 존재 여부만 boolean처럼 쓰는 호출자용 —
+    실제로 몇 건이 매칭되는지, 어느 것을 골랐는지가 중요하면
+    find_notice_ids_by_source_and_title를 대신 쓴다.
 
     기업마당과 K-Startup에 같은 사업이 각자 다른 external_id로 중복
     등록되는 경우가 있어, 제목 기준으로 다른 출처의 공고를 찾기 위해
@@ -261,6 +264,25 @@ async def find_notice_id_by_source_and_title(
         .where(NoticeSource.source_name == source_name, Notice.title == title)
     )
     return result.scalars().first()
+
+
+async def find_notice_ids_by_source_and_title(
+    session: AsyncSession, source_name: str, title: str
+) -> list[int]:
+    """특정 출처(source_name)에서 제목이 정확히 일치하는 공고 id를 전부 찾는다.
+
+    같은 출처 안에서도 같은 제목이 여러 번 등장할 수 있다(실제 DB 확인:
+    K-Startup에 동일 제목의 정기 모집 공고가 8건까지 있는 경우도 있음
+    — 매달 반복되는 모집 공고가 제목을 그대로 재사용하는 경우가 흔함).
+    find_notice_id_by_source_and_title처럼 첫 건 하나만 반환하면, 삭제
+    같은 작업에서 나머지 동일 제목 공고가 정리 안 된 채 남는다.
+    """
+    result = await session.execute(
+        select(Notice.id)
+        .join(NoticeSource, Notice.source_id == NoticeSource.id)
+        .where(NoticeSource.source_name == source_name, Notice.title == title)
+    )
+    return list(result.scalars().all())
 
 
 async def delete_notice(session: AsyncSession, notice_id: int) -> None:
