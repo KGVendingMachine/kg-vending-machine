@@ -112,7 +112,10 @@ def _pick_ocr_target(attachments: list[NoticeAttachment]) -> NoticeAttachment | 
     notice_documents = [a for a in documents if _is_notice_document_name(a.file_name)]
     candidates = notice_documents or documents
 
-    already_parsed = next((a for a in candidates if a.parsed_text), None)
+    # parsed_text는 Optional[str]라 None(아직 처리 안 함)과 ""(처리했는데
+    # 텍스트가 없었음)을 구분해야 한다 — truthy 체크(`if a.parsed_text`)를
+    # 쓰면 빈 문자열도 "아직 처리 안 함"으로 보여 매번 재-OCR하게 된다.
+    already_parsed = next((a for a in candidates if a.parsed_text is not None), None)
     if already_parsed is not None:
         return already_parsed
     return candidates[0] if candidates else None
@@ -197,7 +200,7 @@ async def _run_notice_ocr_job(job_id: str, notice_id: int) -> None:
         )
         return
 
-    if target.parsed_text:
+    if target.parsed_text is not None:
         _JOBS[job_id] = NoticeOcrJobStatusResponse(
             job_id=job_id,
             notice_id=notice_id,

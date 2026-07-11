@@ -81,6 +81,18 @@ def test_pick_ocr_target_prefers_already_parsed_over_first_match():
     assert result.id == 2
 
 
+def test_pick_ocr_target_treats_empty_string_parsed_text_as_already_parsed():
+    """parsed_text는 None(아직 처리 안 함)과 ""(처리했지만 텍스트가 없었음)을
+    구분해야 한다 — truthy 체크를 쓰면 빈 문자열도 "아직"으로 오인해 계속
+    재-OCR하게 된다."""
+    unparsed = _attachment(id=1, file_type="PDF", parsed_text=None)
+    parsed_empty = _attachment(id=2, file_type="HWP", parsed_text="")
+
+    result = _pick_ocr_target([unparsed, parsed_empty])
+
+    assert result.id == 2
+
+
 def test_pick_ocr_target_falls_back_to_first_document_type_when_none_parsed():
     non_document = _attachment(id=1, file_type="ZIP")
     first_doc = _attachment(id=2, file_type="PDF")
