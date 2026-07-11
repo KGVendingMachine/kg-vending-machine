@@ -11,7 +11,8 @@ import styles from './AnalysisProgressPage.module.css'
 
 // 백엔드가 아직 처리하는 단계(OCR 추출 → 정규화)만 노출한다. 매칭·결과 생성은
 // 미구현이라 완료 시 결과 페이지로 이동하는 것으로 대신한다.
-const STEP_LABELS = ['문서 추출', '내용 정규화']
+// 문구는 비개발자 사용자 기준 — "추출/정규화/스키마" 같은 용어를 쓰지 않는다.
+const STEP_LABELS = ['문서 읽기', '내용 정리']
 
 const POLL_INTERVAL_MS = 2000
 // 일시적 네트워크 오류 1회로 실패 처리하지 않도록, 상태 조회(GET)가 연속으로
@@ -43,16 +44,16 @@ function buildLogLines(phase: Phase): LogLine[] {
     case 'starting':
       return [{ text: '→ 분석을 준비하고 있어요…', active: true }]
     case 'extracting':
-      return [{ text: '→ 문서에서 텍스트를 추출하고 있어요…', active: true }]
+      return [{ text: '→ 올려주신 문서를 읽고 있어요…', active: true }]
     case 'normalizing':
       return [
-        { text: '✓ 문서 텍스트 추출 완료', active: false },
-        { text: '→ 표준 스키마로 정규화하고 있어요…', active: true },
+        { text: '✓ 문서 읽기 완료', active: false },
+        { text: '→ 사업 내용을 항목별로 정리하고 있어요…', active: true },
       ]
     case 'completed':
       return [
-        { text: '✓ 문서 텍스트 추출 완료', active: false },
-        { text: '✓ 표준 스키마 정규화 완료', active: false },
+        { text: '✓ 문서 읽기 완료', active: false },
+        { text: '✓ 사업 내용 정리 완료', active: false },
       ]
     case 'failed':
       return []
@@ -122,7 +123,7 @@ export function AnalysisProgressPage() {
         if (cancelled) return
         consecutiveErrors += 1
         if (consecutiveErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
-          fail('분석 상태를 불러오지 못했어요. 네트워크 확인 후 다시 시도해 주세요.')
+          fail('진행 상황을 확인하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.')
           return
         }
       }
@@ -244,7 +245,7 @@ export function AnalysisProgressPage() {
 
         <div className={styles.log}>
           <div className={styles.logHeader}>
-            <span className={styles.logTitle}>진행 로그</span>
+            <span className={styles.logTitle}>진행 상황</span>
             <span className={styles.logPercent}>{progress}%</span>
           </div>
           <div className={styles.progressBar}>
@@ -268,8 +269,8 @@ export function AnalysisProgressPage() {
             )}
           </div>
           <div className={styles.logFootnote}>
-            일시적인 조회 오류는 자동으로 다시 확인해요. 분석이 실패하면 다시
-            시도 버튼이 표시됩니다.
+            연결이 잠시 끊겨도 자동으로 다시 확인해요. 분석이 실패하면 다시
+            시도 버튼이 나타나요.
           </div>
         </div>
 
