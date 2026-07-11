@@ -12,24 +12,82 @@ GET  /business-plans/{business_plan_id}/normalizations/{job_id}
 
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    UploadFile,
+    status,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.normalizer import AiNormalizationError, normalize_text
-from app.db.session import async_session_factory
+from app.api.deps import get_current_user
+from app.core.config import get_settings
+from app.db.session import async_session_factory, get_db
+from app.models.user import User
 from app.repositories.business_plan_repository import BusinessPlanNotFoundError
 from app.schemas.business_plan import (
+    BusinessPlanUploadResponse,
     JobStatus,
     NormalizeJobAccepted,
     NormalizeRequest,
     NormalizeStatusResponse,
 )
 from app.services.business_plan_service import (
+    CompanyProfileRequiredError,
     NoSourceTextError,
+    UnsupportedFileTypeError,
     normalize_business_plan,
+    upload_business_plan,
 )
+from app.utils.file_storage import FileTooLargeError
 
 router = APIRouter(prefix="/business-plans", tags=["business-plans"])
+
+
+@router.post(
+    "",
+    response_model=BusinessPlanUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="사업계획서 파일 업로드",
+    description=(
+        "사업계획서 파일을 업로드해 business_plan 행을 생성한다. 파일은 서버"
+        " 디스크에 저장하고 id를 반환하며, OCR·정규화·매칭은 이후 단계에서"
+        " 별도로 처리한다."
+    ),
+)
+async def upload_business_plan_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    settings = get_settings()
+    try:
+        return await upload_business_plan(
+            session,
+            user_id=current_user.id,
+            file=file,
+            storage_root=settings.STORAGE_ROOT,
+            max_upload_size_bytes=settings.MAX_UPLOAD_SIZE_BYTES,
+        )
+    except CompanyProfileRequiredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="기업 프로필을 먼저 등록해주세요.",
+        ) from exc
+    except UnsupportedFileTypeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    except FileTooLargeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="파일이 너무 큽니다. 최대 50MB까지 업로드할 수 있습니다.",
+        ) from exc
+
 
 _JOBS: dict[str, NormalizeStatusResponse] = {}
 

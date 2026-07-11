@@ -17,7 +17,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 SCHEMA_VERSION = "1.0"
 
@@ -133,6 +133,20 @@ class JobStatus(str, Enum):
 # ---------------------------------------------------------------------------
 # Request / Response 스키마
 # ---------------------------------------------------------------------------
+
+
+class BusinessPlanUploadResponse(BaseModel):
+    """POST /business-plans 응답 (201 Created).
+
+    업로드 후 다음 단계(분석 시작)에서 쓸 식별자를 돌려준다. 서버 내부 저장
+    경로(file_url)는 노출하지 않는다.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str | None = None
+    file_type: str | None = None
 
 
 class NormalizeRequest(BaseModel):

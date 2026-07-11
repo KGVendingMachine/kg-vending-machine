@@ -52,6 +52,11 @@ class Settings(BaseSettings):
 
     PDF_OCR_TEXT_THRESHOLD: int = 50
 
+    # 파일 업로드 저장 (로컬 디스크). STORAGE_ROOT는 서버 실행 위치(backend/)
+    # 기준 상대경로다. S3 전환 시 저장 계층만 교체하면 된다.
+    STORAGE_ROOT: str = "storage/uploads"
+    MAX_UPLOAD_SIZE_BYTES: int = 52_428_800  # 50MB (프론트 업로드 제한과 일치)
+
     # 카카오 로그인 (OAuth2)
     KAKAO_CLIENT_ID: str = ""
     """카카오 개발자 콘솔의 REST API 키"""
