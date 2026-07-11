@@ -20,7 +20,7 @@ class BusinessPlan(Base):
     file_url: Mapped[str | None] = mapped_column(String(500))
     """S3파일URL"""
     file_type: Mapped[str | None] = mapped_column(String(20))
-    """파일유형 PDF/HWP/DOCX/TXT"""
+    """파일유형 PDF/HWP/HWPX/IMAGE (ocr.extract.file_type_for_suffix가 단일 소스)"""
     raw_text: Mapped[str | None] = mapped_column(Text)
     """원문"""
     analysis_json: Mapped[dict | None] = mapped_column(JSONB)

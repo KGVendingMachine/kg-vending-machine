@@ -15,6 +15,7 @@ GET  /business-plans/{id}/analysis   -> 상태/결과 조회 (폴링)
 호출이 중복으로 나가지 않는다.
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -45,6 +46,8 @@ from app.services.business_plan_analysis_service import (
 from app.services.business_plan_service import NoSourceTextError
 
 router = APIRouter(prefix="/business-plans", tags=["business-plans"])
+
+logger = logging.getLogger(__name__)
 
 # processing인 채 이 시간이 지나면 잡 도중 서버가 죽어 박제된 것으로 보고
 # 재시작(재선점)을 허용한다. 실측 기준 분석은 보통 1~2분에 끝난다.
@@ -116,15 +119,20 @@ async def _run_analysis_job(session: AsyncSession, business_plan_id: int) -> Non
             status=JobStatus.FAILED.value,
             error_message=str(exc),
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         # OCR(CLOVA) 호출 실패 등 예상 못한 오류. 백그라운드라 응답으로 못 알리므로
-        # 잡 상태에 남겨 폴링으로 확인하게 한다.
+        # 잡 상태에 남겨 폴링으로 확인하게 한다. 원본 예외 문자열은 내부 정보
+        # (URL·스택 일부 등)가 섞일 수 있어 사용자에게 노출하지 않고 로그로만 남긴다.
+        logger.exception(
+            "사업계획서 분석 중 예상 못한 오류 (business_plan_id=%s)",
+            business_plan_id,
+        )
         await session.rollback()
         await finish_analysis(
             session,
             business_plan_id,
             status=JobStatus.FAILED.value,
-            error_message=f"분석 중 오류가 발생했습니다: {exc}",
+            error_message="분석 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
         )
     else:
         await finish_analysis(

@@ -61,6 +61,24 @@ async def test_upload_saves_file_and_creates_row(db_session, test_user, tmp_path
     assert fetched.file_url == plan.file_url
 
 
+async def test_upload_stores_unified_file_type_for_images(
+    db_session, test_user, tmp_path
+):
+    """이미지 확장자는 "JPG"가 아니라 분석(extract_text)과 같은 "IMAGE"로 저장한다."""
+    await _primary_profile(db_session, test_user)
+    file = _upload("스캔본.jpg", b"fake image bytes")
+
+    plan = await upload_business_plan(
+        db_session,
+        user_id=test_user.id,
+        file=file,
+        storage_root=str(tmp_path),
+        max_upload_size_bytes=1_000_000,
+    )
+
+    assert plan.file_type == "IMAGE"
+
+
 async def test_upload_requires_company_profile(db_session, test_user, tmp_path):
     file = _upload("plan.pdf", b"data")
 

@@ -17,7 +17,7 @@ from fastapi import UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_plan import BusinessPlan
-from app.ocr.extract import SUPPORTED_UPLOAD_SUFFIXES
+from app.ocr.extract import SUPPORTED_UPLOAD_SUFFIXES, file_type_for_suffix
 from app.repositories.business_plan_repository import (
     create,
     get_raw_text,
@@ -74,7 +74,7 @@ async def upload_business_plan(
             company_profile_id=profile.id,
             title=file.filename,
             file_url=saved_path,
-            file_type=suffix.lstrip(".").upper(),
+            file_type=file_type_for_suffix(suffix),
         )
         await session.commit()
     except BaseException:
