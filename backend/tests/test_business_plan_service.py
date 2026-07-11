@@ -5,6 +5,8 @@ NRM-001: services/business_plan_service.py 테스트.
 실제 LLM(ai/) 대신 정해진 값을 돌려주는 가짜 normalize_fn을 주입해서 검증한다.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 
 from app.models.business_plan import BusinessPlan
@@ -19,6 +21,7 @@ from app.schemas.business_plan import (
 )
 from app.services.business_plan_service import (
     NoSourceTextError,
+    get_my_latest_business_plan,
     normalize_business_plan,
     validate_normalized,
 )
@@ -152,3 +155,48 @@ async def test_normalize_business_plan_raises_when_plan_missing(db_session):
         await normalize_business_plan(
             db_session, business_plan_id=999_999, normalize_fn=fake_normalize
         )
+
+
+async def test_get_my_latest_business_plan_returns_none_when_no_profile(
+    db_session, test_user
+):
+    result = await get_my_latest_business_plan(db_session, test_user.id)
+
+    assert result is None
+
+
+async def test_get_my_latest_business_plan_returns_none_when_no_plan_uploaded(
+    db_session, test_user
+):
+    profile = CompanyProfile(user_id=test_user.id, is_primary=True)
+    db_session.add(profile)
+    await db_session.flush()
+
+    result = await get_my_latest_business_plan(db_session, test_user.id)
+
+    assert result is None
+
+
+async def test_get_my_latest_business_plan_returns_latest_upload(
+    db_session, test_user
+):
+    profile = CompanyProfile(user_id=test_user.id, is_primary=True)
+    db_session.add(profile)
+    await db_session.flush()
+    await _create_business_plan(
+        db_session,
+        profile,
+        title="첫 업로드",
+        uploaded_at=datetime(2026, 1, 1, tzinfo=timezone.utc).replace(tzinfo=None),
+    )
+    latest = await _create_business_plan(
+        db_session,
+        profile,
+        title="최근 업로드",
+        uploaded_at=datetime(2026, 6, 1, tzinfo=timezone.utc).replace(tzinfo=None),
+    )
+
+    result = await get_my_latest_business_plan(db_session, test_user.id)
+
+    assert result is not None
+    assert result.id == latest.id

@@ -107,6 +107,18 @@
   font-weight: 600;
 }
 
+.linkButton {
+  margin-top: 10px;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-muted);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .error {
   margin-top: 14px;
   font-size: 13px;

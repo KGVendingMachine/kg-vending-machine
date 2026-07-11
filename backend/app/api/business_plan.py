@@ -30,6 +30,7 @@ from app.db.session import async_session_factory, get_db
 from app.models.user import User
 from app.repositories.business_plan_repository import BusinessPlanNotFoundError
 from app.schemas.business_plan import (
+    BusinessPlanSummaryResponse,
     BusinessPlanUploadResponse,
     JobStatus,
     NormalizeJobAccepted,
@@ -40,6 +41,7 @@ from app.services.business_plan_service import (
     CompanyProfileRequiredError,
     NoSourceTextError,
     UnsupportedFileTypeError,
+    get_my_latest_business_plan,
     normalize_business_plan,
     upload_business_plan,
 )
@@ -87,6 +89,19 @@ async def upload_business_plan_file(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="파일이 너무 큽니다. 최대 50MB까지 업로드할 수 있습니다.",
         ) from exc
+
+
+@router.get(
+    "/me",
+    response_model=BusinessPlanSummaryResponse | None,
+    summary="내 최신 사업계획서 조회",
+    description="로그인한 유저가 마지막으로 업로드한 사업계획서를 반환한다. 없으면 null.",
+)
+async def get_my_business_plan(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    return await get_my_latest_business_plan(session, current_user.id)
 
 
 _JOBS: dict[str, NormalizeStatusResponse] = {}

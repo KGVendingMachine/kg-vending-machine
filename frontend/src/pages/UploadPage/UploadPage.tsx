@@ -1,7 +1,8 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { uploadBusinessPlan } from '../../api/businessPlan'
+import { getMyBusinessPlan, uploadBusinessPlan } from '../../api/businessPlan'
+import type { BusinessPlanSummary } from '../../api/businessPlan'
 import { ApiError } from '../../api/client'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { PATHS } from '../../routes/paths'
@@ -13,6 +14,27 @@ const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
 
 function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+}
+
+const ANALYSIS_STATUS_LABELS: Record<string, string> = {
+  processing: '분석 중',
+  completed: '분석 완료',
+  failed: '분석 실패',
+}
+
+function analysisStatusLabel(status: BusinessPlanSummary['analysis_status']): string {
+  if (status == null) return '분석 대기'
+  return ANALYSIS_STATUS_LABELS[status] ?? '분석 대기'
+}
+
+/** uploaded_at은 tz 표기 없는 UTC naive 문자열로 내려오므로 UTC로 명시 파싱한다. */
+function formatUploadedAt(uploadedAt: string): string {
+  const iso = uploadedAt.endsWith('Z') ? uploadedAt : `${uploadedAt}Z`
+  return new Date(iso).toLocaleDateString('ko-KR', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  })
 }
 
 /** FastAPI 오류 본문({ detail: "..." })에서 detail 문자열을 안전하게 꺼낸다. */
@@ -43,6 +65,28 @@ export function UploadPage() {
   const [dragOver, setDragOver] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [checking, setChecking] = useState(true)
+  const [existingPlan, setExistingPlan] = useState<BusinessPlanSummary | null>(null)
+  const [replacing, setReplacing] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    getMyBusinessPlan()
+      .then((plan) => {
+        if (!cancelled) setExistingPlan(plan)
+      })
+      .catch(() => {
+        // 조회 실패가 업로드 흐름을 막을 이유는 없다 — 빈 드롭존으로 폴백.
+      })
+      .finally(() => {
+        if (!cancelled) setChecking(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const showExistingCard = !checking && existingPlan != null && !replacing && !file
 
   function handleFiles(files: FileList | null) {
     if (files && files.length > 0) {
@@ -94,47 +138,89 @@ export function UploadPage() {
         </div>
 
         <div className={styles.dropzoneCol}>
-          <div
-            className={
-              dragOver ? `${styles.dropzone} ${styles.dragOver}` : styles.dropzone
-            }
-            onClick={() => fileInputRef.current?.click()}
-            onDragOver={(event) => {
-              event.preventDefault()
-              setDragOver(true)
-            }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={handleDrop}
-            role="button"
-            tabIndex={0}
-          >
-            <div className={styles.dropIcon} />
-            <div className={styles.dropTitle}>
-              파일을 끌어다 놓거나 클릭해 선택
-            </div>
-            <div className={styles.dropHint}>
-              PDF · HWP · HWPX · 이미지(JPG/PNG/TIFF)
-            </div>
-            <div className={styles.dropLimit}>최대 50MB</div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".pdf,.hwp,.hwpx,.jpg,.jpeg,.png,.tiff"
-              hidden
-              onChange={handleFileInputChange}
-            />
-          </div>
-
-          {file ? (
-            <div className={styles.uploadedItem}>
-              <span className={styles.fileIcon} />
-              <div className={styles.fileInfo}>
-                <div className={styles.fileName}>{file.name}</div>
-                <div className={styles.fileMeta}>{formatFileSize(file.size)}</div>
+          {checking ? null : showExistingCard && existingPlan ? (
+            <>
+              <div className={styles.uploadedItem}>
+                <span className={styles.fileIcon} />
+                <div className={styles.fileInfo}>
+                  <div className={styles.fileName}>
+                    {existingPlan.title ?? '사업계획서'}
+                  </div>
+                  <div className={styles.fileMeta}>
+                    {formatUploadedAt(existingPlan.uploaded_at)} 업로드
+                  </div>
+                </div>
+                <span className={styles.fileStatus}>
+                  {analysisStatusLabel(existingPlan.analysis_status)}
+                </span>
               </div>
-              <span className={styles.fileStatus}>선택됨</span>
-            </div>
-          ) : null}
+              <button
+                type="button"
+                className={styles.linkButton}
+                onClick={() => setReplacing(true)}
+              >
+                다른 파일 업로드
+              </button>
+            </>
+          ) : (
+            <>
+              <div
+                className={
+                  dragOver ? `${styles.dropzone} ${styles.dragOver}` : styles.dropzone
+                }
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={(event) => {
+                  event.preventDefault()
+                  setDragOver(true)
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={handleDrop}
+                role="button"
+                tabIndex={0}
+              >
+                <div className={styles.dropIcon} />
+                <div className={styles.dropTitle}>
+                  파일을 끌어다 놓거나 클릭해 선택
+                </div>
+                <div className={styles.dropHint}>
+                  PDF · HWP · HWPX · 이미지(JPG/PNG/TIFF)
+                </div>
+                <div className={styles.dropLimit}>최대 50MB</div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.hwp,.hwpx,.jpg,.jpeg,.png,.tiff"
+                  hidden
+                  onChange={handleFileInputChange}
+                />
+              </div>
+
+              {file ? (
+                <div className={styles.uploadedItem}>
+                  <span className={styles.fileIcon} />
+                  <div className={styles.fileInfo}>
+                    <div className={styles.fileName}>{file.name}</div>
+                    <div className={styles.fileMeta}>{formatFileSize(file.size)}</div>
+                  </div>
+                  <span className={styles.fileStatus}>선택됨</span>
+                </div>
+              ) : null}
+
+              {replacing && existingPlan ? (
+                <button
+                  type="button"
+                  className={styles.linkButton}
+                  onClick={() => {
+                    setReplacing(false)
+                    setFile(null)
+                    setError(null)
+                  }}
+                >
+                  취소
+                </button>
+              ) : null}
+            </>
+          )}
 
           {error ? <div className={styles.error}>{error}</div> : null}
         </div>
@@ -148,14 +234,28 @@ export function UploadPage() {
           >
             ← 기업 프로필
           </button>
-          <button
-            type="button"
-            className={styles.primaryButton}
-            disabled={!file || uploading}
-            onClick={handleStartAnalysis}
-          >
-            {uploading ? '업로드 중…' : '분석 시작 →'}
-          </button>
+          {showExistingCard && existingPlan ? (
+            <button
+              type="button"
+              className={styles.primaryButton}
+              onClick={() =>
+                navigate(PATHS.ANALYSIS, {
+                  state: { businessPlanId: existingPlan.id },
+                })
+              }
+            >
+              이어서 진행 →
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={styles.primaryButton}
+              disabled={!file || uploading}
+              onClick={handleStartAnalysis}
+            >
+              {uploading ? '업로드 중…' : '분석 시작 →'}
+            </button>
+          )}
         </div>
       </div>
     </div>

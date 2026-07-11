@@ -20,6 +20,7 @@ from app.models.business_plan import BusinessPlan
 from app.ocr.extract import SUPPORTED_UPLOAD_SUFFIXES, file_type_for_suffix
 from app.repositories.business_plan_repository import (
     create,
+    get_latest_by_company_profile,
     get_raw_text,
     save_normalization_result,
 )
@@ -84,6 +85,16 @@ async def upload_business_plan(
         raise
 
     return plan
+
+
+async def get_my_latest_business_plan(
+    session: AsyncSession, user_id: int
+) -> BusinessPlan | None:
+    """로그인한 유저의 기업 프로필 기준 가장 최근 사업계획서를 반환한다."""
+    profile = await get_primary_by_user(session, user_id)
+    if profile is None:
+        return None
+    return await get_latest_by_company_profile(session, profile.id)
 
 
 # PSST 축(문제/실현가능성/성장전략/팀)별로 최소 이 필드는 채워져야 유효하다고 판단.
