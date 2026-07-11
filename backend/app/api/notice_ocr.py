@@ -118,12 +118,9 @@ def _pick_ocr_target(attachments: list[NoticeAttachment]) -> NoticeAttachment | 
     return candidates[0] if candidates else None
 
 
-async def _ensure_kstartup_attachments(
-    session: AsyncSession, notice_id: int, external_id: str
+async def _save_kstartup_attachments(
+    session: AsyncSession, notice_id: int, fetched: list[tuple[str, str]]
 ) -> list[NoticeAttachment]:
-    """K-Startup은 수집 시점에 첨부파일을 안 채워두므로, 없으면 여기서
-    상세페이지를 크롤링해 채운다 (2차 필터링 시점에만 하기로 한 결정)."""
-    fetched = await fetch_kstartup_attachments(int(external_id))
     for file_name, file_url in fetched:
         await save_attachment(
             session, notice_id, file_name, file_url, _file_type_from_name(file_name)
@@ -150,6 +147,7 @@ async def _run_notice_ocr_job(job_id: str, notice_id: int) -> None:
             )
             return
         notice, source_name, _ = row
+        external_id = notice.external_id
 
         _JOBS[job_id] = NoticeOcrJobStatusResponse(
             job_id=job_id, notice_id=notice_id, status=NoticeOcrJobStatus.RUNNING
@@ -157,10 +155,6 @@ async def _run_notice_ocr_job(job_id: str, notice_id: int) -> None:
 
         try:
             attachments = await get_notice_attachments(session, notice_id)
-            if not attachments and source_name == KSTARTUP_SOURCE_NAME:
-                attachments = await _ensure_kstartup_attachments(
-                    session, notice_id, notice.external_id
-                )
         except Exception as exc:
             _JOBS[job_id] = NoticeOcrJobStatusResponse(
                 job_id=job_id,
@@ -170,34 +164,54 @@ async def _run_notice_ocr_job(job_id: str, notice_id: int) -> None:
             )
             return
 
-        target = _pick_ocr_target(attachments)
-        if target is None:
-            status_ = (
-                NoticeOcrJobStatus.NO_ATTACHMENT
-                if not attachments
-                else NoticeOcrJobStatus.UNSUPPORTED_FORMAT
-            )
-            _JOBS[job_id] = NoticeOcrJobStatusResponse(
-                job_id=job_id, notice_id=notice_id, status=status_
-            )
-            return
-
-        if target.parsed_text:
+    needs_kstartup_crawl = not attachments and source_name == KSTARTUP_SOURCE_NAME
+    if needs_kstartup_crawl:
+        # K-Startup 상세페이지 크롤링은 최대 15초 x 3회 재시도(최대 45초)
+        # 걸릴 수 있는 외부 호출이라, 위 세션을 닫은 뒤(DB 커넥션 반납한
+        # 채로) 수행한다 — 다운로드·OCR과 같은 이유(2026-07-11).
+        try:
+            fetched = await fetch_kstartup_attachments(int(external_id))
+        except Exception as exc:
             _JOBS[job_id] = NoticeOcrJobStatusResponse(
                 job_id=job_id,
                 notice_id=notice_id,
-                status=NoticeOcrJobStatus.COMPLETED,
-                attachment_id=target.id,
-                file_name=target.file_name,
-                char_count=len(target.parsed_text),
+                status=NoticeOcrJobStatus.FAILED,
+                error_message=f"첨부파일 조회 실패: {exc}",
             )
             return
 
-        attachment_id = target.id
-        attachment_file_url = target.file_url
-        attachment_file_type = target.file_type
-        attachment_file_name = target.file_name
-    # 세션 종료 — 다운로드·OCR 동안 DB 커넥션을 붙들지 않는다.
+        async with async_session_factory() as session:
+            attachments = await _save_kstartup_attachments(session, notice_id, fetched)
+
+    # _pick_ocr_target은 이미 메모리에 있는 attachments만 보는 순수 로직이라
+    # DB 세션이 필요 없다.
+    target = _pick_ocr_target(attachments)
+    if target is None:
+        status_ = (
+            NoticeOcrJobStatus.NO_ATTACHMENT
+            if not attachments
+            else NoticeOcrJobStatus.UNSUPPORTED_FORMAT
+        )
+        _JOBS[job_id] = NoticeOcrJobStatusResponse(
+            job_id=job_id, notice_id=notice_id, status=status_
+        )
+        return
+
+    if target.parsed_text:
+        _JOBS[job_id] = NoticeOcrJobStatusResponse(
+            job_id=job_id,
+            notice_id=notice_id,
+            status=NoticeOcrJobStatus.COMPLETED,
+            attachment_id=target.id,
+            file_name=target.file_name,
+            char_count=len(target.parsed_text),
+        )
+        return
+
+    attachment_id = target.id
+    attachment_file_url = target.file_url
+    attachment_file_type = target.file_type
+    attachment_file_name = target.file_name
 
     try:
         if source_name == KSTARTUP_SOURCE_NAME:
