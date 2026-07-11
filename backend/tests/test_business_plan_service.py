@@ -177,9 +177,7 @@ async def test_get_my_latest_business_plan_returns_none_when_no_plan_uploaded(
     assert result is None
 
 
-async def test_get_my_latest_business_plan_returns_latest_upload(
-    db_session, test_user
-):
+async def test_get_my_latest_business_plan_returns_latest_upload(db_session, test_user):
     profile = CompanyProfile(user_id=test_user.id, is_primary=True)
     db_session.add(profile)
     await db_session.flush()
