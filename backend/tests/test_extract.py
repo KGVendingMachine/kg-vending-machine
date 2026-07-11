@@ -136,3 +136,25 @@ async def test_image_conversion_does_not_block_event_loop(monkeypatch):
 
     assert result == "인식된 텍스트"
     assert tick_count >= 5
+
+
+async def test_extract_text_strips_nul_bytes(monkeypatch, tmp_path):
+    """PostgreSQL은 인코딩과 무관하게 text/varchar 컬럼에 NUL(0x00) 바이트를
+    저장하지 못한다(CharacterNotInRepertoireError). 실제 공고 PDF 샘플에서
+    pdfplumber가 이 바이트를 뽑아내는 걸 확인했다(2026-07-11) — 이 함수
+    결과를 그대로 DB에 저장하는 모든 호출자(공고 OCR, 사업계획서 분석)가
+    영향받으므로 반환 전에 제거해야 한다."""
+    file_path = tmp_path / "sample.pdf"
+    file_path.write_bytes(b"dummy")
+
+    def fake_extract_native_pdf_text(path: str) -> str:
+        return "본문에 NUL\x00바이트가 섞여있음" * 5
+
+    monkeypatch.setattr(
+        extract_module, "_extract_native_pdf_text", fake_extract_native_pdf_text
+    )
+    monkeypatch.setattr(extract_module, "_extract_images_safely", lambda *a, **k: [])
+
+    text, file_type = await extract_text(str(file_path))
+
+    assert "\x00" not in text
