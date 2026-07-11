@@ -27,6 +27,15 @@ class BusinessPlan(Base):
     """LLM 추출 결과 (분야/고객/문제/솔루션/기술/수익모델/팀역량 등)"""
     analyzed_at: Mapped[datetime | None] = mapped_column(DateTime)
     """분석일시"""
+    analysis_status: Mapped[str | None] = mapped_column(String(20))
+    """분석 잡 상태 processing/completed/failed. NULL이면 아직 시작 안 함"""
+    analysis_step: Mapped[str | None] = mapped_column(String(20))
+    """processing 중 현재 단계 extracting/normalizing (프론트 진행 표시용)"""
+    analysis_error: Mapped[str | None] = mapped_column(Text)
+    """failed일 때 실패 사유"""
+    analysis_started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    """분석 시작 시각. 잡 도중 서버가 죽어 processing이 박제된 행을
+    일정 시간 뒤 재시작 가능으로 판정(stale 처리)하는 데 쓴다"""
     uploaded_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False

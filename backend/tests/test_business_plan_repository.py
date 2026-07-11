@@ -6,7 +6,7 @@ NRM-001: repositories/business_plan_repository.py 테스트.
 테스트가 끝나면 롤백되므로 실제 DB에는 데이터가 남지 않는다.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -15,12 +15,16 @@ from app.models.company import CompanyProfile
 from app.models.user import User
 from app.repositories.business_plan_repository import (
     BusinessPlanNotFoundError,
+    finish_analysis,
     get_by_id,
     get_owned_by_user,
     get_raw_text,
     list_recent,
     save_normalization_result,
+    set_analysis_step,
+    try_claim_analysis,
 )
+from app.schemas.business_plan import JobStatus
 
 pytestmark = pytest.mark.anyio
 
@@ -119,6 +123,114 @@ async def test_get_owned_by_user_returns_none_when_plan_missing(db_session, test
     result = await get_owned_by_user(db_session, 999_999, test_user.id)
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# 분석 잡 상태 (try_claim_analysis / set_analysis_step / finish_analysis)
+# ---------------------------------------------------------------------------
+
+
+def _stale_before(minutes: int = 10) -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        minutes=minutes
+    )
+
+
+async def test_try_claim_analysis_claims_when_never_started(
+    db_session, test_company_profile
+):
+    plan = await _create_business_plan(db_session, test_company_profile)
+
+    claimed = await try_claim_analysis(
+        db_session, plan.id, stale_before=_stale_before()
+    )
+
+    assert claimed is True
+    await db_session.refresh(plan)
+    assert plan.analysis_status == JobStatus.PROCESSING.value
+    assert plan.analysis_started_at is not None
+    assert plan.analysis_step is None
+    assert plan.analysis_error is None
+
+
+async def test_try_claim_analysis_rejects_while_processing(
+    db_session, test_company_profile
+):
+    """진행 중(processing) 잡은 재선점 불가 — 중복 분석 방지의 핵심."""
+    plan = await _create_business_plan(db_session, test_company_profile)
+
+    first = await try_claim_analysis(db_session, plan.id, stale_before=_stale_before())
+    second = await try_claim_analysis(db_session, plan.id, stale_before=_stale_before())
+
+    assert first is True
+    assert second is False
+
+
+async def test_try_claim_analysis_reclaims_stale_processing(
+    db_session, test_company_profile
+):
+    """서버가 죽어 processing으로 박제된 잡은 stale 기준을 넘기면 재선점 가능."""
+    plan = await _create_business_plan(
+        db_session,
+        test_company_profile,
+        analysis_status=JobStatus.PROCESSING.value,
+        analysis_started_at=datetime.now(timezone.utc).replace(tzinfo=None)
+        - timedelta(minutes=30),
+    )
+
+    claimed = await try_claim_analysis(
+        db_session, plan.id, stale_before=_stale_before(minutes=10)
+    )
+
+    assert claimed is True
+
+
+async def test_try_claim_analysis_reclaims_after_failure(
+    db_session, test_company_profile
+):
+    """failed 상태는 재시도(재선점)를 허용하고 이전 실패 사유를 지운다."""
+    plan = await _create_business_plan(
+        db_session,
+        test_company_profile,
+        analysis_status=JobStatus.FAILED.value,
+        analysis_error="이전 실패",
+    )
+
+    claimed = await try_claim_analysis(
+        db_session, plan.id, stale_before=_stale_before()
+    )
+
+    assert claimed is True
+    await db_session.refresh(plan)
+    assert plan.analysis_status == JobStatus.PROCESSING.value
+    assert plan.analysis_error is None
+
+
+async def test_try_claim_analysis_returns_false_when_plan_missing(db_session):
+    claimed = await try_claim_analysis(
+        db_session, 999_999, stale_before=_stale_before()
+    )
+
+    assert claimed is False
+
+
+async def test_set_analysis_step_and_finish_analysis_update_row(
+    db_session, test_company_profile
+):
+    plan = await _create_business_plan(db_session, test_company_profile)
+    await try_claim_analysis(db_session, plan.id, stale_before=_stale_before())
+
+    await set_analysis_step(db_session, plan.id, "normalizing")
+    await db_session.refresh(plan)
+    assert plan.analysis_step == "normalizing"
+
+    await finish_analysis(
+        db_session, plan.id, status=JobStatus.FAILED.value, error_message="LLM 실패"
+    )
+    await db_session.refresh(plan)
+    assert plan.analysis_status == JobStatus.FAILED.value
+    assert plan.analysis_step is None  # 종료 시 단계 표시는 비운다
+    assert plan.analysis_error == "LLM 실패"
 
 
 async def test_list_recent_orders_by_created_at_desc_and_respects_limit(

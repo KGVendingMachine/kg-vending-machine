@@ -26,6 +26,7 @@ from app.services.business_plan_service import (
 
 ExtractFn = Callable[[str], Awaitable[tuple[str, str]]]
 NormalizeFn = Callable[[str], Awaitable[NormalizedBusinessPlanSchema]]
+OnStepFn = Callable[[AnalysisStep], Awaitable[None]]
 
 
 class NoUploadedFileError(Exception):
@@ -42,14 +43,15 @@ async def run_analysis(
     *,
     extract_fn: ExtractFn,
     normalize_fn: NormalizeFn,
-    on_step: Callable[[AnalysisStep], None] | None = None,
+    on_step: OnStepFn | None = None,
 ) -> NormalizationOutcome:
     """업로드된 파일을 OCR한 뒤 정규화한다.
 
     1. file_url의 파일을 OCR → raw_text/file_type 저장 후 커밋(먼저 확정)
     2. 방금 추출한 텍스트로 정규화 → analysis_json 저장
 
-    on_step은 진행 단계를 알리는 선택적 콜백(인메모리 잡 상태 갱신용)이다.
+    on_step은 진행 단계를 알리는 선택적 콜백(business_plan 행의 잡 상태
+    갱신용 — DB를 쓰므로 async)이다.
     """
     plan = await get_by_id(session, business_plan_id)
     if plan is None:
@@ -58,14 +60,14 @@ async def run_analysis(
         raise NoUploadedFileError(business_plan_id)
 
     if on_step is not None:
-        on_step(AnalysisStep.EXTRACTING)
+        await on_step(AnalysisStep.EXTRACTING)
     text, file_type = await extract_fn(plan.file_url)
     await save_raw_text(session, business_plan_id, text, file_type)
     # OCR 결과를 정규화 전에 확정한다. 아래 정규화가 실패해도 raw_text는 남는다.
     await session.commit()
 
     if on_step is not None:
-        on_step(AnalysisStep.NORMALIZING)
+        await on_step(AnalysisStep.NORMALIZING)
     return await normalize_business_plan(
         session,
         business_plan_id=business_plan_id,
