@@ -96,8 +96,13 @@ class NoticeChunk(Base):
     __tablename__ = "notice_chunk"
 
     id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
-    notice_id: Mapped[int] = mapped_column(ForeignKey("notice.id"), nullable=False)
-    """공고아이디"""
+    notice_id: Mapped[int] = mapped_column(
+        ForeignKey("notice.id", ondelete="CASCADE"), nullable=False
+    )
+    """공고아이디. 원본 공고가 지워지면 그 공고의 임베딩 청크도 의미가
+    없어지는 파생 데이터라 ON DELETE CASCADE로 자동 정리한다(다른
+    notice 자식 테이블처럼 delete_notice()에 별도 삭제 코드를 추가할
+    필요 없음)."""
     chunk_type: Mapped[str | None] = mapped_column(String(30))
     """임베딩한 단락"""
     chunk_text: Mapped[str | None] = mapped_column(Text)
