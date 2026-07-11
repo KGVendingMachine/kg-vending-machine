@@ -431,7 +431,10 @@ async def start_notice_ocr_batch(
     ),
 )
 async def get_notice_ocr_batch_status(job_ids: list[str] = Query(default=[])):
-    items = [_JOBS[job_id] for job_id in job_ids if job_id in _JOBS]
+    # 배치 트리거(start_notice_ocr_batch)가 notice_id 중복을 순서 유지하며
+    # 제거하는 것과 동일하게, 같은 job_id가 여러 번 들어와도 응답에
+    # 중복으로 나가지 않게 한다.
+    items = [_JOBS[job_id] for job_id in dict.fromkeys(job_ids) if job_id in _JOBS]
     return NoticeOcrBatchStatusResponse(items=items)
 
 

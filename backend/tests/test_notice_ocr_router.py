@@ -382,6 +382,19 @@ async def test_get_notice_ocr_batch_status_returns_requested_jobs_in_order():
     assert response.items[1].status == NoticeOcrJobStatus.RUNNING
 
 
+async def test_get_notice_ocr_batch_status_dedupes_duplicate_job_ids():
+    """배치 트리거(start_notice_ocr_batch)가 notice_id 중복을 순서 유지하며
+    제거하는 것과 똑같이, 같은 job_id를 여러 번 넣어도 응답에 중복으로
+    나가면 안 된다."""
+    _JOBS["job-a"] = NoticeOcrJobStatusResponse(
+        job_id="job-a", notice_id=1, status=NoticeOcrJobStatus.COMPLETED
+    )
+
+    response = await get_notice_ocr_batch_status(job_ids=["job-a", "job-a"])
+
+    assert [item.job_id for item in response.items] == ["job-a"]
+
+
 async def test_get_notice_ocr_batch_status_silently_skips_unknown_job_ids():
     """단건 조회(get_notice_ocr_status)는 모르는 job_id면 404를 내지만,
     배치 조회는 그중 일부가 잘못돼도 나머지 조회 자체가 실패하면 안 되므로
