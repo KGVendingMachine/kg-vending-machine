@@ -17,6 +17,25 @@ def _section_number(name: str) -> int:
 _IMAGE_EXTENSIONS = (".bmp", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff")
 
 
+def _reject_unsafe_xml(xml_data: bytes) -> None:
+    """XML 엔티티 확장 공격("billion laughs") 방지.
+
+    정상적인 HWPX 본문 XML(Contents/section*.xml)은 그냥 문단·서식 마크업이라
+    DOCTYPE/커스텀 엔티티를 쓸 이유가 없다. 그런데 표준 라이브러리
+    xml.etree.ElementTree는 엔티티 확장 개수·깊이에 제한을 두지 않아서, 이
+    로더가 그대로 파싱하는 파일(사업계획서 업로드로 사용자가 직접 올리는
+    .hwpx도 포함 — ZIP 안의 XML이라 여기로 그대로 들어옴)에 악의적으로 중첩
+    엔티티를 넣으면 몇백 바이트짜리 파일이 파싱 시점에 기하급수적으로
+    부풀어(실측: 365바이트 → 30만자, 깊이 몇 단만 더 늘려도 기가바이트 단위)
+    서버 메모리를 고갈시킬 수 있다(DoS). DOCTYPE 선언 자체를 막아 원천
+    차단한다 — 정상 HWPX 파일은 DOCTYPE이 없으므로 오탐 위험이 없다.
+    """
+    if b"<!DOCTYPE" in xml_data:
+        raise RuntimeError(
+            "HWPX 문서에서 허용되지 않는 XML 선언(DOCTYPE)이 발견됐습니다."
+        )
+
+
 def extract_embedded_images(file_path: str) -> list[tuple[bytes, str]]:
     """HWPX 안에 그림으로 삽입된 표/차트 등의 원본 이미지를 꺼낸다.
 
@@ -66,6 +85,7 @@ class HWPXLoader(BaseLoader):
 
                 for section_file in section_files:
                     xml_data = zf.read(section_file)
+                    _reject_unsafe_xml(xml_data)
                     root = ET.fromstring(xml_data)
 
                     # HWPX(OWPML) 표준의 텍스트 태그는 보통 't' 또는 네임스페이스를
