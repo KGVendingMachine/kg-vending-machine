@@ -54,6 +54,13 @@ async def extract_text(file_path: str) -> tuple[str, str]:
     내용, 실제 샘플에서 확인함)도 CLOVA OCR로 인식해 뒤에 이어붙인다.
     PDF/이미지는 텍스트 레이어가 없다고 보고 CLOVA OCR을 호출한다.
 
+    HWP/HWPX 파싱, PDF 네이티브 텍스트·이미지 추출, 이미지 포맷 변환은
+    전부 동기(CPU 바운드) 호출이라 asyncio.to_thread로 감싼다 — 이 함수는
+    FastAPI BackgroundTasks(요청과 같은 이벤트 루프)에서 실행되는데,
+    동기 호출을 그대로 두면 파싱이 도는 동안 서버 전체(다른 요청)가
+    멈춘다(실제로 겪음, 이슈 #61). CLOVA(httpx.AsyncClient)·LLM
+    (AsyncOpenAI) 호출은 이미 비동기라 그대로 둔다.
+
     Returns:
         (추출된 텍스트, business_plan.file_type에 저장할 파일 유형)
     """
@@ -64,16 +71,20 @@ async def extract_text(file_path: str) -> tuple[str, str]:
     file_type = _FILE_TYPE_BY_SUFFIX[suffix]
 
     if suffix == ".hwp":
-        text = HWPLoader(file_path).load()[0].page_content
-        images = _extract_images_safely(extract_hwp_images, file_path)
+        text = await asyncio.to_thread(_load_hwp_text, file_path)
+        images = await asyncio.to_thread(
+            _extract_images_safely, extract_hwp_images, file_path
+        )
         text = await _append_embedded_image_text(text, images)
     elif suffix == ".hwpx":
-        text = HWPXLoader(file_path).load()[0].page_content
-        images = _extract_images_safely(extract_hwpx_images, file_path)
+        text = await asyncio.to_thread(_load_hwpx_text, file_path)
+        images = await asyncio.to_thread(
+            _extract_images_safely, extract_hwpx_images, file_path
+        )
         text = await _append_embedded_image_text(text, images)
     elif suffix == ".pdf":
         try:
-            native_text = _extract_native_pdf_text(file_path)
+            native_text = await asyncio.to_thread(_extract_native_pdf_text, file_path)
         except Exception:
             # PdfReader가 아예 못 여는 파일(암호화·손상 등)이면 빈 문자열로
             # 두고 아래 분기에서 CLOVA OCR로 넘어가게 한다.
@@ -87,12 +98,22 @@ async def extract_text(file_path: str) -> tuple[str, str]:
             # 네이티브 텍스트는 있어도 본문에 그림으로 삽입된 차트·스크린샷은
             # 텍스트로 안 잡힌다 (실제 샘플에서 쿠팡 판매 스크린샷 확인함) —
             # HWP/HWPX와 동일하게 임베드 이미지를 보완 OCR한다.
-            images = _extract_images_safely(_extract_pdf_images, file_path)
+            images = await asyncio.to_thread(
+                _extract_images_safely, _extract_pdf_images, file_path
+            )
             text = await _append_embedded_image_text(native_text, images)
     else:
         text = await fetch_clova_ocr_text(file_path)
 
     return text, file_type
+
+
+def _load_hwp_text(file_path: str) -> str:
+    return HWPLoader(file_path).load()[0].page_content
+
+
+def _load_hwpx_text(file_path: str) -> str:
+    return HWPXLoader(file_path).load()[0].page_content
 
 
 def _extract_images_safely(extractor, file_path: str) -> list[tuple[bytes, str]]:
@@ -196,12 +217,16 @@ async def _append_embedded_image_text(
     return text + "\n" + "\n".join(ocr_texts)
 
 
+def _convert_to_png(data: bytes) -> bytes:
+    buffer = io.BytesIO()
+    Image.open(io.BytesIO(data)).convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 async def _ocr_image_bytes(data: bytes, ext: str) -> str:
     if ext not in _CLOVA_NATIVE_FORMATS:
         # CLOVA가 지원하지 않는 포맷(bmp/gif 등)은 png로 변환해서 보낸다.
-        buffer = io.BytesIO()
-        Image.open(io.BytesIO(data)).convert("RGB").save(buffer, format="PNG")
-        data = buffer.getvalue()
+        data = await asyncio.to_thread(_convert_to_png, data)
         ext = ".png"
 
     if ext in (".jpg", ".jpeg"):
