@@ -27,7 +27,7 @@
 
 ## 2단계 — 사업계획서 업로드 (OCR)
 
-- PDF/DOCX/PPTX/HWP/이미지를 받아 OCR·텍스트 추출을 수행한다 (`app/crawler` 담당 영역).
+- PDF/HWP/HWPX/이미지를 받아 OCR·텍스트 추출을 수행한다 (`app/ocr/extract.py` 담당 영역, DOCX/PPTX는 지원 대상에서 제외).
 - 추출 결과는 정규화 스키마(PSST 공통 핵심 요소)로 변환된다.
 
 ## 3단계 — 1차 필터링 (원본 JSON 기준)
