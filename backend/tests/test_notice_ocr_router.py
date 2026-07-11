@@ -85,6 +85,57 @@ def test_pick_ocr_target_falls_back_to_first_document_type_when_none_parsed():
     assert result.id == 2
 
 
+def test_pick_ocr_target_prefers_notice_document_name_over_attachment_forms():
+    application_form = _attachment(
+        id=1, file_type="HWP", file_name="붙임1. 신청서 및 사업계획서 서식.hwp"
+    )
+    notice_document = _attachment(
+        id=2, file_type="PDF", file_name="26년_지원사업_추가_공고문.pdf"
+    )
+
+    result = _pick_ocr_target([application_form, notice_document])
+
+    assert result.id == 2
+
+
+def test_pick_ocr_target_matches_gongmo_keyword_too():
+    application_form = _attachment(
+        id=1, file_type="HWP", file_name="붙임1. 융자신청서.hwp"
+    )
+    notice_document = _attachment(
+        id=2, file_type="PDF", file_name="[공모] 2026 예술산업보증 공모요강.pdf"
+    )
+
+    result = _pick_ocr_target([application_form, notice_document])
+
+    assert result.id == 2
+
+
+def test_pick_ocr_target_falls_back_when_no_name_looks_like_notice_document():
+    first_doc = _attachment(id=1, file_type="PDF", file_name="a.pdf")
+    second_doc = _attachment(id=2, file_type="HWPX", file_name="b.hwpx")
+
+    result = _pick_ocr_target([first_doc, second_doc])
+
+    assert result.id == 1
+
+
+def test_pick_ocr_target_prefers_already_parsed_notice_document():
+    unparsed_notice_doc = _attachment(
+        id=1, file_type="PDF", file_name="공고문.pdf", parsed_text=None
+    )
+    parsed_form = _attachment(
+        id=2,
+        file_type="HWP",
+        file_name="붙임. 신청서.hwp",
+        parsed_text="이미 뽑아둔 텍스트",
+    )
+
+    result = _pick_ocr_target([unparsed_notice_doc, parsed_form])
+
+    assert result.id == 1
+
+
 # ---------------------------------------------------------------------------
 # _has_active_job_for_notice
 # ---------------------------------------------------------------------------
