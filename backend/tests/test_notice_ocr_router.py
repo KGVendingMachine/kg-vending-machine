@@ -15,6 +15,7 @@ from app.api.notice_ocr import (
     _file_type_from_name,
     _has_active_job_for_notice,
     _pick_ocr_target,
+    _run_batch_notice_ocr_jobs,
     get_notice_ocr_status,
     start_notice_ocr,
     start_notice_ocr_batch,
@@ -123,6 +124,44 @@ def test_pick_ocr_target_falls_back_when_no_name_looks_like_notice_document():
     result = _pick_ocr_target([first_doc, second_doc])
 
     assert result.id == 1
+
+
+def test_pick_ocr_target_excludes_application_form_that_also_mentions_gongmo():
+    """실제 DB(notice_id=11)에서 발견한 케이스: 신청서 파일명에도 "공모"가
+    들어있어서 키워드만으로는 진짜 공고문과 구분이 안 됐다."""
+    application_form = _attachment(
+        id=21,
+        file_type="HWP",
+        file_name="붙임1. 2026 예술산업 금융지원 시범사업(융자) 3차 공모 융자신청서(2).hwp",
+    )
+    notice_document = _attachment(
+        id=24,
+        file_type="PDF",
+        file_name="[공모] 2026 예술산업 금융지원 시범사업(융자) 3차 공모요강(변경).pdf",
+    )
+
+    result = _pick_ocr_target([application_form, notice_document])
+
+    assert result.id == 24
+
+
+def test_pick_ocr_target_excludes_application_form_that_also_mentions_gonggo():
+    """실제 DB에서 발견한 또 다른 케이스: "신청서식(변경공고).hwp"처럼 신청
+    양식 파일명에 "공고"가 포함된 경우."""
+    application_form = _attachment(
+        id=1,
+        file_type="HWP",
+        file_name="2026년 강원특별자치도 중소기업육성자금 신청서식(변경공고).hwp",
+    )
+    notice_document = _attachment(
+        id=2,
+        file_type="HWP",
+        file_name="2026년 강원특별자치도 중소기업육성자금 지원 변경계획(3차) 공고문.hwp",
+    )
+
+    result = _pick_ocr_target([application_form, notice_document])
+
+    assert result.id == 2
 
 
 def test_pick_ocr_target_prefers_already_parsed_notice_document():
@@ -254,7 +293,13 @@ async def test_start_notice_ocr_batch_starts_a_job_per_notice():
 
     assert [item.notice_id for item in response.items] == [1, 2, 3]
     assert all(item.status == NoticeOcrJobStatus.PENDING for item in response.items)
-    assert len(background_tasks.tasks) == 3
+    # 새 job들은 각자 background_tasks.add_task를 따로 부르지 않고 하나로
+    # 묶여 동시 실행된다(순차 실행되면 가벼운 job이 무거운 job 뒤에서
+    # 기다리게 되는 문제가 있었음 — _run_batch_notice_ocr_jobs 참고).
+    assert len(background_tasks.tasks) == 1
+    task = background_tasks.tasks[0]
+    assert task.func is _run_batch_notice_ocr_jobs
+    assert [notice_id for _, notice_id in task.args[0]] == [1, 2, 3]
 
 
 async def test_start_notice_ocr_batch_dedupes_notice_ids():
@@ -265,7 +310,8 @@ async def test_start_notice_ocr_batch_dedupes_notice_ids():
     )
 
     assert [item.notice_id for item in response.items] == [1, 2]
-    assert len(background_tasks.tasks) == 2
+    assert len(background_tasks.tasks) == 1
+    assert len(background_tasks.tasks[0].args[0]) == 2
 
 
 async def test_start_notice_ocr_batch_reuses_existing_active_job_instead_of_409():
@@ -282,5 +328,20 @@ async def test_start_notice_ocr_batch_reuses_existing_active_job_instead_of_409(
     assert reused.job_id == "existing"
     assert reused.status == NoticeOcrJobStatus.RUNNING
     assert new.notice_id == 2
-    # 이미 진행 중인 공고는 새로 트리거하지 않으므로 신규 공고 1건만 스케줄됨
+    # 이미 진행 중인 공고는 새로 트리거하지 않으므로 신규 공고 1건만 배치에 포함됨
     assert len(background_tasks.tasks) == 1
+    assert [notice_id for _, notice_id in background_tasks.tasks[0].args[0]] == [2]
+
+
+async def test_start_notice_ocr_batch_schedules_no_task_when_all_jobs_already_active():
+    _JOBS["existing"] = NoticeOcrJobStatusResponse(
+        job_id="existing", notice_id=1, status=NoticeOcrJobStatus.RUNNING
+    )
+    background_tasks = BackgroundTasks()
+
+    response = await start_notice_ocr_batch(
+        NoticeOcrBatchTriggerRequest(notice_ids=[1]), background_tasks
+    )
+
+    assert response.items[0].job_id == "existing"
+    assert len(background_tasks.tasks) == 0

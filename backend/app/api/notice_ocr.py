@@ -25,6 +25,7 @@ OCR한다(2026-07-11 프로토타입 범위 결정, `_pick_ocr_target` 참고) �
 첨부파일은 재-OCR하지 않고 그대로 재사용한다.
 """
 
+import asyncio
 import tempfile
 import uuid
 from pathlib import Path
@@ -76,9 +77,21 @@ _SUFFIX_BY_FILE_TYPE = {"PDF": ".pdf", "HWP": ".hwp", "HWPX": ".hwpx"}
 # 구분된다.
 _NOTICE_DOCUMENT_KEYWORDS = ("공고", "공모")
 
+# "공고"/"공모"가 들어있어도 신청 양식 자체일 수 있다 — 실제 DB에서 배치
+# 트리거를 돌려보다 발견함(이슈 검증 중, 2026-07-11): "붙임1. ...3차 공모
+# 융자신청서.hwp"는 "공모"를 포함하지만 실제 공고문은 같은 공고의 다른
+# 첨부파일 "[공모] ...공모요강(변경).pdf"였다. "신청서식(변경공고).hwp"처럼
+# 신청 양식 파일명에 "공고"가 들어간 경우도 실제로 있었다. 두 키워드가
+# 동시에 있으면 신청 양식으로 간주해 후보에서 제외한다.
+_APPLICATION_FORM_KEYWORDS = ("신청서", "서식", "동의서", "확인서", "확약서")
+
 
 def _is_notice_document_name(file_name: str | None) -> bool:
-    return bool(file_name) and any(kw in file_name for kw in _NOTICE_DOCUMENT_KEYWORDS)
+    if not file_name:
+        return False
+    if any(kw in file_name for kw in _APPLICATION_FORM_KEYWORDS):
+        return False
+    return any(kw in file_name for kw in _NOTICE_DOCUMENT_KEYWORDS)
 
 
 def _file_type_from_name(file_name: str) -> str | None:
@@ -255,9 +268,8 @@ def _start_notice_ocr_job(
 ) -> NoticeOcrJobStatusResponse:
     """공고 하나에 대한 OCR job을 새로 만들어 백그라운드로 실행시킨다.
 
-    단건 트리거(start_notice_ocr)와 배치 트리거가 동일한 시작 로직을
-    쓰도록 공용화했다 — 동시 트리거 가드(진행 중이면 재사용)는 호출자가
-    각자의 방식(단건은 409, 배치는 기존 job 그대로 반환)으로 처리한다.
+    단건 트리거(start_notice_ocr)에서만 쓴다 — 배치 트리거는 여러 건을
+    동시에 돌려야 해서 _run_batch_notice_ocr_jobs를 따로 쓴다(아래 참고).
     """
     job_id = str(uuid.uuid4())
     job = NoticeOcrJobStatusResponse(
@@ -266,6 +278,32 @@ def _start_notice_ocr_job(
     _JOBS[job_id] = job
     background_tasks.add_task(_execute_notice_ocr_job, job_id, notice_id)
     return job
+
+
+# 배치 안의 job을 전부 동시에 돌리면 CLOVA 호출이 한꺼번에 몰릴 수 있어
+# 이미지 OCR과 같은 이유로 동시 실행 수를 제한한다(extract.py의
+# _MAX_CONCURRENT_IMAGE_OCR과 같은 값).
+_MAX_CONCURRENT_BATCH_OCR = 5
+
+
+async def _run_batch_notice_ocr_jobs(job_notice_pairs: list[tuple[str, int]]) -> None:
+    """배치로 새로 만든 job들을 동시에 실행한다.
+
+    FastAPI BackgroundTasks는 같은 응답에 등록된 task를 순서대로 하나씩
+    await하며 실행한다 — job마다 background_tasks.add_task를 따로 부르면
+    (실제로 그렇게 했다가 확인함) 공고 하나의 OCR이 오래 걸릴 때 뒤에 등록된
+    "첨부파일 없음"처럼 즉시 끝나는 job까지 전부 그 뒤에서 기다리게 된다.
+    배치를 만든 의미가 없어지므로, 여기서 직접 세마포어로 동시 실행한다.
+    """
+    semaphore = asyncio.Semaphore(_MAX_CONCURRENT_BATCH_OCR)
+
+    async def _run_one(job_id: str, notice_id: int) -> None:
+        async with semaphore:
+            await _execute_notice_ocr_job(job_id, notice_id)
+
+    await asyncio.gather(
+        *(_run_one(job_id, notice_id) for job_id, notice_id in job_notice_pairs)
+    )
 
 
 @router.post(
@@ -303,14 +341,30 @@ async def start_notice_ocr_batch(
     request: NoticeOcrBatchTriggerRequest, background_tasks: BackgroundTasks
 ):
     items = []
+    new_jobs: list[tuple[str, int]] = []
     for notice_id in dict.fromkeys(request.notice_ids):  # 순서 유지하며 중복 제거
         existing = _active_job_for_notice(notice_id)
-        job = existing or _start_notice_ocr_job(notice_id, background_tasks)
+        if existing is not None:
+            items.append(
+                NoticeOcrBatchJobItem(
+                    notice_id=notice_id, job_id=existing.job_id, status=existing.status
+                )
+            )
+            continue
+
+        job_id = str(uuid.uuid4())
+        _JOBS[job_id] = NoticeOcrJobStatusResponse(
+            job_id=job_id, notice_id=notice_id, status=NoticeOcrJobStatus.PENDING
+        )
+        new_jobs.append((job_id, notice_id))
         items.append(
             NoticeOcrBatchJobItem(
-                notice_id=notice_id, job_id=job.job_id, status=job.status
+                notice_id=notice_id, job_id=job_id, status=NoticeOcrJobStatus.PENDING
             )
         )
+
+    if new_jobs:
+        background_tasks.add_task(_run_batch_notice_ocr_jobs, new_jobs)
     return NoticeOcrBatchTriggerResponse(items=items)
 
 
