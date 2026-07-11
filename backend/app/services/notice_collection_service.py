@@ -13,9 +13,13 @@ from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
     delete_notice,
     find_notice_id_by_source_and_title,
+    get_bizinfo_notices_with_raw,
     get_category_mapping,
+    get_kstartup_notices_with_raw,
     get_max_bizinfo_registration_time,
     get_max_notice_external_id,
+    get_notice_region_codes,
+    get_notice_regions,
     get_notices_for_status_refresh,
     get_notices_missing_category,
     get_or_create_organization,
@@ -34,6 +38,19 @@ logger = logging.getLogger(__name__)
 BIZINFO_SOURCE_NAME = "기업마당"
 KSTARTUP_SOURCE_NAME = "K-Startup"
 
+# 코드는 행정표준코드(법정동코드 앞 2자리) 기준. 강원/전북은 예전에
+# 여기 51/52로 잘못 들어가 있었다 — 실제로는 특별자치도 전환(강원
+# 2023-06, 전북 2024-01) 이후에도 기존 코드(42/45)를 그대로 쓴다.
+# 2026-07-10 발견해서 정정함(실제 DB에도 저장돼있던 잘못된 값이라
+# backfill_region_codes로 기존 데이터도 같이 보정).
+#
+# "전남광주"/"전남광주통합특별시": 2026-07-01 전라남도·광주광역시가
+# 통폐합해 출범한 신설 광역자치단체(대한민국 최초 시도 통합, 특별법
+# 근거). 예전엔 이 태그를 원본 데이터 오류로 보고 "전남"으로 정정하는
+# 별칭 처리를 했었는데, 실제로는 오류가 아니라 새 행정구역명이었다.
+# TODO: 코드값 "90"은 임시값 — 행정표준코드관리시스템(code.go.kr)에서
+# 공식 배정된 실제 코드로 확인 후 교체 필요. 기존 전남(46)/광주(29)는
+# 7/1 이전 수집된 공고(구 행정구역 기준)를 위해 그대로 남겨둔다.
 REGION_CODE_BY_NAME = {
     "전국": "ALL",
     "서울": "11",
@@ -54,10 +71,14 @@ REGION_CODE_BY_NAME = {
     "세종특별자치시": "36",
     "경기": "41",
     "경기도": "41",
+    "강원": "42",
+    "강원특별자치도": "42",
     "충북": "43",
     "충청북도": "43",
     "충남": "44",
     "충청남도": "44",
+    "전북": "45",
+    "전북특별자치도": "45",
     "전남": "46",
     "전라남도": "46",
     "경북": "47",
@@ -66,10 +87,8 @@ REGION_CODE_BY_NAME = {
     "경상남도": "48",
     "제주": "50",
     "제주특별자치도": "50",
-    "강원": "51",
-    "강원특별자치도": "51",
-    "전북": "52",
-    "전북특별자치도": "52",
+    "전남광주": "90",  # TODO: 임시값, 실제 행정표준코드로 교체 필요
+    "전남광주통합특별시": "90",  # TODO: 임시값, 실제 행정표준코드로 교체 필요
 }
 
 
@@ -145,16 +164,27 @@ def _parse_regions(value: str | None) -> list[tuple[str, str]]:
     return regions
 
 
-# 기업마당 hashtags에 실제 행정구역명이 아닌 이상한 복합 태그가 섞여
-# 있는 경우가 실제 데이터에서 확인됨 — 예: "여수시 소상공인 융자금" 공고의
-# hashtags에 "전남광주"/"전남광주통합특별시"라는, 존재하지 않는 행정구역명이
-# 들어있었다(원본 데이터 자체의 오류로 보임). 해당 공고는 실제로는
-# 여수시=전라남도 소속이라 "전남"으로 정정해 매핑한다. 알려진 오류
-# 패턴만 다루고 나머지 미매칭 태그는 그대로 무시한다.
-_BIZINFO_REGION_TAG_ALIASES = {
-    "전남광주": "전남",
-    "전남광주통합특별시": "전남",
-}
+# 기업마당 hashtags에는 K-Startup의 supt_regin="전국" 같은 전국 대상
+# 표현이 따로 없다 — 실제 응답으로 확인함: 전국 대상 공고는 "전국" 태그
+# 하나 대신 광역자치단체를 전부 나열하는 방식으로 표현된다(예:
+# "금융,서울,부산,대구,...,제주,..."). 이게 다 태그돼 있으면
+# K-Startup과 동일한 기준(region_code=ALL)으로도 조회되도록 "전국"을
+# 함께 추가한다.
+#
+# 2026-07-01 전남·광주 통합으로 "전국"의 구성이 둘로 나뉜다 — 통합 이전
+# 수집된 공고는 구 체계(전남+광주 별도, 17개)로, 이후 공고는 신 체계
+# (전남광주통합특별시 하나, 16개)로 나열될 수 있어 둘 다 인정한다.
+_JEONNAM_CODE = REGION_CODE_BY_NAME["전남"]
+_GWANGJU_CODE = REGION_CODE_BY_NAME["광주"]
+_JEONNAM_GWANGJU_CODE = REGION_CODE_BY_NAME["전남광주통합특별시"]
+
+_UNCHANGED_REGION_CODES = frozenset(
+    code
+    for code in REGION_CODE_BY_NAME.values()
+    if code not in {"ALL", _JEONNAM_CODE, _GWANGJU_CODE, _JEONNAM_GWANGJU_CODE}
+)
+_ALL_REGION_CODES_LEGACY = _UNCHANGED_REGION_CODES | {_JEONNAM_CODE, _GWANGJU_CODE}
+_ALL_REGION_CODES_CURRENT = _UNCHANGED_REGION_CODES | {_JEONNAM_GWANGJU_CODE}
 
 
 def _parse_bizinfo_regions(hashtags: str | None) -> list[tuple[str, str]]:
@@ -170,12 +200,16 @@ def _parse_bizinfo_regions(hashtags: str | None) -> list[tuple[str, str]]:
     regions: list[tuple[str, str]] = []
     seen_codes: set[str] = set()
     for tag in _split_multi_value(hashtags):
-        tag = _BIZINFO_REGION_TAG_ALIASES.get(tag, tag)
         region_code = REGION_CODE_BY_NAME.get(tag)
         if region_code is None or region_code in seen_codes:
             continue
         seen_codes.add(region_code)
         regions.append((region_code, tag))
+    if "ALL" not in seen_codes and (
+        _ALL_REGION_CODES_LEGACY <= seen_codes
+        or _ALL_REGION_CODES_CURRENT <= seen_codes
+    ):
+        regions.append(("ALL", "전국"))
     return regions
 
 
@@ -886,6 +920,103 @@ async def refresh_notice_statuses(session: AsyncSession) -> dict[str, int]:
                 session, notice_id, new_status, new_is_actionable
             )
             updated += 1
+
+    await session.commit()
+    return {"checked": checked, "updated": updated}
+
+
+async def backfill_bizinfo_nationwide_regions(session: AsyncSession) -> dict[str, int]:
+    """기업마당 공고 중 hashtags에 광역자치단체 17개가 모두 태그돼 있는데
+    아직 region_code=ALL("전국")이 없는 공고에 이를 추가한다.
+
+    _parse_bizinfo_regions에 전국 판정 로직을 추가하기 전에 이미 수집된
+    공고는 조기종료 커서 때문에 일반 재수집으로는 다시 훑이지 않을 수
+    있어(이미 저장된 지점보다 과거라 건너뜀), 저장된 원본 hashtags를
+    다시 읽어 일회성으로 보정한다. 외부 API를 다시 호출하지 않는다.
+    """
+    checked = 0
+    updated = 0
+
+    rows = await get_bizinfo_notices_with_raw(session)
+    for notice_id, raw_field in rows:
+        checked += 1
+        try:
+            item = json.loads(raw_field)
+        except (TypeError, json.JSONDecodeError):
+            logger.warning(
+                "기업마당 전국 지역 백필 중 raw 데이터를 파싱하지 못했습니다 "
+                "(notice_id=%s)",
+                notice_id,
+            )
+            continue
+
+        regions = _parse_bizinfo_regions(item.get("hashtags"))
+        if not any(region_code == "ALL" for region_code, _ in regions):
+            continue
+
+        existing_region_names = await get_notice_regions(session, notice_id)
+        if "전국" in existing_region_names:
+            continue
+
+        await replace_notice_region(session, notice_id, regions)
+        updated += 1
+
+    await session.commit()
+    return {"checked": checked, "updated": updated}
+
+
+async def backfill_notice_region_codes(session: AsyncSession) -> dict[str, int]:
+    """저장된 원본 데이터를 다시 읽어 모든 공고(기업마당+K-Startup)의
+    지역 코드를 최신 REGION_CODE_BY_NAME 기준으로 재계산해 보정한다.
+
+    2026-07-10에 강원(51→42)/전북(52→45) 코드가 처음부터 잘못
+    들어가 있던 것과, 전남·광주 통합(2026-07-01)으로 "전남광주통합
+    특별시"가 새 지역명으로 추가된 것을 뒤늦게 발견해 만든 백필이다.
+    외부 API를 다시 호출하지 않고, 이미 저장된 원본(hashtags/
+    supt_regin)만으로 재계산한다.
+    """
+    checked = 0
+    updated = 0
+
+    bizinfo_rows = await get_bizinfo_notices_with_raw(session)
+    for notice_id, raw_field in bizinfo_rows:
+        checked += 1
+        try:
+            item = json.loads(raw_field)
+        except (TypeError, json.JSONDecodeError):
+            logger.warning(
+                "지역 코드 백필 중 기업마당 raw 데이터를 파싱하지 못했습니다 "
+                "(notice_id=%s)",
+                notice_id,
+            )
+            continue
+        new_regions = _parse_bizinfo_regions(item.get("hashtags"))
+        new_codes = {region_code for region_code, _ in new_regions}
+        existing_codes = await get_notice_region_codes(session, notice_id)
+        if new_codes == existing_codes:
+            continue
+        await replace_notice_region(session, notice_id, new_regions)
+        updated += 1
+
+    kstartup_rows = await get_kstartup_notices_with_raw(session)
+    for notice_id, raw_field in kstartup_rows:
+        checked += 1
+        try:
+            item = json.loads(raw_field)
+        except (TypeError, json.JSONDecodeError):
+            logger.warning(
+                "지역 코드 백필 중 K-Startup raw 데이터를 파싱하지 못했습니다 "
+                "(notice_id=%s)",
+                notice_id,
+            )
+            continue
+        new_regions = _parse_regions(item.get("supt_regin"))
+        new_codes = {region_code for region_code, _ in new_regions}
+        existing_codes = await get_notice_region_codes(session, notice_id)
+        if new_codes == existing_codes:
+            continue
+        await replace_notice_region(session, notice_id, new_regions)
+        updated += 1
 
     await session.commit()
     return {"checked": checked, "updated": updated}
