@@ -44,7 +44,10 @@ class NoticeOcrJobStatusResponse(BaseModel):
 
 
 class NoticeOcrBatchTriggerRequest(BaseModel):
-    notice_ids: list[int] = Field(min_length=1)
+    # 상한 없이 받으면 실수로(또는 대량 시드용으로) 수천 건을 한 번에 넣어
+    # CLOVA 비용이 크게 나가고 배치 하나가 몇 시간씩 걸릴 수 있어 30건으로
+    # 제한한다(2026-07-11 결정).
+    notice_ids: list[int] = Field(min_length=1, max_length=30)
 
 
 class NoticeOcrBatchJobItem(BaseModel):

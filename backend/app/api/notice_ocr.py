@@ -132,78 +132,89 @@ async def _ensure_kstartup_attachments(
     return await get_notice_attachments(session, notice_id)
 
 
-async def _run_notice_ocr_job(
-    session: AsyncSession, job_id: str, notice_id: int
-) -> None:
-    row = await get_notice_detail(session, notice_id)
-    if row is None:
-        _JOBS[job_id] = NoticeOcrJobStatusResponse(
-            job_id=job_id,
-            notice_id=notice_id,
-            status=NoticeOcrJobStatus.FAILED,
-            error_message="해당 id의 공고를 찾을 수 없습니다.",
-        )
-        return
-    notice, source_name, _ = row
-
-    _JOBS[job_id] = NoticeOcrJobStatusResponse(
-        job_id=job_id, notice_id=notice_id, status=NoticeOcrJobStatus.RUNNING
-    )
-
-    try:
-        attachments = await get_notice_attachments(session, notice_id)
-        if not attachments and source_name == KSTARTUP_SOURCE_NAME:
-            attachments = await _ensure_kstartup_attachments(
-                session, notice_id, notice.external_id
+async def _run_notice_ocr_job(job_id: str, notice_id: int) -> None:
+    """DB가 필요한 부분(공고/첨부파일 조회, 결과 저장)만 세션을 열고,
+    다운로드·CLOVA OCR처럼 DB가 필요 없는 느린 외부 호출(길면 100초 이상,
+    실측: 이미지 48개짜리 문서 122초) 동안은 세션을 닫아 커넥션을
+    반납한다. 배치 트리거로 여러 건을 동시에 돌릴 때, DB pool
+    기본값(pool_size=5)을 느린 외부 호출 때문에 다 붙들고 있다가 다른
+    요청이 커넥션을 못 받는 상황을 막기 위함(2026-07-11 확인)."""
+    async with async_session_factory() as session:
+        row = await get_notice_detail(session, notice_id)
+        if row is None:
+            _JOBS[job_id] = NoticeOcrJobStatusResponse(
+                job_id=job_id,
+                notice_id=notice_id,
+                status=NoticeOcrJobStatus.FAILED,
+                error_message="해당 id의 공고를 찾을 수 없습니다.",
             )
-    except Exception as exc:
-        _JOBS[job_id] = NoticeOcrJobStatusResponse(
-            job_id=job_id,
-            notice_id=notice_id,
-            status=NoticeOcrJobStatus.FAILED,
-            error_message=f"첨부파일 조회 실패: {exc}",
-        )
-        return
+            return
+        notice, source_name, _ = row
 
-    target = _pick_ocr_target(attachments)
-    if target is None:
-        status_ = (
-            NoticeOcrJobStatus.NO_ATTACHMENT
-            if not attachments
-            else NoticeOcrJobStatus.UNSUPPORTED_FORMAT
-        )
         _JOBS[job_id] = NoticeOcrJobStatusResponse(
-            job_id=job_id, notice_id=notice_id, status=status_
+            job_id=job_id, notice_id=notice_id, status=NoticeOcrJobStatus.RUNNING
         )
-        return
 
-    if target.parsed_text:
-        _JOBS[job_id] = NoticeOcrJobStatusResponse(
-            job_id=job_id,
-            notice_id=notice_id,
-            status=NoticeOcrJobStatus.COMPLETED,
-            attachment_id=target.id,
-            file_name=target.file_name,
-            char_count=len(target.parsed_text),
-        )
-        return
+        try:
+            attachments = await get_notice_attachments(session, notice_id)
+            if not attachments and source_name == KSTARTUP_SOURCE_NAME:
+                attachments = await _ensure_kstartup_attachments(
+                    session, notice_id, notice.external_id
+                )
+        except Exception as exc:
+            _JOBS[job_id] = NoticeOcrJobStatusResponse(
+                job_id=job_id,
+                notice_id=notice_id,
+                status=NoticeOcrJobStatus.FAILED,
+                error_message=f"첨부파일 조회 실패: {exc}",
+            )
+            return
+
+        target = _pick_ocr_target(attachments)
+        if target is None:
+            status_ = (
+                NoticeOcrJobStatus.NO_ATTACHMENT
+                if not attachments
+                else NoticeOcrJobStatus.UNSUPPORTED_FORMAT
+            )
+            _JOBS[job_id] = NoticeOcrJobStatusResponse(
+                job_id=job_id, notice_id=notice_id, status=status_
+            )
+            return
+
+        if target.parsed_text:
+            _JOBS[job_id] = NoticeOcrJobStatusResponse(
+                job_id=job_id,
+                notice_id=notice_id,
+                status=NoticeOcrJobStatus.COMPLETED,
+                attachment_id=target.id,
+                file_name=target.file_name,
+                char_count=len(target.parsed_text),
+            )
+            return
+
+        attachment_id = target.id
+        attachment_file_url = target.file_url
+        attachment_file_type = target.file_type
+        attachment_file_name = target.file_name
+    # 세션 종료 — 다운로드·OCR 동안 DB 커넥션을 붙들지 않는다.
 
     try:
         if source_name == KSTARTUP_SOURCE_NAME:
-            data = await download_kstartup_attachment(target.file_url)
+            data = await download_kstartup_attachment(attachment_file_url)
         else:
-            data = await download_bizinfo_attachment(target.file_url)
+            data = await download_bizinfo_attachment(attachment_file_url)
     except Exception as exc:
         _JOBS[job_id] = NoticeOcrJobStatusResponse(
             job_id=job_id,
             notice_id=notice_id,
             status=NoticeOcrJobStatus.FAILED,
-            attachment_id=target.id,
+            attachment_id=attachment_id,
             error_message=f"첨부파일 다운로드 실패: {exc}",
         )
         return
 
-    suffix = _SUFFIX_BY_FILE_TYPE.get(target.file_type or "", ".pdf")
+    suffix = _SUFFIX_BY_FILE_TYPE.get(attachment_file_type or "", ".pdf")
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp_path = tmp.name
     try:
@@ -214,30 +225,30 @@ async def _run_notice_ocr_job(
             job_id=job_id,
             notice_id=notice_id,
             status=NoticeOcrJobStatus.FAILED,
-            attachment_id=target.id,
+            attachment_id=attachment_id,
             error_message=f"OCR 실패: {exc}",
         )
         return
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
-    await set_attachment_parsed_text(session, target.id, text)
-    await session.commit()
+    async with async_session_factory() as session:
+        await set_attachment_parsed_text(session, attachment_id, text)
+        await session.commit()
 
     _JOBS[job_id] = NoticeOcrJobStatusResponse(
         job_id=job_id,
         notice_id=notice_id,
         status=NoticeOcrJobStatus.COMPLETED,
-        attachment_id=target.id,
-        file_name=target.file_name,
+        attachment_id=attachment_id,
+        file_name=attachment_file_name,
         char_count=len(text),
     )
 
 
 async def _execute_notice_ocr_job(job_id: str, notice_id: int) -> None:
     try:
-        async with async_session_factory() as session:
-            await _run_notice_ocr_job(session, job_id, notice_id)
+        await _run_notice_ocr_job(job_id, notice_id)
     except Exception as exc:
         _JOBS[job_id] = NoticeOcrJobStatusResponse(
             job_id=job_id,
