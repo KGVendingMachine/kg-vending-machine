@@ -50,6 +50,11 @@ async def run_analysis(
     1. file_url의 파일을 OCR → raw_text/file_type 저장 후 커밋(먼저 확정)
     2. 방금 추출한 텍스트로 정규화 → analysis_json 저장
 
+    raw_text가 이미 있으면(이전 실행에서 OCR까지 성공하고 정규화만 실패한
+    경우) 1을 건너뛰고 정규화부터 시작한다 — 실패 후 재시도가 비싼 CLOVA
+    OCR을 다시 부르지 않게. 업로드는 매번 새 행을 만들므로 raw_text가 있다는
+    건 같은 파일을 이미 추출했다는 뜻이다.
+
     on_step은 진행 단계를 알리는 선택적 콜백(business_plan 행의 잡 상태
     갱신용 — DB를 쓰므로 async)이다.
     """
@@ -59,12 +64,15 @@ async def run_analysis(
     if not plan.file_url:
         raise NoUploadedFileError(business_plan_id)
 
-    if on_step is not None:
-        await on_step(AnalysisStep.EXTRACTING)
-    text, file_type = await extract_fn(plan.file_url)
-    await save_raw_text(session, business_plan_id, text, file_type)
-    # OCR 결과를 정규화 전에 확정한다. 아래 정규화가 실패해도 raw_text는 남는다.
-    await session.commit()
+    if plan.raw_text:
+        text = plan.raw_text
+    else:
+        if on_step is not None:
+            await on_step(AnalysisStep.EXTRACTING)
+        text, file_type = await extract_fn(plan.file_url)
+        await save_raw_text(session, business_plan_id, text, file_type)
+        # OCR 결과를 정규화 전에 확정한다. 아래 정규화가 실패해도 raw_text는 남는다.
+        await session.commit()
 
     if on_step is not None:
         await on_step(AnalysisStep.NORMALIZING)

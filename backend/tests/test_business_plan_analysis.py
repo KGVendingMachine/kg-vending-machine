@@ -18,6 +18,7 @@ from app.schemas.business_plan import (
     NormalizedBusinessPlanSchema,
     ProblemInfo,
 )
+from app.schemas.business_plan_analysis import AnalysisStep
 from app.services.business_plan_analysis_service import (
     NoUploadedFileError,
     run_analysis,
@@ -99,6 +100,41 @@ async def test_run_analysis_preserves_ocr_result_when_normalize_fails(
     await db_session.refresh(plan)
     assert plan.raw_text == "보존돼야 할 원문"  # OCR 결과는 커밋되어 남음
     assert plan.analysis_json is None  # 정규화는 실패했으므로 비어 있음
+
+
+async def test_run_analysis_skips_ocr_when_raw_text_exists(
+    db_session, test_company_profile
+):
+    """raw_text가 이미 있으면(정규화만 실패했던 재시도) 재OCR 없이 정규화만 돈다."""
+    plan = await _create_plan(
+        db_session, test_company_profile, raw_text="이전 실행에서 추출해 둔 원문"
+    )
+    normalized = NormalizedBusinessPlanSchema(problem=ProblemInfo(background="배경"))
+    steps: list[AnalysisStep] = []
+
+    async def never_extract(path: str) -> tuple[str, str]:
+        raise AssertionError("raw_text가 있으면 extract_fn을 부르면 안 된다")
+
+    captured_text: list[str] = []
+
+    async def capture_normalize(text: str) -> NormalizedBusinessPlanSchema:
+        captured_text.append(text)
+        return normalized
+
+    async def record_step(step: AnalysisStep) -> None:
+        steps.append(step)
+
+    outcome = await run_analysis(
+        db_session,
+        plan.id,
+        extract_fn=never_extract,
+        normalize_fn=capture_normalize,
+        on_step=record_step,
+    )
+
+    assert outcome.normalized == normalized
+    assert captured_text == ["이전 실행에서 추출해 둔 원문"]
+    assert steps == [AnalysisStep.NORMALIZING]  # extracting 단계는 건너뜀
 
 
 async def test_run_analysis_raises_when_plan_missing(db_session):
