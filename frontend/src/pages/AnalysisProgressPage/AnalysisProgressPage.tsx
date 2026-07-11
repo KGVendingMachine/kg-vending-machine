@@ -268,8 +268,8 @@ export function AnalysisProgressPage() {
             )}
           </div>
           <div className={styles.logFootnote}>
-            단계 실패 시 자동 재시도하며, 실패가 지속되면 재시도 버튼이
-            표시됩니다.
+            일시적인 조회 오류는 자동으로 다시 확인해요. 분석이 실패하면 다시
+            시도 버튼이 표시됩니다.
           </div>
         </div>
 

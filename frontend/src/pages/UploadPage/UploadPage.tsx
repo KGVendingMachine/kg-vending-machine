@@ -7,6 +7,10 @@ import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { PATHS } from '../../routes/paths'
 import styles from './UploadPage.module.css'
 
+// 서버 설정(MAX_UPLOAD_SIZE_BYTES)과 일치. 큰 파일을 다 올린 뒤 413으로
+// 거절당하지 않도록 선택 시점에 미리 걸러준다.
+const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
+
 function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
 }
@@ -42,7 +46,15 @@ export function UploadPage() {
 
   function handleFiles(files: FileList | null) {
     if (files && files.length > 0) {
-      setFile(files[0])
+      const selected = files[0]
+      if (selected.size > MAX_UPLOAD_SIZE_BYTES) {
+        setFile(null)
+        setError(
+          `파일이 너무 커요 (${formatFileSize(selected.size)}). 최대 50MB까지 업로드할 수 있어요.`,
+        )
+        return
+      }
+      setFile(selected)
       setError(null)
     }
   }
@@ -103,9 +115,7 @@ export function UploadPage() {
             <div className={styles.dropHint}>
               PDF · HWP · HWPX · 이미지(JPG/PNG/TIFF)
             </div>
-            <div className={styles.dropLimit}>
-              최대 50MB · 악성파일 검사 자동 수행
-            </div>
+            <div className={styles.dropLimit}>최대 50MB</div>
             <input
               ref={fileInputRef}
               type="file"
