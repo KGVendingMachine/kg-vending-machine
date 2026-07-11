@@ -399,3 +399,18 @@ async def test_get_notice_ocr_batch_status_returns_empty_items_for_empty_input()
     response = await get_notice_ocr_batch_status(job_ids=[])
 
     assert response.items == []
+
+
+def test_get_notice_ocr_batch_status_returns_200_when_job_ids_omitted_over_http():
+    """함수를 직접 부르면 job_ids=[]가 그냥 파이썬 기본 인자라 늘 통과하지만,
+    실제 HTTP에서는 Query(...)(필수)였다면 job_ids를 아예 안 보낼 때 422가
+    난다 — FastAPI 계층까지 거쳐야 드러나는 문제라 TestClient로 확인한다."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.get("/api/internal/notices/ocr/batch/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"items": []}

@@ -425,10 +425,12 @@ async def start_notice_ocr_batch(
         "조회한다. 트리거는 여러 건을 한 번에 시작할 수 있는데 상태 확인은 "
         "건마다 따로 해야 하는 비대칭을 없애기 위한 용도. 존재하지 않는 "
         "job_id는 조용히 결과에서 빠진다(단건 조회의 404와 다름 — 배치 중 "
-        "일부만 잘못된 job_id를 보내도 나머지 조회 자체가 실패하지 않게 함)."
+        "일부만 잘못된 job_id를 보내도 나머지 조회 자체가 실패하지 않게 함). "
+        "job_ids를 아예 안 보내면(호출자가 자기 쪽에서 이미 완료 처리한 job을 "
+        "다 걸러내고 남은 게 없는 경우 등) 422 대신 빈 목록을 반환한다."
     ),
 )
-async def get_notice_ocr_batch_status(job_ids: list[str] = Query(...)):
+async def get_notice_ocr_batch_status(job_ids: list[str] = Query(default=[])):
     items = [_JOBS[job_id] for job_id in job_ids if job_id in _JOBS]
     return NoticeOcrBatchStatusResponse(items=items)
 
