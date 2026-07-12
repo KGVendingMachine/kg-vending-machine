@@ -25,6 +25,7 @@ from app.services import notice_collection_service as svc
 from app.services.notice_collection_service import (
     _bizinfo_raw_category_key,
     _derive_status_from_dates,
+    _find_cross_source_duplicate_notice_ids,
     _is_bizinfo_fund_category,
     _is_closed_by_keyword,
     _is_kstartup_fund_category,
@@ -924,3 +925,82 @@ async def test_backfill_region_codes_skips_already_correct_notice(db_session):
 
     codes = await get_notice_region_codes(db_session, notice_id)
     assert codes == {"11"}
+
+
+# ---------------------------------------------------------------------------
+# _find_cross_source_duplicate_notice_ids
+# ---------------------------------------------------------------------------
+
+
+async def _create_notice_for_dup_test(db_session, source, **overrides):
+    defaults = dict(
+        source_id=source.id,
+        title="테스트 공고",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+    defaults.update(overrides)
+    return await upsert_notice(db_session, **defaults)
+
+
+async def test_find_cross_source_duplicate_matches_single_candidate_without_dates(
+    db_session,
+):
+    """실제 DB 확인: 기업마당 공고의 89%가 "상시모집" 등으로 신청기간이
+    없다. 제목 후보가 1건뿐이면 애매할 게 없으므로, 신청기간이 둘 다
+    없어도(이쪽·저쪽 다) 안전하게 매칭해야 한다 — 그래야 이 대다수
+    공고에서도 중복 정리가 실제로 동작한다."""
+    source = await _create_source(db_session, "단일후보출처")
+    notice_id = await _create_notice_for_dup_test(
+        db_session, source, external_id="single-1", title="상시모집 지원사업"
+    )
+
+    found = await _find_cross_source_duplicate_notice_ids(
+        db_session, "단일후보출처", "상시모집 지원사업", None, None
+    )
+
+    assert found == [notice_id]
+
+
+async def test_find_cross_source_duplicate_requires_dates_when_multiple_candidates(
+    db_session,
+):
+    """제목이 같은 공고가 여러 건(정기 반복 공고)이면, 신청기간을 모르는
+    채로는 어느 회차인지 특정할 수 없으므로 아무것도 매칭하면 안 된다
+    (잘못 지우거나 잘못 건너뛰는 것보다 안전한 쪽을 택함)."""
+    source = await _create_source(db_session, "복수후보출처")
+    await _create_notice_for_dup_test(
+        db_session,
+        source,
+        external_id="round-1",
+        title="반복되는 모집 공고",
+        application_start_date=date(2026, 1, 1),
+        application_end_date=date(2026, 1, 31),
+    )
+    await _create_notice_for_dup_test(
+        db_session,
+        source,
+        external_id="round-2",
+        title="반복되는 모집 공고",
+        application_start_date=date(2026, 3, 1),
+        application_end_date=date(2026, 3, 31),
+    )
+
+    found_without_dates = await _find_cross_source_duplicate_notice_ids(
+        db_session, "복수후보출처", "반복되는 모집 공고", None, None
+    )
+    assert found_without_dates == []
+
+    found_with_matching_dates = await _find_cross_source_duplicate_notice_ids(
+        db_session,
+        "복수후보출처",
+        "반복되는 모집 공고",
+        date(2026, 3, 1),
+        date(2026, 3, 31),
+    )
+    assert len(found_with_matching_dates) == 1
