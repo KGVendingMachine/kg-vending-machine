@@ -10,6 +10,12 @@ def _none_to_empty_list(value: Any) -> Any:
     return [] if value is None else value
 
 
+def _list_to_joined_string(value: Any) -> Any:
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value if item)
+    return value
+
+
 class NoticeBasicInfo(BaseModel):
     title: str | None = None
     organization: str | None = None
@@ -102,6 +108,14 @@ class NoticeContactInfo(BaseModel):
     phone: str | None = None
     email: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
+
+    _normalize_scalar_contacts = field_validator(
+        "department",
+        "manager",
+        "phone",
+        "email",
+        mode="before",
+    )(_list_to_joined_string)
 
 
 class NoticeMatchingInfo(BaseModel):

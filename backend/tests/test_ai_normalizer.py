@@ -99,3 +99,32 @@ async def test_normalize_text_fails_fast_on_non_retryable_error():
 
     assert isinstance(exc_info.value.__cause__, AuthenticationError)
     assert client.chat.completions.create.call_count == 1
+
+
+def test_business_plan_schema_treats_null_extra_as_empty_dict():
+    result = NormalizedBusinessPlanSchema.model_validate(
+        {
+            "company": {"extra": None},
+            "problem": {"background": "배경", "extra": None},
+            "solution": {
+                "tech_stack": None,
+                "differentiators": None,
+                "extra": None,
+            },
+            "market": {"competitors": None, "extra": None},
+            "funding": {"use_of_funds": None, "extra": None},
+            "team": {"members": None, "extra": None},
+        }
+    )
+
+    assert result.company.extra == {}
+    assert result.problem.extra == {}
+    assert result.solution.extra == {}
+    assert result.solution.tech_stack == []
+    assert result.solution.differentiators == []
+    assert result.market.extra == {}
+    assert result.market.competitors == []
+    assert result.funding.extra == {}
+    assert result.funding.use_of_funds == []
+    assert result.team.extra == {}
+    assert result.team.members == []
