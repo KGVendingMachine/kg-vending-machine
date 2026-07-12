@@ -35,6 +35,16 @@ def _has_keyword(values: list[str], keyword: str) -> bool:
     return any(keyword in value for value in values)
 
 
+def _first_email(raw_text: str) -> str | None:
+    match = re.search(r"[\w.+-]+@[\w.-]+", raw_text)
+    return match.group(0) if match else None
+
+
+def _first_phone(raw_text: str) -> str | None:
+    match = re.search(r"\d{2,4}-\d{3,4}-\d{4}", raw_text)
+    return match.group(0) if match else None
+
+
 def _enrich_support_types(raw_text: str, normalized: NormalizedNoticeSchema) -> None:
     support_text = "\n".join([raw_text, *normalized.support.support_content])
     rules = (
@@ -164,7 +174,54 @@ def enrich_normalized_notice(
             normalized.eligibility.target_company_size.append(label)
             existing_company_sizes.add(label)
 
+    if not normalized.eligibility.target_company_size and (
+        "기업" in raw_text or "사업장" in raw_text or "사업자" in raw_text
+    ):
+        normalized.eligibility.target_company_size.append("기업")
+
     _enrich_support_types(raw_text, normalized)
     _enrich_support_rates(raw_text, normalized)
+
+    if normalized.support.summary and not normalized.support.support_content:
+        normalized.support.support_content.append(normalized.support.summary)
+
+    if not normalized.contact.email:
+        normalized.contact.email = _first_email(raw_text)
+    if not normalized.contact.phone:
+        normalized.contact.phone = _first_phone(raw_text)
+
+    if not normalized.matching.keywords:
+        keyword_candidates = [
+            category,
+            *normalized.support.support_type,
+            *normalized.eligibility.target_company_size,
+            *normalized.eligibility.target_industries,
+            *normalized.eligibility.target_regions,
+        ]
+        for value in keyword_candidates:
+            if value:
+                _append_unique(normalized.matching.keywords, value)
+
+    if not normalized.matching.suitable_company_profile:
+        profile_parts = [
+            *normalized.eligibility.target_regions[:1],
+            *normalized.eligibility.target_company_size[:1],
+            *normalized.support.support_type[:1],
+        ]
+        if profile_parts:
+            normalized.matching.suitable_company_profile = (
+                " · ".join(profile_parts) + " 조건에 맞는 기업"
+            )
+
+    if not normalized.matching.matching_signals:
+        signal_candidates = [
+            *normalized.eligibility.target_regions[:1],
+            *normalized.eligibility.target_company_size[:1],
+            *normalized.eligibility.target_industries[:1],
+            *normalized.support.support_type[:2],
+        ]
+        for value in signal_candidates:
+            if value:
+                _append_unique(normalized.matching.matching_signals, value)
 
     return normalized

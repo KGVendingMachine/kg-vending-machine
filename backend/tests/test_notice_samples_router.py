@@ -15,6 +15,7 @@ from app.schemas.notice_normalization import (
     NormalizedNoticeSchema,
     NoticeApplicationInfo,
     NoticeBasicInfo,
+    NoticeContactInfo,
     NoticeEligibilityInfo,
     NoticeMatchingInfo,
     NoticeSupportInfo,
@@ -263,3 +264,44 @@ def test_validate_normalized_notice_reports_source_consistency_errors():
     assert any("contact.email" in error for error in result.errors)
     assert any("contact.phone" in error for error in result.errors)
     assert any("required_documents" in error for error in result.errors)
+
+
+def test_enrich_from_sample_metadata_fills_quality_fallbacks():
+    sample = SampleNotice(
+        sample_index=0,
+        title="장비 카탈로그",
+        source="기업마당",
+        category="기술지원",
+        status="모집중",
+        application_start_date="2026-01-01",
+        application_end_date="2026-02-01",
+        file_name="catalog.pdf",
+        file_type="PDF",
+        char_count=100,
+        raw_text=(
+            "기업 공동활용 장비 지원 사업입니다. 신청 문의 test@example.com, "
+            "02-1234-5678"
+        ),
+    )
+    normalized = NormalizedNoticeSchema(
+        support=NoticeSupportInfo(summary="기업 공동활용 장비를 지원합니다.")
+    )
+
+    enriched = _enrich_from_sample_metadata(sample, normalized)
+
+    assert enriched.support.support_content == ["기업 공동활용 장비를 지원합니다."]
+    assert "기업" in enriched.eligibility.target_company_size
+    assert enriched.contact.email == "test@example.com"
+    assert enriched.contact.phone == "02-1234-5678"
+    assert enriched.matching.keywords
+    assert enriched.matching.suitable_company_profile
+    assert enriched.matching.matching_signals
+
+
+def test_notice_contact_schema_joins_list_values():
+    contact = NoticeContactInfo.model_validate(
+        {"email": ["a@example.com", "b@example.com"], "phone": ["02-1111-2222"]}
+    )
+
+    assert contact.email == "a@example.com, b@example.com"
+    assert contact.phone == "02-1111-2222"

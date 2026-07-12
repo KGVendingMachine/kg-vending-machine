@@ -122,6 +122,11 @@ async def test_normalize_notice_raises_no_source_text_error(db_session):
     with pytest.raises(NoSourceTextForNormalizationError):
         await normalize_notice(db_session, notice_id)
 
+    notice = await db_session.get(Notice, notice_id)
+    assert notice.normalization_status == "failed"
+    assert "정규화에 쓸 원문이 없습니다" in notice.normalization_error
+    assert notice.normalized_json is None
+
 
 async def test_normalize_notice_persists_failure_status_on_ai_error(
     db_session, monkeypatch

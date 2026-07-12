@@ -19,6 +19,7 @@ notice_ocr.py의 _save_kstartup_attachments와 같은 방식) — 기업마당
 
 import asyncio
 import json
+import sys
 import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -216,6 +217,7 @@ async def _collect_kstartup_samples(
 
 
 async def main() -> None:
+    _OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT_SECONDS) as client:
         bizinfo_samples = await _collect_bizinfo_samples(client)
         remaining = _TOTAL_SAMPLE_COUNT - len(bizinfo_samples)
@@ -236,4 +238,6 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     asyncio.run(main())
