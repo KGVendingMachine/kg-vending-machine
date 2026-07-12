@@ -25,7 +25,7 @@ class SampleNoticeNormalizationRequest(BaseModel):
     sample_index: int = Field(default=0, ge=0)
     sample_path: str | None = Field(
         default=None,
-        description="Optional local JSON path. Defaults to NOTICE_SAMPLE_JSON_PATH.",
+        description="선택적인 로컬 JSON 경로(data 디렉터리 내부 파일만 허용). 미지정 시 NOTICE_SAMPLE_JSON_PATH를 사용합니다.",
     )
 
 
