@@ -1,4 +1,5 @@
 import json
+import sys
 
 import pytest
 
@@ -108,13 +109,34 @@ def test_load_sample_notice_falls_back_to_raw_text_length(tmp_path):
     [
         "../secret.json",
         "../../secret.json",
-        "..\\..\\secret.json",
         "/etc/passwd",
-        "C:\\Windows\\win.ini",
     ],
 )
 def test_load_sample_notice_rejects_path_traversal(tmp_path, malicious_path):
     # base dir(tmp_path) 밖의 파일을 가리키는 sample_path는 차단되어야 한다.
+    secret_dir = tmp_path.parent / "outside_base_dir"
+    secret_dir.mkdir(exist_ok=True)
+    (secret_dir / "secret.json").write_text(
+        json.dumps([{"raw_text": "leaked"}]), encoding="utf-8"
+    )
+
+    with pytest.raises(SampleNoticeConfigError):
+        load_sample_notice(sample_index=0, sample_path=malicious_path)
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="백슬래시 경로 구분자는 윈도우에서만 의미가 있다"
+)
+@pytest.mark.parametrize(
+    "malicious_path",
+    [
+        "..\\..\\secret.json",
+        "C:\\Windows\\win.ini",
+    ],
+)
+def test_load_sample_notice_rejects_path_traversal_windows_style(
+    tmp_path, malicious_path
+):
     secret_dir = tmp_path.parent / "outside_base_dir"
     secret_dir.mkdir(exist_ok=True)
     (secret_dir / "secret.json").write_text(
