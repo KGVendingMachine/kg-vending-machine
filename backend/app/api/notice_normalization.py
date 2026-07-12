@@ -20,11 +20,12 @@ Notice.normalized_json에 영속화해 job_id 없이도 나중에 조회할 수 
 import asyncio
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.normalizer import AiNormalizationError
-from app.db.session import async_session_factory
+from app.db.session import async_session_factory, get_db
+from app.repositories.notice_repository import get_notice_detail
 from app.schemas.notice_normalization_job import (
     NoticeNormalizationBatchJobItem,
     NoticeNormalizationBatchStatusResponse,
@@ -33,6 +34,7 @@ from app.schemas.notice_normalization_job import (
     NoticeNormalizationJobAccepted,
     NoticeNormalizationJobStatus,
     NoticeNormalizationJobStatusResponse,
+    NoticeNormalizationResultResponse,
 )
 from app.services.notice_normalization_service import (
     NoticeNormalizationError,
@@ -89,9 +91,23 @@ async def _run_normalization_job(
 
 async def _execute_normalization_job(job_id: str, notice_id: int) -> None:
     """BackgroundTasks 진입점. 요청 스코프 세션이 아니라 새 세션을 직접 연다
-    (business_plan.py의 정규화 작업 실행기와 동일한 이유)."""
-    async with async_session_factory() as session:
-        await _run_normalization_job(session, job_id, notice_id)
+    (business_plan.py의 정규화 작업 실행기와 동일한 이유).
+
+    _run_normalization_job이 잡는 정규화 예외 외의 실패(세션/커넥션 확보
+    실패 등)까지 여기서 잡아야 한다 — 안 잡으면 job이 PENDING에 영원히
+    멈추고, PENDING은 "진행 중"으로 취급되므로 그 공고는 서버 재시작
+    전까지 재트리거도 막힌다(커넥션 풀 고갈 재현 중 실제로 확인함,
+    _execute_notice_ocr_job/_execute_collection_job과 같은 이유)."""
+    try:
+        async with async_session_factory() as session:
+            await _run_normalization_job(session, job_id, notice_id)
+    except Exception as exc:
+        _JOBS[job_id] = NoticeNormalizationJobStatusResponse(
+            notice_id=notice_id,
+            job_id=job_id,
+            status=NoticeNormalizationJobStatus.FAILED,
+            error_message=f"정규화 작업 실행 실패: {exc}",
+        )
 
 
 def _create_pending_job(notice_id: int) -> NoticeNormalizationJobStatusResponse:
@@ -152,6 +168,37 @@ async def get_notice_normalization_status(notice_id: int, job_id: str):
     return job
 
 
+@router.get(
+    "/{notice_id}/normalization",
+    response_model=NoticeNormalizationResultResponse,
+    summary="저장된 공고 정규화 결과 조회",
+    description=(
+        "DB에 영속화된 정규화 결과(Notice.normalized_json 등)를 조회한다. "
+        "job 상태 조회는 인메모리 _JOBS 기반이라 서버 재시작·다른 워커에서는 "
+        "job_id로 결과를 볼 수 없지만, 이 API는 언제든 notice_id만으로 조회 "
+        "가능하다. 아직 정규화를 시도한 적 없으면 normalization_status가 "
+        "null로 온다(404는 공고 자체가 없을 때만)."
+    ),
+)
+async def get_notice_normalization_result(
+    notice_id: int, session: AsyncSession = Depends(get_db)
+):
+    row = await get_notice_detail(session, notice_id)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="해당 id의 공고를 찾을 수 없습니다.",
+        )
+    notice, _, _ = row
+    return NoticeNormalizationResultResponse(
+        notice_id=notice_id,
+        normalization_status=notice.normalization_status,
+        normalized_json=notice.normalized_json,
+        normalization_error=notice.normalization_error,
+        normalized_at=notice.normalized_at,
+    )
+
+
 async def _run_batch_normalization_jobs(
     job_notice_pairs: list[tuple[str, int]],
 ) -> None:
@@ -162,6 +209,11 @@ async def _run_batch_normalization_jobs(
     쪽은 계정 전체 동시 호출 개수 제한이 실측으로 확인된 적이 없어서(설정된
     OPENAI_MAX_RETRIES가 RateLimitError도 자체 재시도로 흡수함), 여기서는
     별도 세마포어 없이 최대 30건(요청 상한)을 그대로 동시 실행한다.
+
+    단, 이게 안전한 건 normalize_notice가 LLM 호출 전에 읽기 트랜잭션을
+    커밋해 DB 커넥션을 풀에 반납하기 때문이다 — 커넥션을 문 채로 30건이
+    동시에 LLM을 기다리면 풀(기본 5+overflow 10)이 고갈되는 것을 실제로
+    재현함(2026-07-12, notice_normalization_service.normalize_notice 참고).
     """
     await asyncio.gather(
         *(

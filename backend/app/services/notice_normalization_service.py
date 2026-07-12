@@ -105,6 +105,16 @@ async def normalize_notice(
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
+    # LLM 호출은 길면 수십 초(타임아웃 30초 × 재시도 3회)까지 걸리는 외부
+    # 호출이라, 그동안 위 조회들이 열어둔 트랜잭션(=DB 커넥션)을 계속 물고
+    # 있으면 안 된다 — 배치 트리거로 여러 건이 동시에 돌 때 커넥션 풀
+    # (기본 5+overflow 10)이 고갈되는 것을 실제로 재현함(2026-07-12,
+    # 20건 동시 실행 시 QueuePool limit ... connection timed out).
+    # notice_ocr.py가 다운로드·CLOVA 호출 동안 세션을 닫는 것과 같은 이유로,
+    # 읽기는 여기서 끝내고 커넥션을 풀에 반납한 뒤 LLM을 호출한다
+    # (expire_on_commit=False라 위에서 읽어둔 값은 계속 쓸 수 있다).
+    await session.commit()
+
     try:
         normalized = await normalize_notice_text(prompt_text)
     except AiNormalizationError as exc:

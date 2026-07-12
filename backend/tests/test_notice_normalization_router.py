@@ -23,6 +23,7 @@ from app.api.notice_normalization import (
     _run_batch_normalization_jobs,
     _run_normalization_job,
     get_notice_normalization_batch_status,
+    get_notice_normalization_result,
     get_notice_normalization_status,
     start_notice_normalization,
     start_notice_normalization_batch,
@@ -349,3 +350,82 @@ def test_get_notice_normalization_batch_status_returns_200_when_job_ids_omitted(
 
     assert response.status_code == 200
     assert response.json() == {"items": []}
+
+
+# ---------------------------------------------------------------------------
+# _execute_normalization_job (예상 못 한 예외 처리)
+# ---------------------------------------------------------------------------
+
+
+async def test_execute_normalization_job_marks_failed_on_unexpected_error(monkeypatch):
+    """정규화 예외(AiNormalizationError 등) 외의 실패 — 커넥션 풀 고갈 등 —
+    가 나도 job이 PENDING에 영원히 멈추면 안 된다. PENDING은 "진행 중"으로
+    취급돼 그 공고의 재트리거까지 막기 때문(실제로 배치 20건 동시 실행 시
+    풀 고갈 → 20건 전부 PENDING 고착을 재현함, 2026-07-12)."""
+
+    def broken_session_factory():
+        raise RuntimeError("커넥션 풀 고갈")
+
+    monkeypatch.setattr(
+        "app.api.notice_normalization.async_session_factory", broken_session_factory
+    )
+
+    job_id = str(uuid.uuid4())
+    _JOBS[job_id] = NoticeNormalizationJobStatusResponse(
+        notice_id=1, job_id=job_id, status=NoticeNormalizationJobStatus.PENDING
+    )
+
+    await _execute_normalization_job(job_id, 1)
+
+    job = _JOBS[job_id]
+    assert job.status == NoticeNormalizationJobStatus.FAILED
+    assert "커넥션 풀 고갈" in job.error_message
+
+
+# ---------------------------------------------------------------------------
+# get_notice_normalization_result (저장된 결과 조회)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_notice_normalization_result_returns_stored_result(db_session):
+    from datetime import datetime
+
+    from app.repositories.notice_repository import update_notice_normalization
+
+    source = await _create_source(db_session, "저장결과조회출처1")
+    notice_id = await _create_notice(db_session, source, external_id="stored-1")
+    await update_notice_normalization(
+        db_session,
+        notice_id,
+        normalized_json={"basic": {"title": "저장된 제목"}},
+        normalization_status="completed",
+        normalization_error=None,
+        normalized_at=datetime.now(),
+    )
+
+    result = await get_notice_normalization_result(
+        notice_id=notice_id, session=db_session
+    )
+
+    assert result.normalization_status == "completed"
+    assert result.normalized_json.basic.title == "저장된 제목"
+    assert result.normalized_at is not None
+
+
+async def test_get_notice_normalization_result_null_when_never_normalized(db_session):
+    source = await _create_source(db_session, "저장결과조회출처2")
+    notice_id = await _create_notice(db_session, source, external_id="stored-2")
+
+    result = await get_notice_normalization_result(
+        notice_id=notice_id, session=db_session
+    )
+
+    assert result.normalization_status is None
+    assert result.normalized_json is None
+
+
+async def test_get_notice_normalization_result_404_for_unknown_notice(db_session):
+    with pytest.raises(HTTPException) as exc_info:
+        await get_notice_normalization_result(notice_id=999_999_999, session=db_session)
+
+    assert exc_info.value.status_code == 404

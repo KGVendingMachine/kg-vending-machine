@@ -63,3 +63,19 @@ class NoticeNormalizationBatchTriggerResponse(BaseModel):
 
 class NoticeNormalizationBatchStatusResponse(BaseModel):
     items: list[NoticeNormalizationJobStatusResponse]
+
+
+class NoticeNormalizationResultResponse(BaseModel):
+    """GET /internal/notices/{notice_id}/normalization 응답.
+
+    job 상태 조회(_JOBS)와 달리 DB(Notice.normalized_json 등)에 영속화된
+    결과를 읽는다 — _JOBS는 인메모리라 서버 재시작·다른 워커에서는 job_id로
+    결과를 볼 수 없지만, 이 API는 언제든 notice_id만으로 조회할 수 있다.
+    """
+
+    notice_id: int
+    normalization_status: str | None = None
+    """completed/failed, 아직 정규화를 시도한 적 없으면 null"""
+    normalized_json: NormalizedNoticeSchema | None = None
+    normalization_error: str | None = None
+    normalized_at: datetime | None = None
