@@ -14,6 +14,7 @@ from app.models.notice_source import NoticeSource
 from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
     delete_notice,
+    find_notice_ids_by_source_and_title,
     find_notice_ids_by_source_title_and_dates,
     get_notice_attachments,
     get_notice_attachments_by_ids,
@@ -188,8 +189,33 @@ async def test_get_notices_missing_category_scoped_to_given_raw_model(db_session
 
 
 # ---------------------------------------------------------------------------
-# find_notice_ids_by_source_title_and_dates / delete_notice
+# find_notice_ids_by_source_and_title / find_notice_ids_by_source_title_and_dates
+# / delete_notice
 # ---------------------------------------------------------------------------
+
+
+async def test_find_notice_ids_by_source_and_title_matches_regardless_of_dates(
+    db_session,
+):
+    """신청기간이 아예 없는 공고(실제 DB 확인: 기업마당의 89%가 "상시모집"
+    등으로 신청기간이 없음)도 제목만으로는 찾을 수 있어야 한다 — 날짜를
+    무조건 요구하는 건 find_notice_ids_by_source_title_and_dates 쪽 책임이고,
+    이 함수는 순수하게 제목만 본다."""
+    source = await _create_source(db_session, "날짜없는공고출처")
+    notice_id = await _create_notice(
+        db_session,
+        source,
+        external_id="no-date-1",
+        title="상시모집 공고",
+        application_start_date=None,
+        application_end_date=None,
+    )
+
+    found = await find_notice_ids_by_source_and_title(
+        db_session, "날짜없는공고출처", "상시모집 공고"
+    )
+
+    assert found == [notice_id]
 
 
 async def test_find_notice_ids_by_source_title_and_dates_matches_exact_title_and_dates(

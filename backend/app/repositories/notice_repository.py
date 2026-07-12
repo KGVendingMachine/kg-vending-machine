@@ -245,6 +245,27 @@ async def replace_notice_region(
         )
 
 
+async def find_notice_ids_by_source_and_title(
+    session: AsyncSession, source_name: str, title: str
+) -> list[int]:
+    """특정 출처(source_name)에서 제목이 정확히 일치하는 공고 id를 전부 찾는다
+    (신청기간은 안 본다).
+
+    호출자(notice_collection_service._find_cross_source_duplicate_notice_ids)가
+    "제목 일치 후보가 1건뿐이면 신청기간 없이도 안전하게 매칭, 여러 건이면
+    find_notice_ids_by_source_title_and_dates로 날짜까지 확인"하는 2단계
+    판정의 1단계로 쓴다. 이 함수 하나만으로 최종 판정하면 정기 반복 공고
+    문제(아래 함수 docstring 참고)가 재현되므로 여기서 바로 지우거나
+    건너뛰지 않는다.
+    """
+    result = await session.execute(
+        select(Notice.id)
+        .join(NoticeSource, Notice.source_id == NoticeSource.id)
+        .where(NoticeSource.source_name == source_name, Notice.title == title)
+    )
+    return list(result.scalars().all())
+
+
 async def find_notice_ids_by_source_title_and_dates(
     session: AsyncSession,
     source_name: str,
@@ -269,7 +290,13 @@ async def find_notice_ids_by_source_title_and_dates(
 
     start_date/end_date 중 하나라도 없으면(파싱 실패 등) 호출자가 이
     함수를 부르지 않고 건너뛰는 것을 전제로 한다 — 날짜 없이 제목만
-    비교하면 위 문제가 그대로 재현되기 때문이다.
+    비교하면 위 문제가 그대로 재현되기 때문이다. 다만 제목 일치 후보가
+    애초에 1건뿐이면 애매할 게 없으므로 이 함수까지 안 오고
+    find_notice_ids_by_source_and_title 결과를 그대로 쓴다(실제 DB
+    확인: 기업마당 공고의 89%가 "상시모집" 등으로 신청기간이 없어서,
+    날짜를 무조건 요구하면 이 공고들은 중복 판정 자체가 통째로
+    안 되는 문제가 있었다 — notice_collection_service.
+    _find_cross_source_duplicate_notice_ids 참고).
     """
     result = await session.execute(
         select(Notice.id)
