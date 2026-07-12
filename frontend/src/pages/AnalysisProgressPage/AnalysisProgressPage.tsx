@@ -35,13 +35,16 @@ const MAX_POLL_DURATION_MS = 10 * 60 * 1000
 const MATCH_LOG_PAGE_SIZE = 5
 
 // 화면 진행 국면. 분석 단계는 백엔드 status/step을 매핑하고, analyzed부터는
-// 이 페이지의 매칭 실행 흐름(대기 → 실행)이다.
+// 이 페이지의 매칭 실행 흐름(대기 → 실행 → 완료)이다. 매칭이 끝나도 결과로
+// 바로 이동하지 않고, 새 기록이 리스트 맨 위에 추가된 걸 보고 유저가 직접
+// 클릭해 결과 페이지로 간다.
 type Phase =
   | 'starting'
   | 'extracting'
   | 'normalizing'
   | 'analyzed'
   | 'matching'
+  | 'matched'
   | 'failed'
 
 const PHASE_PERCENT: Record<Phase, number> = {
@@ -50,8 +53,13 @@ const PHASE_PERCENT: Record<Phase, number> = {
   normalizing: 40,
   analyzed: 50,
   matching: 75,
+  matched: 100,
   failed: 100,
 }
+
+// 매칭 스텁이 즉시 끝나 단계 전환이 안 보이므로, "공고 매칭" 단계를 최소 이
+// 시간은 노출한다. 실제 스코어링이 붙으면(폴링 전환) 제거한다.
+const MIN_MATCHING_VISIBLE_MS = 1200
 
 interface LogLine {
   text: string
@@ -80,6 +88,13 @@ function buildLogLines(phase: Phase): LogLine[] {
         { text: '✓ 문서 읽기 완료', active: false },
         { text: '✓ 사업 내용 정리 완료', active: false },
         { text: '→ 사업 내용에 맞는 지원 공고를 찾고 있어요…', active: true },
+      ]
+    case 'matched':
+      return [
+        { text: '✓ 문서 읽기 완료', active: false },
+        { text: '✓ 사업 내용 정리 완료', active: false },
+        { text: '✓ 공고 매칭 완료', active: false },
+        { text: '→ 아래 매칭 기록 맨 위에 새 결과가 추가됐어요', active: true },
       ]
     case 'failed':
       return []
@@ -115,6 +130,9 @@ export function AnalysisProgressPage() {
   const [hasMoreLogs, setHasMoreLogs] = useState(false)
   const [loadingMoreLogs, setLoadingMoreLogs] = useState(false)
   const [matchError, setMatchError] = useState<string | null>(null)
+  // 방금 실행으로 만들어진 로그 id. 리스트 맨 위 항목에 NEW 강조를 붙여
+  // 유저가 새 결과가 생겼음을 인지하고 클릭해 이동하게 한다.
+  const [newMatchLogId, setNewMatchLogId] = useState<number | null>(null)
 
   useEffect(() => {
     // 업로드를 거치지 않고 직접 들어오면 분석할 대상이 없다 → 업로드로 되돌린다.
@@ -242,12 +260,21 @@ export function AnalysisProgressPage() {
   }
 
   async function handleStartMatch() {
-    if (businessPlanId == null) return
+    if (businessPlanId == null || phase === 'matching') return
     setPhase('matching')
     setMatchError(null)
+    const startedAt = Date.now()
     try {
       const log = await createMatchLog(businessPlanId)
-      navigate(resultsPath(log.id))
+      const remain = MIN_MATCHING_VISIBLE_MS - (Date.now() - startedAt)
+      if (remain > 0) {
+        await new Promise((resolve) => setTimeout(resolve, remain))
+      }
+      // 결과 페이지로 바로 이동하지 않는다. 새 로그를 리스트 맨 위에 붙이고
+      // NEW로 강조해, 유저가 기록이 생긴 걸 확인하고 직접 클릭해 이동한다.
+      setMatchLogs((current) => [log, ...(current ?? [])])
+      setNewMatchLogId(log.id)
+      setPhase('matched')
     } catch (err) {
       // 매칭 실행 실패는 분석 실패와 달리 완료 화면으로 되돌려 다시 시도하게 한다.
       setPhase('analyzed')
@@ -259,10 +286,15 @@ export function AnalysisProgressPage() {
 
   const analyzed = phase === 'analyzed'
   const failed = phase === 'failed'
+  // 분석 완료 이후(매칭 대기/실행/완료)에는 매칭 버튼과 기록 리스트를 계속
+  // 보여준다 — 매칭 중에도 리스트가 사라지지 않는다.
+  const matchStage =
+    analyzed || phase === 'matching' || phase === 'matched'
   const progress = PHASE_PERCENT[phase]
   const logLines = buildLogLines(phase)
 
   function stepStatus(stepIndex: number): 'done' | 'active' | 'pending' {
+    if (phase === 'matched') return 'done'
     if (analyzed) return stepIndex < 2 ? 'done' : 'pending'
     if (phase === 'matching') {
       if (stepIndex < 2) return 'done'
@@ -283,14 +315,18 @@ export function AnalysisProgressPage() {
             ? '분석이 완료됐어요'
             : phase === 'matching'
               ? '지원 공고를 매칭하고 있어요'
-              : failed
-                ? '분석 중 문제가 발생했어요'
-                : '사업계획서를 분석하고 있어요'}
+              : phase === 'matched'
+                ? '공고 매칭이 완료됐어요'
+                : failed
+                  ? '분석 중 문제가 발생했어요'
+                  : '사업계획서를 분석하고 있어요'}
         </div>
         <div className={styles.subheading}>
           {analyzed
             ? '공고 매칭을 시작하거나, 이전 매칭 결과를 다시 볼 수 있어요.'
-            : '보통 1~2분 정도 걸려요. 창을 닫아도 분석은 계속됩니다.'}
+            : phase === 'matched'
+              ? '매칭 기록 맨 위에 새 결과가 추가됐어요. 클릭해서 결과를 확인하세요.'
+              : '보통 1~2분 정도 걸려요. 창을 닫아도 분석은 계속됩니다.'}
         </div>
 
         <div className={styles.stepper}>
@@ -370,44 +406,65 @@ export function AnalysisProgressPage() {
           </div>
         </div>
 
-        {analyzed ? (
+        {matchStage ? (
           <>
             {matchError ? (
               <div className={styles.matchError}>{matchError}</div>
             ) : null}
             <button
               type="button"
-              className={styles.resultButton}
+              className={
+                phase === 'matched'
+                  ? styles.secondaryButton
+                  : styles.resultButton
+              }
               onClick={handleStartMatch}
+              disabled={phase === 'matching'}
             >
-              공고 매칭 시작하기 →
+              {phase === 'matching'
+                ? '공고 매칭 중…'
+                : phase === 'matched'
+                  ? '다시 매칭하기'
+                  : '공고 매칭 시작하기 →'}
             </button>
 
             {matchLogs && matchLogs.length > 0 ? (
               <div className={styles.history}>
-                <div className={styles.historyTitle}>이전 매칭 기록</div>
+                <div className={styles.historyTitle}>
+                  {phase === 'matched' ? '매칭 기록' : '이전 매칭 기록'}
+                </div>
                 <div className={styles.historySub}>
                   새로 매칭하지 않아도 지난 결과를 바로 볼 수 있어요.
                 </div>
                 <div className={styles.historyList}>
-                  {matchLogs.map((log) => (
-                    <button
-                      type="button"
-                      key={log.id}
-                      className={styles.historyItem}
-                      onClick={() => navigate(resultsPath(log.id))}
-                    >
-                      <span className={styles.historyItemTitle}>
-                        {log.business_plan_title ?? '사업계획서'}
-                      </span>
-                      <span className={styles.historyItemDate}>
-                        {formatMatchLogDate(log.created_at)}
-                      </span>
-                      <span className={styles.historyItemArrow}>
-                        결과 보기 →
-                      </span>
-                    </button>
-                  ))}
+                  {matchLogs.map((log) => {
+                    const isNew = log.id === newMatchLogId
+                    return (
+                      <button
+                        type="button"
+                        key={log.id}
+                        className={
+                          isNew
+                            ? `${styles.historyItem} ${styles.historyItemNew}`
+                            : styles.historyItem
+                        }
+                        onClick={() => navigate(resultsPath(log.id))}
+                      >
+                        {isNew ? (
+                          <span className={styles.newBadge}>NEW</span>
+                        ) : null}
+                        <span className={styles.historyItemTitle}>
+                          {log.business_plan_title ?? '사업계획서'}
+                        </span>
+                        <span className={styles.historyItemDate}>
+                          {formatMatchLogDate(log.created_at)}
+                        </span>
+                        <span className={styles.historyItemArrow}>
+                          결과 보기 →
+                        </span>
+                      </button>
+                    )
+                  })}
                 </div>
                 {hasMoreLogs ? (
                   <button
