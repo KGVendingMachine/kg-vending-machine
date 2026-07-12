@@ -17,9 +17,17 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SCHEMA_VERSION = "1.0"
+
+
+def _none_to_empty_dict(value: Any) -> Any:
+    return {} if value is None else value
+
+
+def _none_to_empty_list(value: Any) -> Any:
+    return [] if value is None else value
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +45,7 @@ class CompanyInfo(BaseModel):
     business_registration_status: str | None = None
     """예비창업자 / 사업자등록 여부 등"""
     extra: dict[str, Any] = Field(default_factory=dict)
+    _normalize_extra = field_validator("extra", mode="before")(_none_to_empty_dict)
 
 
 class ProblemInfo(BaseModel):
@@ -49,6 +58,7 @@ class ProblemInfo(BaseModel):
     market_problem: str | None = None
     """국내외 시장의 구조적 문제점"""
     extra: dict[str, Any] = Field(default_factory=dict)
+    _normalize_extra = field_validator("extra", mode="before")(_none_to_empty_dict)
 
 
 class SolutionInfo(BaseModel):
@@ -64,6 +74,12 @@ class SolutionInfo(BaseModel):
     differentiators: list[str] = Field(default_factory=list)
     """경쟁사 대비 우위 요소, 차별화 전략"""
     extra: dict[str, Any] = Field(default_factory=dict)
+    _normalize_lists = field_validator(
+        "tech_stack",
+        "differentiators",
+        mode="before",
+    )(_none_to_empty_list)
+    _normalize_extra = field_validator("extra", mode="before")(_none_to_empty_dict)
 
 
 class MarketInfo(BaseModel):
@@ -74,6 +90,10 @@ class MarketInfo(BaseModel):
     target_customer_persona: str | None = None
     competitors: list[str] = Field(default_factory=list)
     extra: dict[str, Any] = Field(default_factory=dict)
+    _normalize_lists = field_validator("competitors", mode="before")(
+        _none_to_empty_list
+    )
+    _normalize_extra = field_validator("extra", mode="before")(_none_to_empty_dict)
 
 
 class FundingInfo(BaseModel):
@@ -85,6 +105,10 @@ class FundingInfo(BaseModel):
     scale_up_strategy: str | None = None
     """마케팅/판매채널/사업화 추진 전략"""
     extra: dict[str, Any] = Field(default_factory=dict)
+    _normalize_lists = field_validator("use_of_funds", mode="before")(
+        _none_to_empty_list
+    )
+    _normalize_extra = field_validator("extra", mode="before")(_none_to_empty_dict)
 
 
 class TeamInfo(BaseModel):
@@ -94,6 +118,8 @@ class TeamInfo(BaseModel):
     capabilities: str | None = None
     """대표자 및 팀원 보유 경험, 기술력, 노하우"""
     extra: dict[str, Any] = Field(default_factory=dict)
+    _normalize_lists = field_validator("members", mode="before")(_none_to_empty_list)
+    _normalize_extra = field_validator("extra", mode="before")(_none_to_empty_dict)
 
 
 # ---------------------------------------------------------------------------
