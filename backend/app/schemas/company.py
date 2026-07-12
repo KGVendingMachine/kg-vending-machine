@@ -14,13 +14,17 @@
 
 from datetime import date
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # 사업자유형 (models/company.py business_type 컬럼과 동일한 값 집합)
 BUSINESS_TYPES = ("개인사업자", "법인사업자", "예비창업자")
 
 # 기업 단계 (company_stage 컬럼)
 COMPANY_STAGES = ("예비창업", "초기창업", "도약", "소상공인")
+
+# 예비창업자만 가질 수 있는 기업 단계. business_type과의 정합성 검증에 사용.
+PRE_FOUNDER_TYPE = "예비창업자"
+PRE_FOUNDER_STAGE = "예비창업"
 
 # 시/도 이름 → 행정표준코드(법정동코드 시도 2자리).
 # 강원(51)·전북(52)은 특별자치도 승격 이후 코드를 사용한다(구 42·45 아님).
@@ -138,6 +142,24 @@ class CompanyProfileUpdate(BaseModel):
         if value is not None and value > date.today().year:
             raise ValueError("founded_year는 미래 연도일 수 없습니다")
         return value
+
+    @model_validator(mode="after")
+    def _validate_stage_matches_business_type(self) -> "CompanyProfileUpdate":
+        """한 요청 안에 business_type과 company_stage가 함께 오면 조합을 검증한다.
+
+        하나만 온 부분 갱신은 여기서 판단할 수 없다(기존 저장값과 합쳐봐야
+        판단 가능) — 그 경우는 company_service에서 기존 프로필과 병합해 검증한다.
+        """
+        if self.business_type is None or self.company_stage is None:
+            return self
+        is_pre_founder = self.business_type == PRE_FOUNDER_TYPE
+        is_pre_founder_stage = self.company_stage == PRE_FOUNDER_STAGE
+        if is_pre_founder != is_pre_founder_stage:
+            raise ValueError(
+                "사업자유형과 기업 단계 조합이 올바르지 않습니다"
+                "(예비창업자는 기업 단계가 예비창업이어야 하고, 그 외에는 예비창업일 수 없습니다)"
+            )
+        return self
 
 
 class CompanyProfileResponse(BaseModel):
