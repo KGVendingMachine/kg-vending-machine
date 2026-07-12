@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
+  getMyCompanyProfile,
   saveMyCompanyProfile,
   type CompanyProfileUpdate,
 } from '../../api/companyProfile'
@@ -26,6 +27,42 @@ export function CompanyProfilePage() {
   const [employeeCount, setEmployeeCount] = useState('')
   const [annualRevenue, setAnnualRevenue] = useState('')
   const [saving, setSaving] = useState(false)
+  const [loading, setLoading] = useState(true)
+
+  /** 수정 화면 진입 시 기존에 저장된 프로필을 불러와 폼에 채운다. */
+  useEffect(() => {
+    let cancelled = false
+    async function loadProfile() {
+      try {
+        const profile = await getMyCompanyProfile()
+        if (cancelled || !profile) return
+        setRepresentativeName(profile.representative_name ?? '')
+        setBusinessRegistrationNumber(profile.business_registration_number ?? '')
+        setBusinessType(profile.business_type ?? '')
+        setCompanyStage(profile.company_stage ?? '')
+        setIndustryCode(profile.industry_code ?? '')
+        setRegion(profile.region_name ?? '')
+        setFoundedYear(
+          profile.founded_date ? String(new Date(profile.founded_date).getFullYear()) : '',
+        )
+        setCompanySize(profile.company_size ?? '')
+        setEmployeeCount(
+          profile.employee_count != null ? String(profile.employee_count) : '',
+        )
+        setAnnualRevenue(
+          profile.annual_revenue != null
+            ? String(profile.annual_revenue / 100_000_000)
+            : '',
+        )
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    loadProfile()
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   /** 예비창업자는 사업자등록 전이므로 등록번호·설립연도·규모 관련 입력이 무의미하다. */
   const isPreFounder = businessType === '예비창업자'
@@ -242,9 +279,9 @@ export function CompanyProfilePage() {
               type="button"
               className={styles.primaryButton}
               onClick={handleSave}
-              disabled={saving}
+              disabled={saving || loading}
             >
-              {saving ? '저장 중…' : '저장하고 계속 →'}
+              {saving ? '저장 중…' : loading ? '불러오는 중…' : '저장하고 계속 →'}
             </button>
           </div>
         </div>
