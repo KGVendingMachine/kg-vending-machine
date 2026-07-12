@@ -61,6 +61,13 @@
   background: #fff;
 }
 
+.field select:disabled,
+.field input:disabled {
+  background: var(--color-bg-subtle);
+  color: var(--color-faint);
+  cursor: not-allowed;
+}
+
 .fieldRow {
   display: grid;
   grid-template-columns: 1fr 1fr;
