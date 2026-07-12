@@ -38,6 +38,33 @@ def _validate_stage_consistency(
         )
 
 
+# 사업자등록 이후에만 의미가 있는 필드. 예비창업자로 전환되면 null로 정리한다.
+_PRE_FOUNDER_ONLY_FIELDS = (
+    "business_registration_number",
+    "founded_year",
+    "company_size",
+    "employee_count",
+    "annual_revenue",
+)
+
+
+def _apply_pre_founder_transition(fields: dict) -> dict:
+    """이번 요청이 business_type을 예비창업자로 바꾸는 경우 관련 필드를 정리한다.
+
+    예비창업자는 사업자등록 전이므로 등록번호·설립연도·기업규모·근로자수·매출은
+    존재할 수 없다. company_stage도 예비창업으로 강제한다 — 요청에 다른 값이
+    함께 왔더라도(프론트를 거치지 않은 직접 API 호출 포함) 이 값들로 덮어써서
+    모순된 조합이 저장되지 않게 한다.
+    """
+    if fields.get("business_type") != PRE_FOUNDER_TYPE:
+        return fields
+    cleaned = dict(fields)
+    cleaned["company_stage"] = PRE_FOUNDER_STAGE
+    for key in _PRE_FOUNDER_ONLY_FIELDS:
+        cleaned[key] = None
+    return cleaned
+
+
 def _convert_to_column_fields(fields: dict) -> dict:
     """요청 필드를 company_profile 컬럼 형식으로 변환한다.
 
@@ -78,10 +105,14 @@ async def save_my_profile(
 ) -> CompanyProfile:
     """본인의 대표 기업 프로필을 부분 갱신/생성하고 커밋한다.
 
+    business_type이 예비창업자로 바뀌는 요청이면 사업자등록 이후에만 의미
+    있는 필드를 null로 정리하고 company_stage를 예비창업으로 맞춘다. 그 외
     business_type/company_stage 중 하나만 이번 요청에 왔다면 기존 저장값과
     합쳐서 정합성을 검증한다(둘 다 부분 갱신 대상이라 요청 본문만으로는
     모순 여부를 판단할 수 없다).
     """
+    fields = _apply_pre_founder_transition(fields)
+
     existing = await company_repository.get_primary_by_user(session, user_id)
     effective_business_type = fields.get(
         "business_type", existing.business_type if existing else None
