@@ -179,6 +179,98 @@
   cursor: pointer;
 }
 
+.matchError {
+  margin-top: 20px;
+  padding: 12px 16px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #b91c1c;
+}
+
+.history {
+  margin-top: 36px;
+}
+
+.historyTitle {
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.historySub {
+  font-size: 13px;
+  color: var(--color-muted);
+  margin-top: 4px;
+}
+
+.historyList {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.historyItem {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+}
+
+.historyItem:hover {
+  border-color: var(--color-primary);
+}
+
+.historyItemTitle {
+  font-weight: 700;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyItemDate {
+  color: var(--color-muted);
+  flex-shrink: 0;
+}
+
+.historyItemArrow {
+  color: var(--color-primary);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.historyMore {
+  margin-top: 10px;
+  width: 100%;
+  padding: 10px 0;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 6px;
+  background: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.historyMore:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.historyMore:disabled {
+  cursor: default;
+  color: var(--color-faint);
+}
+
 .failedActions {
   margin-top: 28px;
   display: flex;
