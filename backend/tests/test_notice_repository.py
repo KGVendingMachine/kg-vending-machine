@@ -507,7 +507,10 @@ async def test_get_collection_stats_buckets_normalization_status(db_session):
         after_completed["by_normalization_status"]["completed"]
         == before["by_normalization_status"].get("completed", 0) + 1
     )
-    assert after_completed["by_normalization_status"]["not_started"] == before[
+    # CI처럼 다른 공고가 전혀 없는 DB에서는 이 공고가 completed로 바뀌면서
+    # not_started 버킷 자체가 사라질 수 있다(0이면 GROUP BY 결과에 행이 안
+    # 나옴) — 그래서 직접 인덱싱 대신 .get(..., 0)으로 확인한다.
+    assert after_completed["by_normalization_status"].get("not_started", 0) == before[
         "by_normalization_status"
     ].get("not_started", 0)
 
