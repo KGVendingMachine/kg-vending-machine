@@ -236,3 +236,6 @@ backend/data/
 
 # 업로드된 사업계획서 파일 (로컬 디스크 저장, 저장소에 올리지 않음)
 backend/storage/
+
+#ide
+.idea
