@@ -4,7 +4,12 @@ import {
   saveMyCompanyProfile,
   type CompanyProfileUpdate,
 } from '../../api/companyProfile'
-import { NOTICE_CATEGORIES } from '../../mock/categories'
+import {
+  BUSINESS_TYPES,
+  COMPANY_STAGES,
+  KSIC_INDUSTRIES,
+  REGIONS,
+} from '../../constants/companyProfileOptions'
 import { PATHS } from '../../routes/paths'
 import styles from './CompanyProfilePage.module.css'
 
@@ -12,7 +17,9 @@ export function CompanyProfilePage() {
   const navigate = useNavigate()
   const [representativeName, setRepresentativeName] = useState('')
   const [businessRegistrationNumber, setBusinessRegistrationNumber] = useState('')
-  const [industry, setIndustry] = useState('')
+  const [businessType, setBusinessType] = useState('')
+  const [companyStage, setCompanyStage] = useState('')
+  const [industryCode, setIndustryCode] = useState('')
   const [region, setRegion] = useState('')
   const [foundedYear, setFoundedYear] = useState('')
   const [companySize, setCompanySize] = useState('')
@@ -20,14 +27,36 @@ export function CompanyProfilePage() {
   const [annualRevenue, setAnnualRevenue] = useState('')
   const [saving, setSaving] = useState(false)
 
+  /** 예비창업자는 사업자등록 전이므로 등록번호·설립연도·규모 관련 입력이 무의미하다. */
+  const isPreFounder = businessType === '예비창업자'
+  const stageOptions = isPreFounder
+    ? COMPANY_STAGES.filter((stage) => stage === '예비창업')
+    : businessType
+      ? COMPANY_STAGES.filter((stage) => stage !== '예비창업')
+      : COMPANY_STAGES
+
+  function handleBusinessTypeChange(value: string) {
+    setBusinessType(value)
+    if (value === '예비창업자') {
+      setCompanyStage('예비창업')
+      setBusinessRegistrationNumber('')
+      setFoundedYear('')
+      setCompanySize('')
+      setEmployeeCount('')
+      setAnnualRevenue('')
+    } else if (value && companyStage === '예비창업') {
+      setCompanyStage('')
+    }
+  }
+
   function goToUpload() {
     navigate(PATHS.UPLOAD)
   }
 
   /**
-   * 지금은 폼-DB 형식이 딱 맞는 필드만 저장한다(대표자명·사업자등록번호·
-   * 기업규모·상시근로자수). 비운 필드는 payload에서 빼서 부분 갱신되게 한다.
-   * 업종·지역·설립연도·매출은 단위/코드 변환이 필요해 다음 라운드에서 붙인다.
+   * 비운 필드는 payload에서 빼서 부분 갱신되게 한다. 설립연도(연도→날짜)와
+   * 지역(이름→행정코드) 변환은 서버가 담당하고, 매출액만 억원→원으로 환산해
+   * 보낸다.
    */
   async function handleSave() {
     const payload: CompanyProfileUpdate = {}
@@ -35,10 +64,19 @@ export function CompanyProfilePage() {
       payload.representative_name = representativeName.trim()
     if (businessRegistrationNumber.trim())
       payload.business_registration_number = businessRegistrationNumber.trim()
+    if (businessType) payload.business_type = businessType
+    if (companyStage) payload.company_stage = companyStage
+    if (industryCode) payload.industry_code = industryCode
+    if (region) payload.region_name = region
+    const year = Number(foundedYear)
+    if (foundedYear.trim() && Number.isInteger(year)) payload.founded_year = year
     if (companySize) payload.company_size = companySize
     const employees = Number(employeeCount)
     if (employeeCount.trim() && Number.isFinite(employees))
       payload.employee_count = employees
+    const revenueEok = Number(annualRevenue)
+    if (annualRevenue.trim() && Number.isFinite(revenueEok) && revenueEok >= 0)
+      payload.annual_revenue = Math.round(revenueEok * 100_000_000)
 
     setSaving(true)
     try {
@@ -74,22 +112,56 @@ export function CompanyProfilePage() {
                 <input
                   value={businessRegistrationNumber}
                   placeholder="예: 000-00-00000"
+                  disabled={isPreFounder}
                   onChange={(event) =>
                     setBusinessRegistrationNumber(event.target.value)
                   }
                 />
               </div>
             </div>
+            <div className={styles.fieldRow}>
+              <div className={styles.field}>
+                <label>사업자 유형</label>
+                <select
+                  value={businessType}
+                  onChange={(event) =>
+                    handleBusinessTypeChange(event.target.value)
+                  }
+                >
+                  <option value="">선택 안 함</option>
+                  {BUSINESS_TYPES.map((type) => (
+                    <option value={type} key={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className={styles.field}>
+                <label>기업 단계</label>
+                <select
+                  value={companyStage}
+                  disabled={isPreFounder}
+                  onChange={(event) => setCompanyStage(event.target.value)}
+                >
+                  <option value="">선택 안 함</option>
+                  {stageOptions.map((stage) => (
+                    <option value={stage} key={stage}>
+                      {stage}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
             <div className={styles.field}>
-              <label>업종 / 분야</label>
+              <label>업종 (한국표준산업분류)</label>
               <select
-                value={industry}
-                onChange={(event) => setIndustry(event.target.value)}
+                value={industryCode}
+                onChange={(event) => setIndustryCode(event.target.value)}
               >
                 <option value="">선택 안 함</option>
-                {NOTICE_CATEGORIES.map((category) => (
-                  <option value={category} key={category}>
-                    {category}
+                {KSIC_INDUSTRIES.map((industry) => (
+                  <option value={industry.code} key={industry.code}>
+                    {industry.label}
                   </option>
                 ))}
               </select>
@@ -101,10 +173,11 @@ export function CompanyProfilePage() {
                 onChange={(event) => setRegion(event.target.value)}
               >
                 <option value="">시/도 선택</option>
-                <option value="서울">서울</option>
-                <option value="경기">경기</option>
-                <option value="인천">인천</option>
-                <option value="부산">부산</option>
+                {REGIONS.map((name) => (
+                  <option value={name} key={name}>
+                    {name}
+                  </option>
+                ))}
               </select>
             </div>
             <div className={styles.fieldRow}>
@@ -113,6 +186,7 @@ export function CompanyProfilePage() {
                 <input
                   value={foundedYear}
                   placeholder="예: 2021"
+                  disabled={isPreFounder}
                   onChange={(event) => setFoundedYear(event.target.value)}
                 />
               </div>
@@ -120,6 +194,7 @@ export function CompanyProfilePage() {
                 <label>기업 규모</label>
                 <select
                   value={companySize}
+                  disabled={isPreFounder}
                   onChange={(event) => setCompanySize(event.target.value)}
                 >
                   <option value="">선택 안 함</option>
@@ -135,6 +210,7 @@ export function CompanyProfilePage() {
                 <input
                   value={employeeCount}
                   placeholder="예: 15"
+                  disabled={isPreFounder}
                   onChange={(event) => setEmployeeCount(event.target.value)}
                 />
               </div>
@@ -143,6 +219,7 @@ export function CompanyProfilePage() {
                 <input
                   value={annualRevenue}
                   placeholder="예: 12"
+                  disabled={isPreFounder}
                   onChange={(event) => setAnnualRevenue(event.target.value)}
                 />
               </div>
