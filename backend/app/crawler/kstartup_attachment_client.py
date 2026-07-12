@@ -57,6 +57,31 @@ def _parse_attachments(html: str) -> list[tuple[str, str]]:
     return attachments
 
 
+# K-Startup 서버가 예상외로 큰 파일을 내려주는 경우(오설정·오류 응답 등)에
+# 대비한 안전장치. response.content로 그냥 받으면 크기 제한 없이 응답
+# 전체를 메모리에 올리는데, 배치 OCR 트리거로 여러 첨부파일을 동시에
+# 다운로드할 때 이게 겹치면 서버 메모리를 위협할 수 있다(HWP/HWPX/PDF
+# 압축 해제 폭탄과 같은 종류의 문제). 실제 공고 첨부파일은 이 크기를
+# 넘는 경우가 없다고 보고 넉넉하게 잡은 값.
+_MAX_ATTACHMENT_SIZE_BYTES = 100 * 1024 * 1024
+
+
+async def _read_response_with_size_limit(
+    response: httpx.Response, source: str
+) -> bytes:
+    chunks = []
+    size = 0
+    async for chunk in response.aiter_bytes():
+        size += len(chunk)
+        if size > _MAX_ATTACHMENT_SIZE_BYTES:
+            raise RuntimeError(
+                f"첨부파일이 허용 크기({_MAX_ATTACHMENT_SIZE_BYTES} bytes)를 "
+                f"초과했습니다: {source}"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 async def download_kstartup_attachment(file_url: str) -> bytes:
     """fetch_kstartup_attachments가 반환한 다운로드 URL로 실제 파일을 받는다.
 
@@ -70,9 +95,9 @@ async def download_kstartup_attachment(file_url: str) -> bytes:
     ) as client:
         for attempt in range(1, settings.KSTARTUP_MAX_RETRIES + 1):
             try:
-                response = await client.get(file_url)
-                response.raise_for_status()
-                return response.content
+                async with client.stream("GET", file_url) as response:
+                    response.raise_for_status()
+                    return await _read_response_with_size_limit(response, file_url)
             except httpx.HTTPError as exc:
                 last_error = exc
                 if attempt < settings.KSTARTUP_MAX_RETRIES:
