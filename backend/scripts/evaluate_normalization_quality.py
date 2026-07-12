@@ -86,7 +86,7 @@ async def _evaluate_business_plans(path: Path, limit: int) -> list[dict[str, Any
     for index in range(limit):
         try:
             sample = load_sample_business_plan(index, str(path))
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             if index == 0:
                 raise
             break
@@ -170,7 +170,7 @@ async def _evaluate_notices(path: Path, limit: int) -> list[dict[str, Any]]:
     for index in range(limit):
         try:
             sample = load_sample_notice(index, sample_path)
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             if index == 0:
                 raise
             break
