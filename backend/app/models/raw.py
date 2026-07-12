@@ -39,5 +39,9 @@ class RefinedColumn(Base):
     """ID"""
     field: Mapped[str | None] = mapped_column(Text)
     """json 원문"""
-    notice_id: Mapped[int] = mapped_column(ForeignKey("notice.id"), nullable=False)
-    """공고 ID"""
+    notice_id: Mapped[int] = mapped_column(
+        ForeignKey("notice.id", ondelete="CASCADE"), nullable=False
+    )
+    """공고 ID. 원본 공고가 지워지면 그 공고에서 정제한 파생 데이터도
+    의미가 없어지므로 ON DELETE CASCADE로 자동 정리한다(notice_chunk와
+    동일한 이유 — delete_notice()에 별도 삭제 코드를 추가할 필요 없음)."""
