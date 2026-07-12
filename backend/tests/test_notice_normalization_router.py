@@ -97,6 +97,28 @@ async def test_run_normalization_job_completes_and_stores_result(
     assert job.normalized_json.basic.title == "정규화된 제목"
 
 
+async def test_run_normalization_job_marks_running_while_working(
+    db_session, monkeypatch
+):
+    source = await _create_source(db_session, "라우터정규화테스트출처-running")
+    notice_id = await _create_notice(db_session, source, external_id="router-running")
+    job_id = str(uuid.uuid4())
+
+    async def fake_normalize_notice(session, target_notice_id):
+        assert target_notice_id == notice_id
+        assert _JOBS[job_id].status == NoticeNormalizationJobStatus.RUNNING
+        raise AiNormalizationError("중간 상태 확인용 실패")
+
+    monkeypatch.setattr(
+        "app.api.notice_normalization.normalize_notice",
+        fake_normalize_notice,
+    )
+
+    await _run_normalization_job(db_session, job_id, notice_id)
+
+    assert _JOBS[job_id].status == NoticeNormalizationJobStatus.FAILED
+
+
 async def test_run_normalization_job_fails_when_notice_missing(db_session):
     job_id = str(uuid.uuid4())
     await _run_normalization_job(db_session, job_id, 999_999_999)
@@ -347,6 +369,20 @@ def test_get_notice_normalization_batch_status_returns_200_when_job_ids_omitted(
 
     client = TestClient(app)
     response = client.get("/api/internal/notices/normalize/batch/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"items": []}
+
+
+def test_normalizations_batch_status_alias_returns_200_when_job_ids_omitted():
+    """이슈에서 논의한 복수형 경로도 기존 singular 경로와 같은 핸들러로
+    열어둔다. 기존 /normalize/batch/status는 호환성 때문에 유지한다."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.get("/api/internal/notices/normalizations/batch/status")
 
     assert response.status_code == 200
     assert response.json() == {"items": []}

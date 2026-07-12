@@ -11,6 +11,7 @@ DB가 따로 있어 DB로 공유할 수 없다. 결과 JSON(backend/data/ocr_sam
 
 import asyncio
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -33,6 +34,7 @@ async def _build_sample(file_path: Path) -> dict:
 
 
 async def main() -> None:
+    _SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
     files = sorted(
         p for p in _SAMPLES_DIR.iterdir() if p.suffix.lower() in _SUPPORTED_SUFFIXES
     )
@@ -55,4 +57,6 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     asyncio.run(main())

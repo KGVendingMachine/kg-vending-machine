@@ -68,6 +68,11 @@ async def _run_normalization_job(
     session: AsyncSession, job_id: str, notice_id: int
 ) -> None:
     """정규화 실행 + _JOBS 상태 갱신. session 생명주기는 호출하는 쪽 책임."""
+    _JOBS[job_id] = NoticeNormalizationJobStatusResponse(
+        notice_id=notice_id,
+        job_id=job_id,
+        status=NoticeNormalizationJobStatus.RUNNING,
+    )
     try:
         outcome = await normalize_notice(session, notice_id)
     except (AiNormalizationError, NoticeNormalizationError) as exc:
@@ -124,6 +129,12 @@ def _create_pending_job(notice_id: int) -> NoticeNormalizationJobStatusResponse:
 
 
 @router.post(
+    "/{notice_id}/normalizations",
+    response_model=NoticeNormalizationJobAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+    include_in_schema=False,
+)
+@router.post(
     "/{notice_id}/normalize",
     response_model=NoticeNormalizationJobAccepted,
     status_code=status.HTTP_202_ACCEPTED,
@@ -153,6 +164,11 @@ async def start_notice_normalization(notice_id: int, background_tasks: Backgroun
     return NoticeNormalizationJobAccepted(notice_id=notice_id, job_id=job.job_id)
 
 
+@router.get(
+    "/{notice_id}/normalizations/{job_id}",
+    response_model=NoticeNormalizationJobStatusResponse,
+    include_in_schema=False,
+)
 @router.get(
     "/{notice_id}/normalize/{job_id}",
     response_model=NoticeNormalizationJobStatusResponse,
@@ -224,6 +240,12 @@ async def _run_batch_normalization_jobs(
 
 
 @router.post(
+    "/normalizations/batch",
+    response_model=NoticeNormalizationBatchTriggerResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    include_in_schema=False,
+)
+@router.post(
     "/normalize/batch",
     response_model=NoticeNormalizationBatchTriggerResponse,
     status_code=status.HTTP_202_ACCEPTED,
@@ -262,6 +284,11 @@ async def start_notice_normalization_batch(
     return NoticeNormalizationBatchTriggerResponse(items=items)
 
 
+@router.get(
+    "/normalizations/batch/status",
+    response_model=NoticeNormalizationBatchStatusResponse,
+    include_in_schema=False,
+)
 @router.get(
     "/normalize/batch/status",
     response_model=NoticeNormalizationBatchStatusResponse,

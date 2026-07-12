@@ -83,9 +83,17 @@ async def normalize_notice(
         raw_text = notice.summary_text
 
     if not raw_text:
-        raise NoSourceTextForNormalizationError(
-            "정규화에 쓸 원문이 없습니다(OCR 텍스트도 summary_text도 없음)."
+        error_message = "정규화에 쓸 원문이 없습니다(OCR 텍스트도 summary_text도 없음)."
+        await update_notice_normalization(
+            session,
+            notice_id,
+            normalized_json=None,
+            normalization_status="failed",
+            normalization_error=error_message,
+            normalized_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
+        await session.commit()
+        raise NoSourceTextForNormalizationError(error_message)
 
     prompt_text = build_notice_prompt_text(
         label="공고",
