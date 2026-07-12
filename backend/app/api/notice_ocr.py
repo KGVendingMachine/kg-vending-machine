@@ -2,9 +2,11 @@
 api/notice_ocr.py
 
 공고 첨부파일 OCR 트리거 라우터.
-POST /internal/notices/{notice_id}/ocr             -> OCR 작업 시작 (202 Accepted)
-GET  /internal/notices/{notice_id}/ocr/{job_id}     -> 작업 상태/결과 조회
-POST /internal/notices/ocr/batch                   -> 여러 공고 OCR 작업 일괄 시작 (202 Accepted)
+POST /internal/notices/{notice_id}/ocr                              -> OCR 작업 시작 (202 Accepted)
+GET  /internal/notices/{notice_id}/ocr/{job_id}                      -> 작업 상태/결과 조회
+POST /internal/notices/ocr/batch                                     -> 여러 공고 OCR 작업 일괄 시작 (202 Accepted)
+GET  /internal/notices/ocr/batch/status                              -> 배치 상태 일괄 조회
+GET  /internal/notices/{notice_id}/attachments/{attachment_id}/text  -> OCR 추출 텍스트 조회
 
 배치 트리거는 매칭 파이프라인이 1차 필터링을 통과한 후보 여러 건에 대해
 한 번에 OCR을 걸어야 하는 상황(및 AI 팀 개발·검증용 실데이터 확보)을 위한
@@ -30,7 +32,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crawler.bizinfo_client import download_bizinfo_attachment
@@ -38,16 +40,18 @@ from app.crawler.kstartup_attachment_client import (
     download_kstartup_attachment,
     fetch_kstartup_attachments,
 )
-from app.db.session import async_session_factory
+from app.db.session import async_session_factory, get_db
 from app.models.notice import NoticeAttachment
 from app.ocr.extract import extract_text
 from app.repositories.notice_repository import (
+    get_notice_attachment,
     get_notice_attachments,
     get_notice_detail,
     save_attachment,
     set_attachment_parsed_text,
 )
 from app.schemas.notice_ocr import (
+    NoticeAttachmentTextResponse,
     NoticeOcrBatchJobItem,
     NoticeOcrBatchStatusResponse,
     NoticeOcrBatchTriggerRequest,
@@ -57,69 +61,19 @@ from app.schemas.notice_ocr import (
     NoticeOcrJobStatusResponse,
 )
 from app.services.notice_collection_service import KSTARTUP_SOURCE_NAME
+from app.services.notice_ocr_target import pick_ocr_target as _pick_ocr_target
 
 router = APIRouter(prefix="/internal/notices", tags=["internal-notices"])
 
 _JOBS: dict[str, NoticeOcrJobStatusResponse] = {}
 
-# extract_text()가 실제로 처리하는 문서 포맷만 대상으로 한다 (이미지/ZIP/
-# 엑셀 등은 OCR 대상에서 제외 — DOC/DOCX는 extract_text가 아직 지원하지
-# 않아 여기도 포함하지 않는다).
-_OCR_TARGET_FILE_TYPES = {"PDF", "HWP", "HWPX"}
-
 _SUFFIX_BY_FILE_TYPE = {"PDF": ".pdf", "HWP": ".hwp", "HWPX": ".hwpx"}
-
-# 공고 하나에 첨부파일이 여러 개면 "공고문" 하나만 OCR한다(2026-07-11
-# 프로토타입 범위 결정, 신청서식/붙임자료는 대상 아님). 기업마당/K-Startup
-# API 모두 어떤 파일이 공고문인지 알려주는 필드가 없어 파일명으로 판별해야
-# 하는데, 실제 DB 첨부파일명 200건을 확인해보니 공고문은 "공고"/"공모"를
-# 포함하고(예: "26년_지원사업_추가_공고문.pdf", "[공모] ...공모요강.pdf"),
-# 신청서/서식/붙임/별첨 자료는 이 키워드가 없어 이름만으로 안정적으로
-# 구분된다.
-_NOTICE_DOCUMENT_KEYWORDS = ("공고", "공모")
-
-# "공고"/"공모"가 들어있어도 신청 양식 자체일 수 있다 — 실제 DB에서 배치
-# 트리거를 돌려보다 발견함(이슈 검증 중, 2026-07-11): "붙임1. ...3차 공모
-# 융자신청서.hwp"는 "공모"를 포함하지만 실제 공고문은 같은 공고의 다른
-# 첨부파일 "[공모] ...공모요강(변경).pdf"였다. "신청서식(변경공고).hwp"처럼
-# 신청 양식 파일명에 "공고"가 들어간 경우도 실제로 있었다. 두 키워드가
-# 동시에 있으면 신청 양식으로 간주해 후보에서 제외한다.
-_APPLICATION_FORM_KEYWORDS = ("신청서", "서식", "동의서", "확인서", "확약서")
-
-
-def _is_notice_document_name(file_name: str | None) -> bool:
-    if not file_name:
-        return False
-    if any(kw in file_name for kw in _APPLICATION_FORM_KEYWORDS):
-        return False
-    return any(kw in file_name for kw in _NOTICE_DOCUMENT_KEYWORDS)
 
 
 def _file_type_from_name(file_name: str) -> str | None:
     if "." not in file_name:
         return None
     return file_name.rsplit(".", 1)[-1].upper()
-
-
-def _pick_ocr_target(attachments: list[NoticeAttachment]) -> NoticeAttachment | None:
-    """공고문으로 보이는 첨부파일을 우선 고르고, 그중 이미 OCR된 게 있으면
-    그걸 재사용한다.
-
-    파일명으로 공고문을 특정할 수 없는 공고(오래된 데이터, 이름 규칙이
-    다른 출처 등)도 있어, 공고문 후보가 하나도 없으면 예전처럼 문서 포맷 중
-    첫 번째로 폴백한다 — 아예 처리를 포기하는 것보다 낫다고 판단.
-    """
-    documents = [a for a in attachments if a.file_type in _OCR_TARGET_FILE_TYPES]
-    notice_documents = [a for a in documents if _is_notice_document_name(a.file_name)]
-    candidates = notice_documents or documents
-
-    # parsed_text는 Optional[str]라 None(아직 처리 안 함)과 ""(처리했는데
-    # 텍스트가 없었음)을 구분해야 한다 — truthy 체크(`if a.parsed_text`)를
-    # 쓰면 빈 문자열도 "아직 처리 안 함"으로 보여 매번 재-OCR하게 된다.
-    already_parsed = next((a for a in candidates if a.parsed_text is not None), None)
-    if already_parsed is not None:
-        return already_parsed
-    return candidates[0] if candidates else None
 
 
 async def _save_kstartup_attachments(
@@ -451,3 +405,35 @@ async def get_notice_ocr_status(notice_id: int, job_id: str):
             detail="해당 job_id의 OCR 작업을 찾을 수 없습니다.",
         )
     return job
+
+
+@router.get(
+    "/{notice_id}/attachments/{attachment_id}/text",
+    response_model=NoticeAttachmentTextResponse,
+    summary="첨부파일 OCR 추출 텍스트 조회",
+    description=(
+        "OCR job 상태 조회(GET /{notice_id}/ocr/{job_id})는 char_count만 "
+        "알려주고 실제 추출 텍스트는 주지 않는다 — 실제 내용을 확인하려면 "
+        "이 API로 조회한다. 아직 OCR이 끝나지 않았으면 parsed_text가 null로 "
+        "온다(빈 문자열과 구분 — _pick_ocr_target 참고)."
+    ),
+)
+async def get_notice_attachment_text(
+    notice_id: int, attachment_id: int, session: AsyncSession = Depends(get_db)
+):
+    attachment = await get_notice_attachment(session, notice_id, attachment_id)
+    if attachment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="해당 공고에서 첨부파일을 찾을 수 없습니다.",
+        )
+    return NoticeAttachmentTextResponse(
+        notice_id=notice_id,
+        attachment_id=attachment_id,
+        file_name=attachment.file_name,
+        file_type=attachment.file_type,
+        parsed_text=attachment.parsed_text,
+        char_count=(
+            len(attachment.parsed_text) if attachment.parsed_text is not None else None
+        ),
+    )

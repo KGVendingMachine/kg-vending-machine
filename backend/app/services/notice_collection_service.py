@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.crawler.bizinfo_client import fetch_bizinfo_notices
+from app.crawler.bizinfo_client import fetch_bizinfo_notice_by_id, fetch_bizinfo_notices
 from app.crawler.kstartup_attachment_client import fetch_kstartup_attachments
 from app.crawler.kstartup_client import fetch_kstartup_notices
 from app.models.raw import BizinfoRaw, KstartupRaw
@@ -19,6 +19,7 @@ from app.repositories.notice_repository import (
     get_kstartup_notices_with_raw,
     get_max_bizinfo_registration_time,
     get_max_notice_external_id,
+    get_notice_detail,
     get_notice_region_codes,
     get_notice_regions,
     get_notices_for_status_refresh,
@@ -38,6 +39,20 @@ logger = logging.getLogger(__name__)
 
 BIZINFO_SOURCE_NAME = "기업마당"
 KSTARTUP_SOURCE_NAME = "K-Startup"
+
+
+class NoticeRecollectionError(Exception):
+    """공고 단건 재수집 실패에 대한 기본 예외."""
+
+
+class NoticeRecollectionNotFoundError(NoticeRecollectionError):
+    """대상 공고를 찾을 수 없거나(잘못된 notice_id), 원본 API에서 더 이상
+    조회되지 않을 때(삭제·비공개 전환 등) 발생."""
+
+
+class UnsupportedRecollectionSourceError(NoticeRecollectionError):
+    """단건 재수집을 지원하지 않는 출처에 대해 시도했을 때 발생."""
+
 
 # 코드는 행정표준코드(법정동코드 앞 2자리) 기준. 강원/전북은 예전에
 # 여기 51/52로 잘못 들어가 있었다 — 실제로는 특별자치도 전환(강원
@@ -535,6 +550,52 @@ async def collect_bizinfo_notices(
 
     await session.commit()
     return collection_result
+
+
+async def recollect_bizinfo_notice(session: AsyncSession, notice_id: int) -> None:
+    """이미 저장된 기업마당 공고 하나만 원본 API에서 다시 가져와 갱신한다.
+
+    변경공고(마감일 연장, 첨부파일 교체 등)를 전체 재수집 없이 바로
+    반영하고 싶을 때 쓴다. K-Startup은 목록 API가 pbanc_sn 필터를 받아도
+    조용히 무시하고 첫 페이지를 그대로 돌려주는 것을 실제 호출로 확인해
+    (필터링되지 않음 — 즉 원하는 건 하나만 골라올 방법이 없음), 페이지를
+    끝까지 훑지 않는 한 단건 조회가 불가능하다. 그래서 기업마당만
+    지원한다 (pblancId 필터가 실제로 동작하는 것을 확인함,
+    fetch_bizinfo_notice_by_id 참고).
+    """
+    row = await get_notice_detail(session, notice_id)
+    if row is None:
+        raise NoticeRecollectionNotFoundError(
+            f"notice_id {notice_id}를 찾을 수 없습니다."
+        )
+    notice, source_name, _ = row
+    if source_name != BIZINFO_SOURCE_NAME:
+        raise UnsupportedRecollectionSourceError(
+            f"{source_name}은 단건 재수집을 지원하지 않습니다 (기업마당만 지원)."
+        )
+
+    item = await fetch_bizinfo_notice_by_id(notice.external_id)
+    if item is None:
+        raise NoticeRecollectionNotFoundError(
+            "기업마당에서 해당 공고를 더 이상 찾을 수 없습니다 "
+            "(비공개 전환되었거나 삭제되었을 수 있습니다)."
+        )
+
+    category_mapping = await get_category_mapping(session)
+    collection_result = CollectionResult()
+    await _process_bizinfo_item(
+        session, notice.source_id, item, collection_result, category_mapping
+    )
+    await session.commit()
+
+    # _process_bizinfo_item은 펀드 카테고리가 아니거나 수집 기간을 벗어나면
+    # (이미 한 번 저장됐던 공고라 실제로는 거의 없는 경우) 아무것도 하지
+    # 않고 조용히 리턴한다 — 이런 "해당 없음"은 실패가 아니므로
+    # failed_count만 오류로 취급한다.
+    if collection_result.failed_count > 0:
+        raise NoticeRecollectionError(
+            "재수집 처리 중 오류가 발생해 반영하지 못했습니다."
+        )
 
 
 # 기업마당 응답은 creatPnttm(등록시각) 기준 최신순으로 오는 것을 실제

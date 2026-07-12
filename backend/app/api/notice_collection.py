@@ -30,23 +30,30 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import async_session_factory, get_db
+from app.repositories.notice_repository import get_collection_stats
 from app.schemas.notice_collection import (
     BizinfoRegionBackfillResult,
     CategoryBackfillResult,
     CollectionJobAccepted,
     CollectionJobStatus,
     CollectionJobStatusResponse,
+    CollectionStatsResponse,
+    NoticeRecollectionResult,
     RegionCodeBackfillResult,
     SourceCollectionResult,
     StatusRefreshResult,
 )
 from app.services.notice_collection_service import (
     CollectionResult,
+    NoticeRecollectionError,
+    NoticeRecollectionNotFoundError,
+    UnsupportedRecollectionSourceError,
     backfill_bizinfo_nationwide_regions,
     backfill_notice_categories,
     backfill_notice_region_codes,
     collect_all_bizinfo_notices,
     collect_all_kstartup_notices,
+    recollect_bizinfo_notice,
     refresh_notice_statuses,
 )
 
@@ -243,3 +250,48 @@ async def backfill_bizinfo_region(session: AsyncSession = Depends(get_db)):
 async def backfill_region_codes(session: AsyncSession = Depends(get_db)):
     result = await backfill_notice_region_codes(session)
     return RegionCodeBackfillResult(**result)
+
+
+@router.post(
+    "/{notice_id}/recollect",
+    response_model=NoticeRecollectionResult,
+    summary="공고 단건 재수집",
+    description=(
+        "이미 저장된 공고 하나만 원본 API에서 다시 가져와 갱신한다(마감일 "
+        "연장, 첨부파일 교체 등 변경공고를 전체 재수집 없이 바로 반영하고 "
+        "싶을 때 사용). 기업마당만 지원한다 — K-Startup 목록 API는 pbanc_sn "
+        "필터를 줘도 조용히 무시하고 첫 페이지를 그대로 돌려줘(실제 호출로 "
+        "확인함) 단건 조회 자체가 불가능하다."
+    ),
+)
+async def recollect_notice(notice_id: int, session: AsyncSession = Depends(get_db)):
+    try:
+        await recollect_bizinfo_notice(session, notice_id)
+    except NoticeRecollectionNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    except UnsupportedRecollectionSourceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    except NoticeRecollectionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
+
+    return NoticeRecollectionResult(notice_id=notice_id)
+
+
+@router.get(
+    "/stats",
+    response_model=CollectionStatsResponse,
+    summary="공고 수집 현황 통계",
+    description=(
+        "출처/카테고리/상태별 저장 건수와 OCR 대기 건수를 집계한다. "
+        "전부 이미 저장된 데이터에 대한 조회라 외부 API를 호출하지 않는다."
+    ),
+)
+async def get_collection_stats_endpoint(session: AsyncSession = Depends(get_db)):
+    stats = await get_collection_stats(session)
+    return CollectionStatsResponse(**stats)

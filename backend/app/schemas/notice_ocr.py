@@ -62,3 +62,16 @@ class NoticeOcrBatchTriggerResponse(BaseModel):
 
 class NoticeOcrBatchStatusResponse(BaseModel):
     items: list[NoticeOcrJobStatusResponse]
+
+
+class NoticeAttachmentTextResponse(BaseModel):
+    """GET /internal/notices/{notice_id}/attachments/{attachment_id}/text 응답"""
+
+    notice_id: int
+    attachment_id: int
+    file_name: str | None = None
+    file_type: str | None = None
+    parsed_text: str | None = None
+    """아직 OCR이 끝나지 않았으면 None. 처리했는데 추출된 텍스트가 없었으면
+    빈 문자열("")이 온다 — notice_ocr.py의 parsed_text None/"" 구분과 동일."""
+    char_count: int | None = None
