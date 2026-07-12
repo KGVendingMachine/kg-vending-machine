@@ -18,11 +18,15 @@ from app.repositories.notice_repository import (
     get_notice_region_codes,
     get_notice_regions,
     get_notices_for_status_refresh,
+    get_or_create_source,
     replace_notice_region,
     upsert_notice,
 )
 from app.services import notice_collection_service as svc
 from app.services.notice_collection_service import (
+    KSTARTUP_SOURCE_NAME,
+    NoticeRecollectionNotFoundError,
+    UnsupportedRecollectionSourceError,
     _bizinfo_raw_category_key,
     _derive_status_from_dates,
     _find_cross_source_duplicate_notice_ids,
@@ -40,6 +44,7 @@ from app.services.notice_collection_service import (
     backfill_bizinfo_nationwide_regions,
     backfill_notice_categories,
     backfill_notice_region_codes,
+    recollect_bizinfo_notice,
     refresh_notice_statuses,
 )
 
@@ -1004,3 +1009,122 @@ async def test_find_cross_source_duplicate_requires_dates_when_multiple_candidat
         date(2026, 3, 31),
     )
     assert len(found_with_matching_dates) == 1
+
+
+# ---------------------------------------------------------------------------
+# recollect_bizinfo_notice (DB 기반, 외부 API는 monkeypatch로 대체)
+# ---------------------------------------------------------------------------
+
+
+def _fake_bizinfo_item(pblanc_id: str, **overrides) -> dict:
+    item = {
+        "pblancId": pblanc_id,
+        "pblancNm": "재수집 테스트 공고(변경됨)",
+        "pldirSportRealmLclasCodeNm": "금융",
+        "reqstBeginEndDe": None,
+        "jrsdInsttNm": None,
+        "trgetNm": None,
+        "hashtags": None,
+        "pblancUrl": None,
+        "rceptEngnHmpgUrl": None,
+        "bsnsSumryCn": None,
+    }
+    item.update(overrides)
+    return item
+
+
+async def test_recollect_bizinfo_notice_updates_existing_notice(
+    db_session, monkeypatch
+):
+    source = await get_or_create_source(
+        db_session,
+        source_name=svc.BIZINFO_SOURCE_NAME,
+        base_url="https://www.bizinfo.go.kr",
+        collect_type="API",
+    )
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="recollect-test-1",
+        title="원래 제목",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+
+    async def fake_fetch(pblanc_id: str):
+        assert pblanc_id == "recollect-test-1"
+        return _fake_bizinfo_item(pblanc_id)
+
+    monkeypatch.setattr(svc, "fetch_bizinfo_notice_by_id", fake_fetch)
+
+    await recollect_bizinfo_notice(db_session, notice_id)
+
+    notice = await db_session.get(Notice, notice_id)
+    assert notice.title == "재수집 테스트 공고(변경됨)"
+
+
+async def test_recollect_bizinfo_notice_rejects_kstartup_source(db_session):
+    source = await get_or_create_source(
+        db_session,
+        source_name=KSTARTUP_SOURCE_NAME,
+        base_url="https://www.k-startup.go.kr",
+        collect_type="API",
+    )
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="recollect-kstartup-1",
+        title="K-Startup 공고",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+
+    with pytest.raises(UnsupportedRecollectionSourceError):
+        await recollect_bizinfo_notice(db_session, notice_id)
+
+
+async def test_recollect_bizinfo_notice_404_for_unknown_notice_id(db_session):
+    with pytest.raises(NoticeRecollectionNotFoundError):
+        await recollect_bizinfo_notice(db_session, 999_999_999)
+
+
+async def test_recollect_bizinfo_notice_404_when_source_no_longer_has_it(
+    db_session, monkeypatch
+):
+    source = await get_or_create_source(
+        db_session,
+        source_name=svc.BIZINFO_SOURCE_NAME,
+        base_url="https://www.bizinfo.go.kr",
+        collect_type="API",
+    )
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="recollect-test-gone",
+        title="삭제될 공고",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+
+    async def fake_fetch_none(pblanc_id: str):
+        return None
+
+    monkeypatch.setattr(svc, "fetch_bizinfo_notice_by_id", fake_fetch_none)
+
+    with pytest.raises(NoticeRecollectionNotFoundError):
+        await recollect_bizinfo_notice(db_session, notice_id)

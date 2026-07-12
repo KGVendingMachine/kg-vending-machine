@@ -16,6 +16,8 @@ from app.repositories.notice_repository import (
     delete_notice,
     find_notice_ids_by_source_and_title,
     find_notice_ids_by_source_title_and_dates,
+    get_collection_stats,
+    get_notice_attachment,
     get_notice_attachments,
     get_notice_attachments_by_ids,
     get_notice_detail,
@@ -396,6 +398,84 @@ async def test_get_notice_attachments_by_ids_returns_empty_dict_for_empty_input(
     db_session,
 ):
     assert await get_notice_attachments_by_ids(db_session, []) == {}
+
+
+# ---------------------------------------------------------------------------
+# get_notice_attachment
+# ---------------------------------------------------------------------------
+
+
+async def test_get_notice_attachment_returns_attachment_with_parsed_text(db_session):
+    source = await _create_source(db_session, "단건첨부조회출처")
+    notice_id = await _create_notice(db_session, source, external_id="single-attach-1")
+    await save_attachment(db_session, notice_id, "a.pdf", "https://a.com/a.pdf", "PDF")
+    attachment_id = (await get_notice_attachments(db_session, notice_id))[0].id
+    await set_attachment_parsed_text(db_session, attachment_id, "원문 텍스트")
+
+    result = await get_notice_attachment(db_session, notice_id, attachment_id)
+
+    assert result is not None
+    assert result.parsed_text == "원문 텍스트"
+
+
+async def test_get_notice_attachment_returns_none_for_mismatched_notice_id(
+    db_session,
+):
+    """attachment_id는 notice에 종속된 자원이라, 다른 공고의 notice_id로
+    조회하면 실제로 존재하는 attachment_id여도 None이어야 한다."""
+    source = await _create_source(db_session, "단건첨부조회출처2")
+    notice_id = await _create_notice(db_session, source, external_id="single-attach-2")
+    await save_attachment(db_session, notice_id, "a.pdf", "https://a.com/a.pdf", "PDF")
+    attachment_id = (await get_notice_attachments(db_session, notice_id))[0].id
+
+    result = await get_notice_attachment(db_session, 999_999_999, attachment_id)
+
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# get_collection_stats
+# ---------------------------------------------------------------------------
+
+
+async def test_get_collection_stats_returns_expected_keys(db_session):
+    stats = await get_collection_stats(db_session)
+
+    assert set(stats.keys()) == {
+        "by_source",
+        "by_category",
+        "by_status",
+        "ocr_pending_count",
+    }
+    assert isinstance(stats["ocr_pending_count"], int)
+
+
+async def test_get_collection_stats_counts_unparsed_ocr_target_attachment(db_session):
+    source = await _create_source(db_session, "통계테스트출처")
+    notice_id = await _create_notice(db_session, source, external_id="stats-1")
+    before = await get_collection_stats(db_session)
+
+    await save_attachment(db_session, notice_id, "a.pdf", "https://a.com/a.pdf", "PDF")
+
+    after = await get_collection_stats(db_session)
+
+    assert after["ocr_pending_count"] == before["ocr_pending_count"] + 1
+    assert after["by_source"][source.source_name] == 1
+    assert after["by_status"]["모집중"] >= 1
+
+
+async def test_get_collection_stats_excludes_notice_once_parsed(db_session):
+    source = await _create_source(db_session, "통계테스트출처2")
+    notice_id = await _create_notice(db_session, source, external_id="stats-2")
+    await save_attachment(db_session, notice_id, "a.pdf", "https://a.com/a.pdf", "PDF")
+    before = await get_collection_stats(db_session)
+
+    attachment_id = (await get_notice_attachments(db_session, notice_id))[0].id
+    await set_attachment_parsed_text(db_session, attachment_id, "원문")
+
+    after = await get_collection_stats(db_session)
+
+    assert after["ocr_pending_count"] == before["ocr_pending_count"] - 1
 
 
 # ---------------------------------------------------------------------------

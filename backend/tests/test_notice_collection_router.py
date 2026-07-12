@@ -18,7 +18,9 @@ from app.api.notice_collection import (
     backfill_bizinfo_region,
     backfill_category,
     backfill_region_codes,
+    get_collection_stats_endpoint,
     get_collection_status,
+    recollect_notice,
     refresh_status,
     start_collection,
 )
@@ -26,7 +28,12 @@ from app.schemas.notice_collection import (
     CollectionJobStatus,
     CollectionJobStatusResponse,
 )
-from app.services.notice_collection_service import CollectionResult
+from app.services.notice_collection_service import (
+    CollectionResult,
+    NoticeRecollectionError,
+    NoticeRecollectionNotFoundError,
+    UnsupportedRecollectionSourceError,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -183,3 +190,69 @@ async def test_backfill_region_codes_returns_checked_and_updated_counts(db_sessi
     assert result.checked >= 0
     assert result.updated >= 0
     assert result.updated <= result.checked
+
+
+# ---------------------------------------------------------------------------
+# recollect_notice
+# ---------------------------------------------------------------------------
+
+
+async def test_recollect_notice_returns_result_on_success(monkeypatch):
+    async def fake_recollect(session, notice_id):
+        assert notice_id == 42
+
+    monkeypatch.setattr(notice_collection, "recollect_bizinfo_notice", fake_recollect)
+
+    result = await recollect_notice(notice_id=42, session=object())
+
+    assert result.notice_id == 42
+
+
+async def test_recollect_notice_404_when_not_found(monkeypatch):
+    async def fake_recollect(session, notice_id):
+        raise NoticeRecollectionNotFoundError("찾을 수 없음")
+
+    monkeypatch.setattr(notice_collection, "recollect_bizinfo_notice", fake_recollect)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await recollect_notice(notice_id=999, session=object())
+
+    assert exc_info.value.status_code == 404
+
+
+async def test_recollect_notice_400_for_unsupported_source(monkeypatch):
+    async def fake_recollect(session, notice_id):
+        raise UnsupportedRecollectionSourceError("지원 안 함")
+
+    monkeypatch.setattr(notice_collection, "recollect_bizinfo_notice", fake_recollect)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await recollect_notice(notice_id=1, session=object())
+
+    assert exc_info.value.status_code == 400
+
+
+async def test_recollect_notice_502_for_generic_recollection_error(monkeypatch):
+    async def fake_recollect(session, notice_id):
+        raise NoticeRecollectionError("실패")
+
+    monkeypatch.setattr(notice_collection, "recollect_bizinfo_notice", fake_recollect)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await recollect_notice(notice_id=1, session=object())
+
+    assert exc_info.value.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# get_collection_stats_endpoint
+# ---------------------------------------------------------------------------
+
+
+async def test_get_collection_stats_endpoint_returns_stats(db_session):
+    result = await get_collection_stats_endpoint(session=db_session)
+
+    assert result.ocr_pending_count >= 0
+    assert isinstance(result.by_source, dict)
+    assert isinstance(result.by_category, dict)
+    assert isinstance(result.by_status, dict)

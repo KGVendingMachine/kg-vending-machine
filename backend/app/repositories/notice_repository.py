@@ -658,3 +658,62 @@ async def get_notice_attachments_for_display(
         )
     )
     return list(result.scalars().all())
+
+
+async def get_notice_attachment(
+    session: AsyncSession, notice_id: int, attachment_id: int
+) -> NoticeAttachment | None:
+    """공고 하나에 속한 첨부파일 하나를 parsed_text(OCR 원문)까지 포함해 가져온다.
+
+    notice_id도 같이 확인해서, 다른 공고의 attachment_id를 넣어 조회하는
+    것을 막는다(경로상 notice_id/attachment_id가 각각 별개 자원처럼
+    보이지만 실제로는 attachment가 notice에 종속된 자원이라서).
+    """
+    result = await session.execute(
+        select(NoticeAttachment).where(
+            NoticeAttachment.id == attachment_id,
+            NoticeAttachment.notice_id == notice_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_collection_stats(session: AsyncSession) -> dict:
+    """수집 현황을 출처/카테고리/상태별 건수 + OCR 대기 건수로 집계한다.
+
+    전부 이미 저장된 데이터에 대한 단순 집계라 외부 API를 호출하지 않는다.
+    """
+    by_source_rows = await session.execute(
+        select(NoticeSource.source_name, func.count(Notice.id))
+        .join(Notice, Notice.source_id == NoticeSource.id)
+        .group_by(NoticeSource.source_name)
+    )
+    by_category_rows = await session.execute(
+        select(KgCategory.name, func.count(Notice.id))
+        .outerjoin(Notice, Notice.category_id == KgCategory.id)
+        .group_by(KgCategory.name)
+    )
+    by_status_rows = await session.execute(
+        select(Notice.status, func.count(Notice.id)).group_by(Notice.status)
+    )
+    # OCR 대상 포맷(PDF/HWP/HWPX) 첨부파일이 있는데 그중 parsed_text가
+    # 하나도 채워지지 않은 공고 수 — notice_ocr.py의 _OCR_TARGET_FILE_TYPES와
+    # 동일한 포맷 기준.
+    ocr_pending_subquery = (
+        select(NoticeAttachment.notice_id)
+        .where(NoticeAttachment.file_type.in_(("PDF", "HWP", "HWPX")))
+        .group_by(NoticeAttachment.notice_id)
+        .having(func.count(NoticeAttachment.parsed_text) == 0)
+    )
+    ocr_pending_count = await session.scalar(
+        select(func.count()).select_from(ocr_pending_subquery.subquery())
+    )
+
+    return {
+        "by_source": {name: count for name, count in by_source_rows.all()},
+        "by_category": {
+            (name or "미분류"): count for name, count in by_category_rows.all()
+        },
+        "by_status": {status: count for status, count in by_status_rows.all()},
+        "ocr_pending_count": ocr_pending_count or 0,
+    }

@@ -2,9 +2,11 @@
 api/notice_ocr.py
 
 공고 첨부파일 OCR 트리거 라우터.
-POST /internal/notices/{notice_id}/ocr             -> OCR 작업 시작 (202 Accepted)
-GET  /internal/notices/{notice_id}/ocr/{job_id}     -> 작업 상태/결과 조회
-POST /internal/notices/ocr/batch                   -> 여러 공고 OCR 작업 일괄 시작 (202 Accepted)
+POST /internal/notices/{notice_id}/ocr                              -> OCR 작업 시작 (202 Accepted)
+GET  /internal/notices/{notice_id}/ocr/{job_id}                      -> 작업 상태/결과 조회
+POST /internal/notices/ocr/batch                                     -> 여러 공고 OCR 작업 일괄 시작 (202 Accepted)
+GET  /internal/notices/ocr/batch/status                              -> 배치 상태 일괄 조회
+GET  /internal/notices/{notice_id}/attachments/{attachment_id}/text  -> OCR 추출 텍스트 조회
 
 배치 트리거는 매칭 파이프라인이 1차 필터링을 통과한 후보 여러 건에 대해
 한 번에 OCR을 걸어야 하는 상황(및 AI 팀 개발·검증용 실데이터 확보)을 위한
@@ -30,7 +32,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crawler.bizinfo_client import download_bizinfo_attachment
@@ -38,16 +40,18 @@ from app.crawler.kstartup_attachment_client import (
     download_kstartup_attachment,
     fetch_kstartup_attachments,
 )
-from app.db.session import async_session_factory
+from app.db.session import async_session_factory, get_db
 from app.models.notice import NoticeAttachment
 from app.ocr.extract import extract_text
 from app.repositories.notice_repository import (
+    get_notice_attachment,
     get_notice_attachments,
     get_notice_detail,
     save_attachment,
     set_attachment_parsed_text,
 )
 from app.schemas.notice_ocr import (
+    NoticeAttachmentTextResponse,
     NoticeOcrBatchJobItem,
     NoticeOcrBatchStatusResponse,
     NoticeOcrBatchTriggerRequest,
@@ -451,3 +455,35 @@ async def get_notice_ocr_status(notice_id: int, job_id: str):
             detail="해당 job_id의 OCR 작업을 찾을 수 없습니다.",
         )
     return job
+
+
+@router.get(
+    "/{notice_id}/attachments/{attachment_id}/text",
+    response_model=NoticeAttachmentTextResponse,
+    summary="첨부파일 OCR 추출 텍스트 조회",
+    description=(
+        "OCR job 상태 조회(GET /{notice_id}/ocr/{job_id})는 char_count만 "
+        "알려주고 실제 추출 텍스트는 주지 않는다 — 실제 내용을 확인하려면 "
+        "이 API로 조회한다. 아직 OCR이 끝나지 않았으면 parsed_text가 null로 "
+        "온다(빈 문자열과 구분 — _pick_ocr_target 참고)."
+    ),
+)
+async def get_notice_attachment_text(
+    notice_id: int, attachment_id: int, session: AsyncSession = Depends(get_db)
+):
+    attachment = await get_notice_attachment(session, notice_id, attachment_id)
+    if attachment is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="해당 공고에서 첨부파일을 찾을 수 없습니다.",
+        )
+    return NoticeAttachmentTextResponse(
+        notice_id=notice_id,
+        attachment_id=attachment_id,
+        file_name=attachment.file_name,
+        file_type=attachment.file_type,
+        parsed_text=attachment.parsed_text,
+        char_count=(
+            len(attachment.parsed_text) if attachment.parsed_text is not None else None
+        ),
+    )

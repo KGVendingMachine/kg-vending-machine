@@ -79,3 +79,23 @@ class RegionCodeBackfillResult(BaseModel):
     """검사한 공고 수 (기업마당+K-Startup)"""
     updated: int
     """실제로 지역 코드가 재계산돼 바뀐 공고 수"""
+
+
+class NoticeRecollectionResult(BaseModel):
+    """POST /internal/notices/{notice_id}/recollect 응답"""
+
+    notice_id: int
+    message: str = "재수집이 완료되었습니다."
+
+
+class CollectionStatsResponse(BaseModel):
+    """GET /internal/notices/stats 응답"""
+
+    by_source: dict[str, int]
+    """출처(기업마당/K-Startup)별 저장된 공고 수"""
+    by_category: dict[str, int]
+    """kg밴딩머신용카테고리별 공고 수 (미분류 포함)"""
+    by_status: dict[str, int]
+    """모집중/마감/예정/확인필요별 공고 수"""
+    ocr_pending_count: int
+    """OCR 대상 포맷(PDF/HWP/HWPX) 첨부파일은 있지만 아직 하나도 OCR되지 않은 공고 수"""
