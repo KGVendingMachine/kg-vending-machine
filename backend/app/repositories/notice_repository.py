@@ -740,6 +740,20 @@ async def get_collection_stats(session: AsyncSession) -> dict:
     ocr_pending_count = await session.scalar(
         select(func.count()).select_from(ocr_pending_subquery.subquery())
     )
+    # normalization_status는 NULL(아직 시도 안 함)/completed/failed 셋 중
+    # 하나다 — NULL을 "not_started"로 묶어서 세 값 다 한 번에 보여준다.
+    # SELECT와 GROUP BY에 coalesce(...)를 각각 새로 쓰면 리터럴("not_started")이
+    # 매번 별도 바인드 파라미터로 나가 Postgres가 같은 표현식으로 인식하지
+    # 못해 GroupingError가 난다(실제로 겪음) — label을 한 번만 만들어 양쪽에서
+    # 같은 표현식을 참조하게 한다.
+    normalization_status_label = func.coalesce(
+        Notice.normalization_status, "not_started"
+    ).label("normalization_status")
+    by_normalization_status_rows = await session.execute(
+        select(normalization_status_label, func.count(Notice.id)).group_by(
+            normalization_status_label
+        )
+    )
 
     return {
         "by_source": {name: count for name, count in by_source_rows.all()},
@@ -748,4 +762,7 @@ async def get_collection_stats(session: AsyncSession) -> dict:
         },
         "by_status": {status: count for status, count in by_status_rows.all()},
         "ocr_pending_count": ocr_pending_count or 0,
+        "by_normalization_status": {
+            status: count for status, count in by_normalization_status_rows.all()
+        },
     }

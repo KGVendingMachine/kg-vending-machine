@@ -99,3 +99,5 @@ class CollectionStatsResponse(BaseModel):
     """모집중/마감/예정/확인필요별 공고 수"""
     ocr_pending_count: int
     """OCR 대상 포맷(PDF/HWP/HWPX) 첨부파일은 있지만 아직 하나도 OCR되지 않은 공고 수"""
+    by_normalization_status: dict[str, int]
+    """정규화 상태별 공고 수 (not_started/completed/failed)"""

@@ -256,3 +256,4 @@ async def test_get_collection_stats_endpoint_returns_stats(db_session):
     assert isinstance(result.by_source, dict)
     assert isinstance(result.by_category, dict)
     assert isinstance(result.by_status, dict)
+    assert isinstance(result.by_normalization_status, dict)

@@ -5,7 +5,7 @@ repositories/notice_repository.py의 공고(notice) 관련 함수 테스트.
 conftest.db_session(SAVEPOINT 롤백) 위에서 실제 DB로 검증한다.
 """
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -33,6 +33,7 @@ from app.repositories.notice_repository import (
     save_attachment,
     set_attachment_parsed_text,
     set_notice_category,
+    update_notice_normalization,
     upsert_notice,
 )
 
@@ -446,6 +447,7 @@ async def test_get_collection_stats_returns_expected_keys(db_session):
         "by_category",
         "by_status",
         "ocr_pending_count",
+        "by_normalization_status",
     }
     assert isinstance(stats["ocr_pending_count"], int)
 
@@ -476,6 +478,38 @@ async def test_get_collection_stats_excludes_notice_once_parsed(db_session):
     after = await get_collection_stats(db_session)
 
     assert after["ocr_pending_count"] == before["ocr_pending_count"] - 1
+
+
+async def test_get_collection_stats_buckets_normalization_status(db_session):
+    before = await get_collection_stats(db_session)
+
+    source = await _create_source(db_session, "통계테스트출처3")
+    notice_id = await _create_notice(db_session, source, external_id="stats-3")
+
+    # normalization_status가 NULL인 새 공고는 not_started로 잡혀야 한다.
+    after_created = await get_collection_stats(db_session)
+    assert (
+        after_created["by_normalization_status"]["not_started"]
+        == before["by_normalization_status"].get("not_started", 0) + 1
+    )
+
+    await update_notice_normalization(
+        db_session,
+        notice_id,
+        normalized_json={"basic": {"title": "t"}},
+        normalization_status="completed",
+        normalization_error=None,
+        normalized_at=datetime.now(),
+    )
+
+    after_completed = await get_collection_stats(db_session)
+    assert (
+        after_completed["by_normalization_status"]["completed"]
+        == before["by_normalization_status"].get("completed", 0) + 1
+    )
+    assert after_completed["by_normalization_status"]["not_started"] == before[
+        "by_normalization_status"
+    ].get("not_started", 0)
 
 
 # ---------------------------------------------------------------------------

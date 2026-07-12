@@ -20,14 +20,18 @@ from app.ai.normalizer import AiNormalizationError
 from app.api.notice_normalization import (
     _JOBS,
     _execute_normalization_job,
+    _run_batch_normalization_jobs,
     _run_normalization_job,
+    get_notice_normalization_batch_status,
     get_notice_normalization_status,
     start_notice_normalization,
+    start_notice_normalization_batch,
 )
 from app.models.notice_source import NoticeSource
 from app.repositories.notice_repository import upsert_notice
 from app.schemas.notice_normalization import NoticeBasicInfo, NormalizedNoticeSchema
 from app.schemas.notice_normalization_job import (
+    NoticeNormalizationBatchTriggerRequest,
     NoticeNormalizationJobStatus,
     NoticeNormalizationJobStatusResponse,
 )
@@ -213,3 +217,135 @@ async def test_get_notice_normalization_status_404_when_notice_id_mismatch():
         await get_notice_normalization_status(notice_id=2, job_id=job_id)
 
     assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# start_notice_normalization_batch
+# ---------------------------------------------------------------------------
+
+
+async def test_start_notice_normalization_batch_starts_a_job_per_notice():
+    background_tasks = BackgroundTasks()
+
+    response = await start_notice_normalization_batch(
+        NoticeNormalizationBatchTriggerRequest(notice_ids=[1, 2, 3]), background_tasks
+    )
+
+    assert [item.notice_id for item in response.items] == [1, 2, 3]
+    assert all(
+        item.status == NoticeNormalizationJobStatus.PENDING for item in response.items
+    )
+    # 새 job들은 각자 background_tasks.add_task를 따로 부르지 않고 하나로
+    # 묶여 동시 실행된다(OCR 배치와 동일한 이유 — _run_batch_normalization_jobs 참고).
+    assert len(background_tasks.tasks) == 1
+    task = background_tasks.tasks[0]
+    assert task.func is _run_batch_normalization_jobs
+    assert [notice_id for _, notice_id in task.args[0]] == [1, 2, 3]
+
+
+async def test_start_notice_normalization_batch_dedupes_notice_ids():
+    background_tasks = BackgroundTasks()
+
+    response = await start_notice_normalization_batch(
+        NoticeNormalizationBatchTriggerRequest(notice_ids=[1, 1, 2]), background_tasks
+    )
+
+    assert [item.notice_id for item in response.items] == [1, 2]
+    assert len(background_tasks.tasks) == 1
+    assert len(background_tasks.tasks[0].args[0]) == 2
+
+
+async def test_start_notice_normalization_batch_reuses_existing_active_job():
+    _JOBS["existing"] = NoticeNormalizationJobStatusResponse(
+        job_id="existing", notice_id=1, status=NoticeNormalizationJobStatus.RUNNING
+    )
+    background_tasks = BackgroundTasks()
+
+    response = await start_notice_normalization_batch(
+        NoticeNormalizationBatchTriggerRequest(notice_ids=[1, 2]), background_tasks
+    )
+
+    reused, new = response.items
+    assert reused.job_id == "existing"
+    assert reused.status == NoticeNormalizationJobStatus.RUNNING
+    assert new.notice_id == 2
+    # 이미 진행 중인 공고는 새로 트리거하지 않으므로 신규 공고 1건만 배치에 포함됨
+    assert len(background_tasks.tasks) == 1
+    assert [notice_id for _, notice_id in background_tasks.tasks[0].args[0]] == [2]
+
+
+async def test_start_notice_normalization_batch_schedules_no_task_when_all_active():
+    _JOBS["existing"] = NoticeNormalizationJobStatusResponse(
+        job_id="existing", notice_id=1, status=NoticeNormalizationJobStatus.RUNNING
+    )
+    background_tasks = BackgroundTasks()
+
+    response = await start_notice_normalization_batch(
+        NoticeNormalizationBatchTriggerRequest(notice_ids=[1]), background_tasks
+    )
+
+    assert response.items[0].job_id == "existing"
+    assert len(background_tasks.tasks) == 0
+
+
+# ---------------------------------------------------------------------------
+# get_notice_normalization_batch_status
+# ---------------------------------------------------------------------------
+
+
+async def test_get_notice_normalization_batch_status_returns_requested_jobs_in_order():
+    _JOBS["job-a"] = NoticeNormalizationJobStatusResponse(
+        job_id="job-a", notice_id=1, status=NoticeNormalizationJobStatus.COMPLETED
+    )
+    _JOBS["job-b"] = NoticeNormalizationJobStatusResponse(
+        job_id="job-b", notice_id=2, status=NoticeNormalizationJobStatus.RUNNING
+    )
+
+    response = await get_notice_normalization_batch_status(job_ids=["job-a", "job-b"])
+
+    assert [item.job_id for item in response.items] == ["job-a", "job-b"]
+    assert response.items[0].status == NoticeNormalizationJobStatus.COMPLETED
+    assert response.items[1].status == NoticeNormalizationJobStatus.RUNNING
+
+
+async def test_get_notice_normalization_batch_status_dedupes_duplicate_job_ids():
+    _JOBS["job-a"] = NoticeNormalizationJobStatusResponse(
+        job_id="job-a", notice_id=1, status=NoticeNormalizationJobStatus.COMPLETED
+    )
+
+    response = await get_notice_normalization_batch_status(job_ids=["job-a", "job-a"])
+
+    assert [item.job_id for item in response.items] == ["job-a"]
+
+
+async def test_get_notice_normalization_batch_status_silently_skips_unknown_job_ids():
+    _JOBS["job-a"] = NoticeNormalizationJobStatusResponse(
+        job_id="job-a", notice_id=1, status=NoticeNormalizationJobStatus.COMPLETED
+    )
+
+    response = await get_notice_normalization_batch_status(
+        job_ids=["job-a", "존재하지-않는-job"]
+    )
+
+    assert [item.job_id for item in response.items] == ["job-a"]
+
+
+async def test_get_notice_normalization_batch_status_returns_empty_for_empty_input():
+    response = await get_notice_normalization_batch_status(job_ids=[])
+
+    assert response.items == []
+
+
+def test_get_notice_normalization_batch_status_returns_200_when_job_ids_omitted():
+    """실제 HTTP에서 job_ids를 아예 안 보낼 때 422가 나지 않는지는 FastAPI
+    계층까지 거쳐야 드러나므로 TestClient로 확인한다 (OCR 배치 상태 조회의
+    동일한 검증과 같은 이유)."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.get("/api/internal/notices/normalize/batch/status")
+
+    assert response.status_code == 200
+    assert response.json() == {"items": []}
