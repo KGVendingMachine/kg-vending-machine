@@ -450,6 +450,38 @@ async def update_notice_status(
     )
 
 
+async def update_notice_normalization(
+    session: AsyncSession,
+    notice_id: int,
+    *,
+    normalized_json: dict | None,
+    normalization_status: str,
+    normalization_error: str | None,
+    normalized_at: datetime,
+) -> bool:
+    """공고 정규화 결과를 저장한다.
+
+    _JOBS(인메모리)는 이번 요청의 진행 상태(pending/running)만 추적하고,
+    이 컬럼들은 "이 공고가 정규화됐는지"를 나중에 job_id 없이도 그대로
+    쿼리할 수 있게 공고 행 자체에 남긴다 — AI팀이 예: "normalization_status
+    = 'completed'인 공고만" 조회하는 용도. 실패도 남겨서(성공만 남기는
+    business_plan과 달리) "시도했다가 실패함"과 "아직 시도 안 함(NULL)"을
+    구분할 수 있게 한다. normalized_at은 DB server_default(func.now())
+    대신 호출자가 넘긴 값을 쓴다 — 응답에 그대로 실어 보낼 수 있도록.
+    """
+    result = await session.execute(
+        update(Notice)
+        .where(Notice.id == notice_id)
+        .values(
+            normalized_json=normalized_json,
+            normalization_status=normalization_status,
+            normalization_error=normalization_error,
+            normalized_at=normalized_at,
+        )
+    )
+    return result.rowcount > 0
+
+
 async def get_notices_missing_category(
     session: AsyncSession, raw_model_cls
 ) -> list[tuple[int, str]]:
