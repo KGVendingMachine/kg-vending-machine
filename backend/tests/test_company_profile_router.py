@@ -181,22 +181,36 @@ async def test_save_rejects_stage_conflicting_with_existing_business_type(db_ses
     assert exc_info.value.status_code == 400
 
 
-async def test_save_rejects_type_conflicting_with_existing_stage(db_session):
-    """부분 갱신으로 business_type만 보내도 기존에 저장된 company_stage와 모순되면 거부."""
-    user = await _make_user(db_session, kakao_id="company-conflict-type")
+async def test_transition_to_pre_founder_clears_registration_fields(db_session):
+    """business_type을 예비창업자로 바꾸면 사업자등록 이후에만 의미 있는 필드가
+    null로 정리되고 company_stage도 예비창업으로 강제된다(거부하지 않고 자동 정리)."""
+    user = await _make_user(db_session, kakao_id="company-pre-founder-transition")
     await save_my_company_profile(
-        payload=CompanyProfileUpdate(business_type="법인사업자", company_stage="도약"),
+        payload=CompanyProfileUpdate(
+            business_type="법인사업자",
+            company_stage="도약",
+            business_registration_number="000-00-00000",
+            founded_year=2020,
+            company_size="중기업",
+            employee_count=30,
+            annual_revenue=5_000_000_000,
+        ),
         current_user=user,
         session=db_session,
     )
 
-    with pytest.raises(HTTPException) as exc_info:
-        await save_my_company_profile(
-            payload=CompanyProfileUpdate(business_type="예비창업자"),
-            current_user=user,
-            session=db_session,
-        )
-    assert exc_info.value.status_code == 400
+    saved = await save_my_company_profile(
+        payload=CompanyProfileUpdate(business_type="예비창업자"),
+        current_user=user,
+        session=db_session,
+    )
+    assert saved.business_type == "예비창업자"
+    assert saved.company_stage == "예비창업"
+    assert saved.business_registration_number is None
+    assert saved.founded_date is None
+    assert saved.company_size is None
+    assert saved.employee_count is None
+    assert saved.annual_revenue is None
 
 
 async def test_profiles_are_isolated_per_user(db_session):
