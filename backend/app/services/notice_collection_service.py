@@ -6,18 +6,20 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.crawler.bizinfo_client import fetch_bizinfo_notices
+from app.crawler.bizinfo_client import fetch_bizinfo_notice_by_id, fetch_bizinfo_notices
 from app.crawler.kstartup_attachment_client import fetch_kstartup_attachments
 from app.crawler.kstartup_client import fetch_kstartup_notices
 from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
     delete_notice,
+    find_notice_ids_by_source_and_title,
     find_notice_ids_by_source_title_and_dates,
     get_bizinfo_notices_with_raw,
     get_category_mapping,
     get_kstartup_notices_with_raw,
     get_max_bizinfo_registration_time,
     get_max_notice_external_id,
+    get_notice_detail,
     get_notice_region_codes,
     get_notice_regions,
     get_notices_for_status_refresh,
@@ -37,6 +39,20 @@ logger = logging.getLogger(__name__)
 
 BIZINFO_SOURCE_NAME = "기업마당"
 KSTARTUP_SOURCE_NAME = "K-Startup"
+
+
+class NoticeRecollectionError(Exception):
+    """공고 단건 재수집 실패에 대한 기본 예외."""
+
+
+class NoticeRecollectionNotFoundError(NoticeRecollectionError):
+    """대상 공고를 찾을 수 없거나(잘못된 notice_id), 원본 API에서 더 이상
+    조회되지 않을 때(삭제·비공개 전환 등) 발생."""
+
+
+class UnsupportedRecollectionSourceError(NoticeRecollectionError):
+    """단건 재수집을 지원하지 않는 출처에 대해 시도했을 때 발생."""
+
 
 # 코드는 행정표준코드(법정동코드 앞 2자리) 기준. 강원/전북은 예전에
 # 여기 51/52로 잘못 들어가 있었다 — 실제로는 특별자치도 전환(강원
@@ -371,6 +387,38 @@ def _derive_status_from_dates(
     return "확인필요", False
 
 
+async def _find_cross_source_duplicate_notice_ids(
+    session: AsyncSession,
+    source_name: str,
+    title: str,
+    start_date: date | None,
+    end_date: date | None,
+) -> list[int]:
+    """기업마당·K-Startup 교차 중복 판정을 2단계로 한다.
+
+    1) 제목으로만 후보를 찾는다.
+    2) 후보가 1건뿐이면 애매할 게 없으므로 그대로 확정한다(신청기간
+       유무와 무관). 후보가 2건 이상(정기 반복 공고처럼 같은 제목의
+       회차가 여러 건 존재)이면, 신청기간까지 정확히 일치하는 것만
+       추려서 지금 이 회차와 무관한 다른 회차를 잘못 건드리지 않는다
+       — 이쪽 신청기간을 모르면(하나라도 None) 안전하게 아무것도
+       매칭하지 않는다(잘못 지우거나 잘못 건너뛰는 것보다 안전).
+
+    처음엔 신청기간을 무조건 요구했었는데, 실제 DB로 확인해보니 기업마당
+    공고의 89%가 "상시모집" 등으로 신청기간이 아예 없어서 그 공고들은
+    중복 판정 자체가 통째로 안 되는 문제가 있었다 — 제목 후보가 1건뿐인
+    압도적 다수의 경우까지 날짜를 요구할 필요는 없어서 이렇게 나눴다.
+    """
+    candidates = await find_notice_ids_by_source_and_title(session, source_name, title)
+    if len(candidates) <= 1:
+        return candidates
+    if start_date is None or end_date is None:
+        return []
+    return await find_notice_ids_by_source_title_and_dates(
+        session, source_name, title, start_date, end_date
+    )
+
+
 async def _process_bizinfo_item(
     session: AsyncSession,
     source_id: int,
@@ -452,18 +500,13 @@ async def _process_bizinfo_item(
                 )
 
             # 기업마당·K-Startup에 같은 사업의 같은 회차가 각자 다른
-            # external_id로 중복 등록되는 경우, 제목+신청기간이 같으면
-            # 기업마당을 우선한다. K-Startup을 먼저 수집해서 이미
-            # 저장돼 있었더라도 여기서 정리한다.
-            #
-            # 제목만 보고 지우면 안 된다 — 정기 반복되는 모집 공고는
-            # 회차마다 제목을 그대로 재사용해(실제 DB 확인: 신청기간이
-            # 전혀 안 겹치는 회차 8개가 완전히 같은 제목), 제목만 일치
-            # 조건으로 삼으면 지금 이 회차와 무관한 과거 회차까지 통째로
-            # 지워버린다. start_date/end_date가 둘 다 있어야만(신청기간을
-            # 못 구한 공고는 비교 자체가 불가능하므로) 판정한다.
-            if title and start_date is not None and end_date is not None:
-                duplicate_ids = await find_notice_ids_by_source_title_and_dates(
+            # external_id로 중복 등록되는 경우, 기업마당을 우선한다.
+            # K-Startup을 먼저 수집해서 이미 저장돼 있었더라도 여기서
+            # 정리한다. 판정 기준은 _find_cross_source_duplicate_notice_ids
+            # 참고 — 제목 후보가 1건뿐이면 신청기간 없이도 매칭하고,
+            # 여러 건(정기 반복 공고)이면 신청기간까지 일치해야 매칭한다.
+            if title:
+                duplicate_ids = await _find_cross_source_duplicate_notice_ids(
                     session, KSTARTUP_SOURCE_NAME, title, start_date, end_date
                 )
                 for duplicate_id in duplicate_ids:
@@ -507,6 +550,52 @@ async def collect_bizinfo_notices(
 
     await session.commit()
     return collection_result
+
+
+async def recollect_bizinfo_notice(session: AsyncSession, notice_id: int) -> None:
+    """이미 저장된 기업마당 공고 하나만 원본 API에서 다시 가져와 갱신한다.
+
+    변경공고(마감일 연장, 첨부파일 교체 등)를 전체 재수집 없이 바로
+    반영하고 싶을 때 쓴다. K-Startup은 목록 API가 pbanc_sn 필터를 받아도
+    조용히 무시하고 첫 페이지를 그대로 돌려주는 것을 실제 호출로 확인해
+    (필터링되지 않음 — 즉 원하는 건 하나만 골라올 방법이 없음), 페이지를
+    끝까지 훑지 않는 한 단건 조회가 불가능하다. 그래서 기업마당만
+    지원한다 (pblancId 필터가 실제로 동작하는 것을 확인함,
+    fetch_bizinfo_notice_by_id 참고).
+    """
+    row = await get_notice_detail(session, notice_id)
+    if row is None:
+        raise NoticeRecollectionNotFoundError(
+            f"notice_id {notice_id}를 찾을 수 없습니다."
+        )
+    notice, source_name, _ = row
+    if source_name != BIZINFO_SOURCE_NAME:
+        raise UnsupportedRecollectionSourceError(
+            f"{source_name}은 단건 재수집을 지원하지 않습니다 (기업마당만 지원)."
+        )
+
+    item = await fetch_bizinfo_notice_by_id(notice.external_id)
+    if item is None:
+        raise NoticeRecollectionNotFoundError(
+            "기업마당에서 해당 공고를 더 이상 찾을 수 없습니다 "
+            "(비공개 전환되었거나 삭제되었을 수 있습니다)."
+        )
+
+    category_mapping = await get_category_mapping(session)
+    collection_result = CollectionResult()
+    await _process_bizinfo_item(
+        session, notice.source_id, item, collection_result, category_mapping
+    )
+    await session.commit()
+
+    # _process_bizinfo_item은 펀드 카테고리가 아니거나 수집 기간을 벗어나면
+    # (이미 한 번 저장됐던 공고라 실제로는 거의 없는 경우) 아무것도 하지
+    # 않고 조용히 리턴한다 — 이런 "해당 없음"은 실패가 아니므로
+    # failed_count만 오류로 취급한다.
+    if collection_result.failed_count > 0:
+        raise NoticeRecollectionError(
+            "재수집 처리 중 오류가 발생해 반영하지 못했습니다."
+        )
 
 
 # 기업마당 응답은 creatPnttm(등록시각) 기준 최신순으로 오는 것을 실제
@@ -661,18 +750,14 @@ async def _process_kstartup_item(
     end_date = _parse_kstartup_date(item.get("pbanc_rcpt_end_dt"))
 
     # 기업마당·K-Startup에 같은 사업의 같은 회차가 각자 다른
-    # external_id로 중복 등록되는 경우, 제목+신청기간이 같으면 기업마당을
-    # 우선한다. 기업마당이 이미 수집돼 있으면 이 K-Startup 항목은
-    # 저장하지 않는다.
-    #
-    # 제목만 보고 건너뛰면 안 된다 — 정기 반복되는 모집 공고는 회차마다
-    # 제목을 그대로 재사용해(실제 DB 확인: 신청기간이 전혀 안 겹치는
-    # 회차 8개가 완전히 같은 제목), 제목만 일치 조건으로 삼으면 기업마당에
-    # 예전 회차만 있어도 지금 새로 올라온 회차 저장을 건너뛰어 버린다
-    # (누락). start_date/end_date가 둘 다 있어야만 판정한다.
+    # external_id로 중복 등록되는 경우, 기업마당을 우선한다. 기업마당이
+    # 이미 수집돼 있으면 이 K-Startup 항목은 저장하지 않는다. 판정 기준은
+    # _find_cross_source_duplicate_notice_ids 참고 — 제목 후보가 1건뿐이면
+    # 신청기간 없이도 매칭하고, 여러 건(정기 반복 공고)이면 신청기간까지
+    # 일치해야 매칭한다.
     title = item.get("biz_pbanc_nm")
-    if title and start_date is not None and end_date is not None:
-        duplicate_ids = await find_notice_ids_by_source_title_and_dates(
+    if title:
+        duplicate_ids = await _find_cross_source_duplicate_notice_ids(
             session, BIZINFO_SOURCE_NAME, title, start_date, end_date
         )
         if duplicate_ids:

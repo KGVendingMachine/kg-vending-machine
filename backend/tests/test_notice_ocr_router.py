@@ -16,12 +16,20 @@ from app.api.notice_ocr import (
     _has_active_job_for_notice,
     _pick_ocr_target,
     _run_batch_notice_ocr_jobs,
+    get_notice_attachment_text,
     get_notice_ocr_batch_status,
     get_notice_ocr_status,
     start_notice_ocr,
     start_notice_ocr_batch,
 )
 from app.models.notice import NoticeAttachment
+from app.repositories.notice_repository import (
+    get_notice_attachments,
+    get_or_create_source,
+    save_attachment,
+    set_attachment_parsed_text,
+    upsert_notice,
+)
 from app.schemas.notice_ocr import (
     NoticeOcrBatchTriggerRequest,
     NoticeOcrJobStatus,
@@ -427,3 +435,110 @@ def test_get_notice_ocr_batch_status_returns_200_when_job_ids_omitted_over_http(
 
     assert response.status_code == 200
     assert response.json() == {"items": []}
+
+
+# ---------------------------------------------------------------------------
+# get_notice_attachment_text
+# ---------------------------------------------------------------------------
+
+
+async def test_get_notice_attachment_text_returns_parsed_text(db_session):
+    source = await get_or_create_source(
+        db_session,
+        source_name="첨부텍스트조회출처",
+        base_url="https://example.com",
+        collect_type="API",
+    )
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="attach-text-1",
+        title="테스트 공고",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+    await save_attachment(
+        db_session, notice_id, "a.pdf", "https://example.com/a.pdf", "PDF"
+    )
+    attachment_id = (await get_notice_attachments(db_session, notice_id))[0].id
+    await set_attachment_parsed_text(db_session, attachment_id, "추출된 원문")
+
+    response = await get_notice_attachment_text(
+        notice_id=notice_id, attachment_id=attachment_id, session=db_session
+    )
+
+    assert response.parsed_text == "추출된 원문"
+    assert response.char_count == len("추출된 원문")
+
+
+async def test_get_notice_attachment_text_null_when_not_yet_ocred(db_session):
+    """아직 OCR 안 된 첨부파일은 parsed_text=None, char_count=None이어야
+    한다 — 빈 문자열("")과 구분해야 하므로(_pick_ocr_target과 동일한 이유)."""
+    source = await get_or_create_source(
+        db_session,
+        source_name="첨부텍스트조회출처2",
+        base_url="https://example.com",
+        collect_type="API",
+    )
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="attach-text-2",
+        title="테스트 공고2",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+    await save_attachment(
+        db_session, notice_id, "b.pdf", "https://example.com/b.pdf", "PDF"
+    )
+    attachment_id = (await get_notice_attachments(db_session, notice_id))[0].id
+
+    response = await get_notice_attachment_text(
+        notice_id=notice_id, attachment_id=attachment_id, session=db_session
+    )
+
+    assert response.parsed_text is None
+    assert response.char_count is None
+
+
+async def test_get_notice_attachment_text_404_for_mismatched_notice_id(db_session):
+    source = await get_or_create_source(
+        db_session,
+        source_name="첨부텍스트조회출처3",
+        base_url="https://example.com",
+        collect_type="API",
+    )
+    notice_id = await upsert_notice(
+        db_session,
+        source_id=source.id,
+        external_id="attach-text-3",
+        title="테스트 공고3",
+        application_start_date=None,
+        application_end_date=None,
+        status="모집중",
+        is_actionable=True,
+        source_url=None,
+        apply_url=None,
+        summary_text=None,
+    )
+    await save_attachment(
+        db_session, notice_id, "c.pdf", "https://example.com/c.pdf", "PDF"
+    )
+    attachment_id = (await get_notice_attachments(db_session, notice_id))[0].id
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_notice_attachment_text(
+            notice_id=999_999_999, attachment_id=attachment_id, session=db_session
+        )
+
+    assert exc_info.value.status_code == 404

@@ -5,23 +5,17 @@ import httpx
 from app.core.config import get_settings
 
 
-async def fetch_bizinfo_notices(page: int = 1) -> list[dict]:
-    """기업마당(bizinfoApi.do)에서 공고 목록 원본 응답을 가져온다.
+async def _fetch_bizinfo_page(extra_params: dict) -> list[dict]:
+    """기업마당(bizinfoApi.do) 원본 응답을 가져온다 (공통 재시도 로직).
 
     응답 실패 시 settings.BIZINFO_MAX_RETRIES만큼 재시도한다(공공 API가
     간헐적으로 5xx/timeout을 반환하는 경우가 있어 즉시 실패시키지 않음).
     """
     settings = get_settings()
-    # pageUnit(페이지당 개수) + pageIndex(페이지 번호) 조합이 실제 페이징
-    # 파라미터다. searchCnt만 단독으로 쓰면 페이지 이동 없이 항상 첫
-    # 페이지만 반환되고, pageIndex를 searchCnt와 같이 보내면 API가
-    # "한 페이지의 보여지는 데이터 개수를 입력해주세요" 에러를 반환한다
-    # (실제 호출로 확인함, 공식 문서에 명확히 없음).
     params = {
         "crtfcKey": settings.BIZINFO_API_KEY,
         "dataType": "json",
-        "pageUnit": settings.BIZINFO_PAGE_SIZE,
-        "pageIndex": page,
+        **extra_params,
     }
 
     last_error: Exception | None = None
@@ -56,6 +50,60 @@ async def fetch_bizinfo_notices(page: int = 1) -> list[dict]:
     ) from last_error
 
 
+async def fetch_bizinfo_notices(page: int = 1) -> list[dict]:
+    """기업마당(bizinfoApi.do)에서 공고 목록 원본 응답을 가져온다.
+
+    pageUnit(페이지당 개수) + pageIndex(페이지 번호) 조합이 실제 페이징
+    파라미터다. searchCnt만 단독으로 쓰면 페이지 이동 없이 항상 첫
+    페이지만 반환되고, pageIndex를 searchCnt와 같이 보내면 API가
+    "한 페이지의 보여지는 데이터 개수를 입력해주세요" 에러를 반환한다
+    (실제 호출로 확인함, 공식 문서에 명확히 없음).
+    """
+    settings = get_settings()
+    return await _fetch_bizinfo_page(
+        {"pageUnit": settings.BIZINFO_PAGE_SIZE, "pageIndex": page}
+    )
+
+
+async def fetch_bizinfo_notice_by_id(pblanc_id: str) -> dict | None:
+    """기업마당 공고 하나를 pblancId로 단건 조회한다 (단건 재수집용).
+
+    pblancId를 파라미터로 주면 실제로 해당 건 하나만 필터링해서 돌려주는
+    것을 실제 호출로 확인했다(totCnt=1). K-Startup 목록 API와 달리
+    기업마당은 이 필터가 실제로 동작하므로 페이지를 훑지 않고 바로
+    가져올 수 있다.
+    """
+    items = await _fetch_bizinfo_page(
+        {"pageUnit": 10, "pageIndex": 1, "pblancId": pblanc_id}
+    )
+    return items[0] if items else None
+
+
+# 기업마당 서버가 예상외로 큰 파일을 내려주는 경우(오설정·오류 응답 등)에
+# 대비한 안전장치. response.content로 그냥 받으면 크기 제한 없이 응답
+# 전체를 메모리에 올리는데, 배치 OCR 트리거로 여러 첨부파일을 동시에
+# 다운로드할 때 이게 겹치면 서버 메모리를 위협할 수 있다(HWP/HWPX/PDF
+# 압축 해제 폭탄과 같은 종류의 문제). 실제 공고 첨부파일은 이 크기를
+# 넘는 경우가 없다고 보고 넉넉하게 잡은 값.
+_MAX_ATTACHMENT_SIZE_BYTES = 100 * 1024 * 1024
+
+
+async def _read_response_with_size_limit(
+    response: httpx.Response, source: str
+) -> bytes:
+    chunks = []
+    size = 0
+    async for chunk in response.aiter_bytes():
+        size += len(chunk)
+        if size > _MAX_ATTACHMENT_SIZE_BYTES:
+            raise RuntimeError(
+                f"첨부파일이 허용 크기({_MAX_ATTACHMENT_SIZE_BYTES} bytes)를 "
+                f"초과했습니다: {source}"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 async def download_bizinfo_attachment(file_url: str) -> bytes:
     """기업마당 첨부파일 URL(getImageFile.do?...)에서 실제 파일을 받는다.
 
@@ -69,9 +117,11 @@ async def download_bizinfo_attachment(file_url: str) -> bytes:
     ) as client:
         for attempt in range(1, settings.BIZINFO_MAX_RETRIES + 1):
             try:
-                response = await client.get(file_url, follow_redirects=True)
-                response.raise_for_status()
-                return response.content
+                async with client.stream(
+                    "GET", file_url, follow_redirects=True
+                ) as response:
+                    response.raise_for_status()
+                    return await _read_response_with_size_limit(response, file_url)
             except httpx.HTTPError as exc:
                 last_error = exc
                 if attempt < settings.BIZINFO_MAX_RETRIES:

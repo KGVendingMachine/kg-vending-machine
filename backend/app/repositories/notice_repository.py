@@ -245,6 +245,27 @@ async def replace_notice_region(
         )
 
 
+async def find_notice_ids_by_source_and_title(
+    session: AsyncSession, source_name: str, title: str
+) -> list[int]:
+    """특정 출처(source_name)에서 제목이 정확히 일치하는 공고 id를 전부 찾는다
+    (신청기간은 안 본다).
+
+    호출자(notice_collection_service._find_cross_source_duplicate_notice_ids)가
+    "제목 일치 후보가 1건뿐이면 신청기간 없이도 안전하게 매칭, 여러 건이면
+    find_notice_ids_by_source_title_and_dates로 날짜까지 확인"하는 2단계
+    판정의 1단계로 쓴다. 이 함수 하나만으로 최종 판정하면 정기 반복 공고
+    문제(아래 함수 docstring 참고)가 재현되므로 여기서 바로 지우거나
+    건너뛰지 않는다.
+    """
+    result = await session.execute(
+        select(Notice.id)
+        .join(NoticeSource, Notice.source_id == NoticeSource.id)
+        .where(NoticeSource.source_name == source_name, Notice.title == title)
+    )
+    return list(result.scalars().all())
+
+
 async def find_notice_ids_by_source_title_and_dates(
     session: AsyncSession,
     source_name: str,
@@ -269,7 +290,13 @@ async def find_notice_ids_by_source_title_and_dates(
 
     start_date/end_date 중 하나라도 없으면(파싱 실패 등) 호출자가 이
     함수를 부르지 않고 건너뛰는 것을 전제로 한다 — 날짜 없이 제목만
-    비교하면 위 문제가 그대로 재현되기 때문이다.
+    비교하면 위 문제가 그대로 재현되기 때문이다. 다만 제목 일치 후보가
+    애초에 1건뿐이면 애매할 게 없으므로 이 함수까지 안 오고
+    find_notice_ids_by_source_and_title 결과를 그대로 쓴다(실제 DB
+    확인: 기업마당 공고의 89%가 "상시모집" 등으로 신청기간이 없어서,
+    날짜를 무조건 요구하면 이 공고들은 중복 판정 자체가 통째로
+    안 되는 문제가 있었다 — notice_collection_service.
+    _find_cross_source_duplicate_notice_ids 참고).
     """
     result = await session.execute(
         select(Notice.id)
@@ -421,6 +448,38 @@ async def update_notice_status(
         .where(Notice.id == notice_id)
         .values(status=status, is_actionable=is_actionable)
     )
+
+
+async def update_notice_normalization(
+    session: AsyncSession,
+    notice_id: int,
+    *,
+    normalized_json: dict | None,
+    normalization_status: str,
+    normalization_error: str | None,
+    normalized_at: datetime,
+) -> bool:
+    """공고 정규화 결과를 저장한다.
+
+    _JOBS(인메모리)는 이번 요청의 진행 상태(pending/running)만 추적하고,
+    이 컬럼들은 "이 공고가 정규화됐는지"를 나중에 job_id 없이도 그대로
+    쿼리할 수 있게 공고 행 자체에 남긴다 — AI팀이 예: "normalization_status
+    = 'completed'인 공고만" 조회하는 용도. 실패도 남겨서(성공만 남기는
+    business_plan과 달리) "시도했다가 실패함"과 "아직 시도 안 함(NULL)"을
+    구분할 수 있게 한다. normalized_at은 DB server_default(func.now())
+    대신 호출자가 넘긴 값을 쓴다 — 응답에 그대로 실어 보낼 수 있도록.
+    """
+    result = await session.execute(
+        update(Notice)
+        .where(Notice.id == notice_id)
+        .values(
+            normalized_json=normalized_json,
+            normalization_status=normalization_status,
+            normalization_error=normalization_error,
+            normalized_at=normalized_at,
+        )
+    )
+    return result.rowcount > 0
 
 
 async def get_notices_missing_category(
@@ -631,3 +690,79 @@ async def get_notice_attachments_for_display(
         )
     )
     return list(result.scalars().all())
+
+
+async def get_notice_attachment(
+    session: AsyncSession, notice_id: int, attachment_id: int
+) -> NoticeAttachment | None:
+    """공고 하나에 속한 첨부파일 하나를 parsed_text(OCR 원문)까지 포함해 가져온다.
+
+    notice_id도 같이 확인해서, 다른 공고의 attachment_id를 넣어 조회하는
+    것을 막는다(경로상 notice_id/attachment_id가 각각 별개 자원처럼
+    보이지만 실제로는 attachment가 notice에 종속된 자원이라서).
+    """
+    result = await session.execute(
+        select(NoticeAttachment).where(
+            NoticeAttachment.id == attachment_id,
+            NoticeAttachment.notice_id == notice_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_collection_stats(session: AsyncSession) -> dict:
+    """수집 현황을 출처/카테고리/상태별 건수 + OCR 대기 건수로 집계한다.
+
+    전부 이미 저장된 데이터에 대한 단순 집계라 외부 API를 호출하지 않는다.
+    """
+    by_source_rows = await session.execute(
+        select(NoticeSource.source_name, func.count(Notice.id))
+        .join(Notice, Notice.source_id == NoticeSource.id)
+        .group_by(NoticeSource.source_name)
+    )
+    by_category_rows = await session.execute(
+        select(KgCategory.name, func.count(Notice.id))
+        .outerjoin(Notice, Notice.category_id == KgCategory.id)
+        .group_by(KgCategory.name)
+    )
+    by_status_rows = await session.execute(
+        select(Notice.status, func.count(Notice.id)).group_by(Notice.status)
+    )
+    # OCR 대상 포맷(PDF/HWP/HWPX) 첨부파일이 있는데 그중 parsed_text가
+    # 하나도 채워지지 않은 공고 수 — notice_ocr.py의 _OCR_TARGET_FILE_TYPES와
+    # 동일한 포맷 기준.
+    ocr_pending_subquery = (
+        select(NoticeAttachment.notice_id)
+        .where(NoticeAttachment.file_type.in_(("PDF", "HWP", "HWPX")))
+        .group_by(NoticeAttachment.notice_id)
+        .having(func.count(NoticeAttachment.parsed_text) == 0)
+    )
+    ocr_pending_count = await session.scalar(
+        select(func.count()).select_from(ocr_pending_subquery.subquery())
+    )
+    # normalization_status는 NULL(아직 시도 안 함)/completed/failed 셋 중
+    # 하나다 — NULL을 "not_started"로 묶어서 세 값 다 한 번에 보여준다.
+    # SELECT와 GROUP BY에 coalesce(...)를 각각 새로 쓰면 리터럴("not_started")이
+    # 매번 별도 바인드 파라미터로 나가 Postgres가 같은 표현식으로 인식하지
+    # 못해 GroupingError가 난다(실제로 겪음) — label을 한 번만 만들어 양쪽에서
+    # 같은 표현식을 참조하게 한다.
+    normalization_status_label = func.coalesce(
+        Notice.normalization_status, "not_started"
+    ).label("normalization_status")
+    by_normalization_status_rows = await session.execute(
+        select(normalization_status_label, func.count(Notice.id)).group_by(
+            normalization_status_label
+        )
+    )
+
+    return {
+        "by_source": {name: count for name, count in by_source_rows.all()},
+        "by_category": {
+            (name or "미분류"): count for name, count in by_category_rows.all()
+        },
+        "by_status": {status: count for status, count in by_status_rows.all()},
+        "ocr_pending_count": ocr_pending_count or 0,
+        "by_normalization_status": {
+            status: count for status, count in by_normalization_status_rows.all()
+        },
+    }

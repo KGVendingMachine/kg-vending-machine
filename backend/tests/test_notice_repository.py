@@ -5,7 +5,7 @@ repositories/notice_repository.py의 공고(notice) 관련 함수 테스트.
 conftest.db_session(SAVEPOINT 롤백) 위에서 실제 DB로 검증한다.
 """
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -14,7 +14,10 @@ from app.models.notice_source import NoticeSource
 from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
     delete_notice,
+    find_notice_ids_by_source_and_title,
     find_notice_ids_by_source_title_and_dates,
+    get_collection_stats,
+    get_notice_attachment,
     get_notice_attachments,
     get_notice_attachments_by_ids,
     get_notice_detail,
@@ -30,6 +33,7 @@ from app.repositories.notice_repository import (
     save_attachment,
     set_attachment_parsed_text,
     set_notice_category,
+    update_notice_normalization,
     upsert_notice,
 )
 
@@ -188,8 +192,33 @@ async def test_get_notices_missing_category_scoped_to_given_raw_model(db_session
 
 
 # ---------------------------------------------------------------------------
-# find_notice_ids_by_source_title_and_dates / delete_notice
+# find_notice_ids_by_source_and_title / find_notice_ids_by_source_title_and_dates
+# / delete_notice
 # ---------------------------------------------------------------------------
+
+
+async def test_find_notice_ids_by_source_and_title_matches_regardless_of_dates(
+    db_session,
+):
+    """신청기간이 아예 없는 공고(실제 DB 확인: 기업마당의 89%가 "상시모집"
+    등으로 신청기간이 없음)도 제목만으로는 찾을 수 있어야 한다 — 날짜를
+    무조건 요구하는 건 find_notice_ids_by_source_title_and_dates 쪽 책임이고,
+    이 함수는 순수하게 제목만 본다."""
+    source = await _create_source(db_session, "날짜없는공고출처")
+    notice_id = await _create_notice(
+        db_session,
+        source,
+        external_id="no-date-1",
+        title="상시모집 공고",
+        application_start_date=None,
+        application_end_date=None,
+    )
+
+    found = await find_notice_ids_by_source_and_title(
+        db_session, "날짜없는공고출처", "상시모집 공고"
+    )
+
+    assert found == [notice_id]
 
 
 async def test_find_notice_ids_by_source_title_and_dates_matches_exact_title_and_dates(
@@ -370,6 +399,120 @@ async def test_get_notice_attachments_by_ids_returns_empty_dict_for_empty_input(
     db_session,
 ):
     assert await get_notice_attachments_by_ids(db_session, []) == {}
+
+
+# ---------------------------------------------------------------------------
+# get_notice_attachment
+# ---------------------------------------------------------------------------
+
+
+async def test_get_notice_attachment_returns_attachment_with_parsed_text(db_session):
+    source = await _create_source(db_session, "단건첨부조회출처")
+    notice_id = await _create_notice(db_session, source, external_id="single-attach-1")
+    await save_attachment(db_session, notice_id, "a.pdf", "https://a.com/a.pdf", "PDF")
+    attachment_id = (await get_notice_attachments(db_session, notice_id))[0].id
+    await set_attachment_parsed_text(db_session, attachment_id, "원문 텍스트")
+
+    result = await get_notice_attachment(db_session, notice_id, attachment_id)
+
+    assert result is not None
+    assert result.parsed_text == "원문 텍스트"
+
+
+async def test_get_notice_attachment_returns_none_for_mismatched_notice_id(
+    db_session,
+):
+    """attachment_id는 notice에 종속된 자원이라, 다른 공고의 notice_id로
+    조회하면 실제로 존재하는 attachment_id여도 None이어야 한다."""
+    source = await _create_source(db_session, "단건첨부조회출처2")
+    notice_id = await _create_notice(db_session, source, external_id="single-attach-2")
+    await save_attachment(db_session, notice_id, "a.pdf", "https://a.com/a.pdf", "PDF")
+    attachment_id = (await get_notice_attachments(db_session, notice_id))[0].id
+
+    result = await get_notice_attachment(db_session, 999_999_999, attachment_id)
+
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# get_collection_stats
+# ---------------------------------------------------------------------------
+
+
+async def test_get_collection_stats_returns_expected_keys(db_session):
+    stats = await get_collection_stats(db_session)
+
+    assert set(stats.keys()) == {
+        "by_source",
+        "by_category",
+        "by_status",
+        "ocr_pending_count",
+        "by_normalization_status",
+    }
+    assert isinstance(stats["ocr_pending_count"], int)
+
+
+async def test_get_collection_stats_counts_unparsed_ocr_target_attachment(db_session):
+    source = await _create_source(db_session, "통계테스트출처")
+    notice_id = await _create_notice(db_session, source, external_id="stats-1")
+    before = await get_collection_stats(db_session)
+
+    await save_attachment(db_session, notice_id, "a.pdf", "https://a.com/a.pdf", "PDF")
+
+    after = await get_collection_stats(db_session)
+
+    assert after["ocr_pending_count"] == before["ocr_pending_count"] + 1
+    assert after["by_source"][source.source_name] == 1
+    assert after["by_status"]["모집중"] >= 1
+
+
+async def test_get_collection_stats_excludes_notice_once_parsed(db_session):
+    source = await _create_source(db_session, "통계테스트출처2")
+    notice_id = await _create_notice(db_session, source, external_id="stats-2")
+    await save_attachment(db_session, notice_id, "a.pdf", "https://a.com/a.pdf", "PDF")
+    before = await get_collection_stats(db_session)
+
+    attachment_id = (await get_notice_attachments(db_session, notice_id))[0].id
+    await set_attachment_parsed_text(db_session, attachment_id, "원문")
+
+    after = await get_collection_stats(db_session)
+
+    assert after["ocr_pending_count"] == before["ocr_pending_count"] - 1
+
+
+async def test_get_collection_stats_buckets_normalization_status(db_session):
+    before = await get_collection_stats(db_session)
+
+    source = await _create_source(db_session, "통계테스트출처3")
+    notice_id = await _create_notice(db_session, source, external_id="stats-3")
+
+    # normalization_status가 NULL인 새 공고는 not_started로 잡혀야 한다.
+    after_created = await get_collection_stats(db_session)
+    assert (
+        after_created["by_normalization_status"]["not_started"]
+        == before["by_normalization_status"].get("not_started", 0) + 1
+    )
+
+    await update_notice_normalization(
+        db_session,
+        notice_id,
+        normalized_json={"basic": {"title": "t"}},
+        normalization_status="completed",
+        normalization_error=None,
+        normalized_at=datetime.now(),
+    )
+
+    after_completed = await get_collection_stats(db_session)
+    assert (
+        after_completed["by_normalization_status"]["completed"]
+        == before["by_normalization_status"].get("completed", 0) + 1
+    )
+    # CI처럼 다른 공고가 전혀 없는 DB에서는 이 공고가 completed로 바뀌면서
+    # not_started 버킷 자체가 사라질 수 있다(0이면 GROUP BY 결과에 행이 안
+    # 나옴) — 그래서 직접 인덱싱 대신 .get(..., 0)으로 확인한다.
+    assert after_completed["by_normalization_status"].get("not_started", 0) == before[
+        "by_normalization_status"
+    ].get("not_started", 0)
 
 
 # ---------------------------------------------------------------------------

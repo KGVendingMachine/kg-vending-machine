@@ -25,6 +25,15 @@ from app.services.sample_notice_loader import SampleNotice
 pytestmark = pytest.mark.anyio
 
 
+@pytest.fixture(autouse=True)
+def _use_tmp_path_as_sample_base_dir(tmp_path, monkeypatch):
+    # sample_path는 base dir(_SAMPLE_DATA_BASE_DIR) 내부만 허용되므로,
+    # 테스트에서는 base dir 자체를 tmp_path로 바꿔 격리한다.
+    monkeypatch.setattr(
+        "app.services.sample_notice_loader._SAMPLE_DATA_BASE_DIR", tmp_path
+    )
+
+
 def _complete_normalized() -> NormalizedNoticeSchema:
     return NormalizedNoticeSchema(
         basic=NoticeBasicInfo(title="수입규제 대응 컨설팅"),
@@ -64,7 +73,7 @@ def _write_samples(tmp_path) -> str:
         ),
         encoding="utf-8",
     )
-    return str(path)
+    return str(path.name)
 
 
 async def test_normalize_sample_notice_returns_normalized_result(tmp_path, monkeypatch):
