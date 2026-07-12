@@ -12,6 +12,7 @@ from app.ai.normalizer import AiNormalizationError
 from app.models.notice import Notice
 from app.models.notice_source import NoticeSource
 from app.repositories.notice_repository import (
+    delete_notice,
     get_notice_attachments,
     save_attachment,
     set_attachment_parsed_text,
@@ -142,6 +143,36 @@ async def test_normalize_notice_persists_failure_status_on_ai_error(
     assert notice.normalization_status == "failed"
     assert notice.normalization_error == "LLM 실패"
     assert notice.normalized_json is None
+
+
+async def test_normalize_notice_raises_not_found_when_notice_deleted_during_llm_call(
+    db_session, monkeypatch
+):
+    """LLM 호출(길면 수십 초)이 도는 동안 다른 트랜잭션(크롤링의 "기업마당
+    우선" 중복 정리 등)이 이 공고를 지울 수 있다 — 이 경우 저장이 0행
+    반영되는데, 이를 확인하지 않으면 이미 사라진 공고에 COMPLETED를
+    반환하게 된다(notice_ocr.py의 동일한 문제와 같은 원인). 실제로 재현
+    확인함(2026-07-13)."""
+    source = await _create_source(db_session, "정규화테스트출처6")
+    notice_id = await _create_notice(
+        db_session, source, external_id="norm-6", summary_text="요약문"
+    )
+
+    async def fake_normalize_with_concurrent_delete(
+        prompt_text: str,
+    ) -> NormalizedNoticeSchema:
+        # LLM 응답을 기다리는 동안 다른 트랜잭션이 이 공고를 삭제하는
+        # 상황을 재현 (실제로는 별도 커넥션이지만, 테스트에서는 같은
+        # db_session으로 "그 사이 사라졌다"만 재현하면 충분하다).
+        await delete_notice(db_session, notice_id)
+        return _complete_normalized()
+
+    monkeypatch.setattr(
+        svc, "normalize_notice_text", fake_normalize_with_concurrent_delete
+    )
+
+    with pytest.raises(NoticeNotFoundForNormalizationError):
+        await normalize_notice(db_session, notice_id)
 
 
 async def test_normalize_notice_enriches_with_real_metadata(db_session, monkeypatch):

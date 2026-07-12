@@ -141,7 +141,7 @@ async def normalize_notice(
     )
     validation_result = validate_normalized_notice(normalized, source_text=raw_text)
 
-    await update_notice_normalization(
+    saved = await update_notice_normalization(
         session,
         notice_id,
         normalized_json=normalized.model_dump(mode="json"),
@@ -150,6 +150,18 @@ async def normalize_notice(
         normalized_at=now,
     )
     await session.commit()
+
+    if not saved:
+        # LLM 호출(길면 수십 초)이 도는 동안 "기업마당 우선 정책"으로 이
+        # 공고 자체가 삭제됐을 수 있다 — 실제로 재현함(2026-07-12): 다른
+        # 트랜잭션이 delete_notice를 호출하면 update_notice_normalization이
+        # 0행을 반영하는데, 여기서 확인하지 않으면 이미 사라진 공고에
+        # 대해 COMPLETED를 반환하게 된다(notice_ocr.py의 동일한 문제와
+        # 같은 이유로 확인 필요).
+        raise NoticeNotFoundForNormalizationError(
+            "정규화는 끝났지만 공고가 더 이상 존재하지 않아 저장하지 못했습니다"
+            "(다른 출처의 중복 공고로 정리됐을 수 있습니다)."
+        )
 
     return NoticeNormalizationOutcome(
         normalized=normalized, validation_result=validation_result, normalized_at=now
