@@ -11,7 +11,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.company import CompanyProfile
 from app.repositories import company_repository
-from app.schemas.company import REGION_CODES
+from app.schemas.company import PRE_FOUNDER_STAGE, PRE_FOUNDER_TYPE, REGION_CODES
+
+
+class CompanyProfileInconsistentError(Exception):
+    """business_type과 company_stage의 조합이 모순될 때 발생.
+
+    예: business_type=예비창업자인데 company_stage=도약(또는 그 반대).
+    스키마의 model_validator는 한 요청 안에 두 필드가 함께 온 경우만 잡을 수
+    있어서, 부분 갱신으로 한 필드만 보내 기존 저장값과 모순되는 경우는 여기서
+    기존 프로필과 병합한 뒤 검증한다.
+    """
+
+
+def _validate_stage_consistency(
+    effective_business_type: str | None, effective_company_stage: str | None
+) -> None:
+    if effective_business_type is None or effective_company_stage is None:
+        return
+    is_pre_founder = effective_business_type == PRE_FOUNDER_TYPE
+    is_pre_founder_stage = effective_company_stage == PRE_FOUNDER_STAGE
+    if is_pre_founder != is_pre_founder_stage:
+        raise CompanyProfileInconsistentError(
+            "사업자유형과 기업 단계 조합이 올바르지 않습니다"
+            "(예비창업자는 기업 단계가 예비창업이어야 하고, 그 외에는 예비창업일 수 없습니다)"
+        )
 
 
 def _convert_to_column_fields(fields: dict) -> dict:
@@ -52,7 +76,21 @@ def is_profile_complete(profile: CompanyProfile | None) -> bool:
 async def save_my_profile(
     session: AsyncSession, user_id: int, fields: dict
 ) -> CompanyProfile:
-    """본인의 대표 기업 프로필을 부분 갱신/생성하고 커밋한다."""
+    """본인의 대표 기업 프로필을 부분 갱신/생성하고 커밋한다.
+
+    business_type/company_stage 중 하나만 이번 요청에 왔다면 기존 저장값과
+    합쳐서 정합성을 검증한다(둘 다 부분 갱신 대상이라 요청 본문만으로는
+    모순 여부를 판단할 수 없다).
+    """
+    existing = await company_repository.get_primary_by_user(session, user_id)
+    effective_business_type = fields.get(
+        "business_type", existing.business_type if existing else None
+    )
+    effective_company_stage = fields.get(
+        "company_stage", existing.company_stage if existing else None
+    )
+    _validate_stage_consistency(effective_business_type, effective_company_stage)
+
     profile = await company_repository.upsert_primary(
         session, user_id, _convert_to_column_fields(fields)
     )

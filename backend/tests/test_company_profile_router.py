@@ -7,6 +7,7 @@
 from datetime import date
 
 import pytest
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.api.company_profile import (
@@ -152,6 +153,50 @@ def test_update_rejects_unknown_enum_values():
 def test_update_rejects_future_founded_year():
     with pytest.raises(ValidationError):
         CompanyProfileUpdate(founded_year=date.today().year + 1)
+
+
+def test_update_rejects_inconsistent_type_and_stage_in_one_request():
+    """한 요청 안에서 예비창업자인데 기업 단계가 예비창업이 아니면 거부."""
+    with pytest.raises(ValidationError):
+        CompanyProfileUpdate(business_type="예비창업자", company_stage="도약")
+    with pytest.raises(ValidationError):
+        CompanyProfileUpdate(business_type="법인사업자", company_stage="예비창업")
+
+
+async def test_save_rejects_stage_conflicting_with_existing_business_type(db_session):
+    """부분 갱신으로 company_stage만 보내도 기존에 저장된 business_type과 모순되면 거부."""
+    user = await _make_user(db_session, kakao_id="company-conflict-stage")
+    await save_my_company_profile(
+        payload=CompanyProfileUpdate(business_type="예비창업자"),
+        current_user=user,
+        session=db_session,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await save_my_company_profile(
+            payload=CompanyProfileUpdate(company_stage="도약"),
+            current_user=user,
+            session=db_session,
+        )
+    assert exc_info.value.status_code == 400
+
+
+async def test_save_rejects_type_conflicting_with_existing_stage(db_session):
+    """부분 갱신으로 business_type만 보내도 기존에 저장된 company_stage와 모순되면 거부."""
+    user = await _make_user(db_session, kakao_id="company-conflict-type")
+    await save_my_company_profile(
+        payload=CompanyProfileUpdate(business_type="법인사업자", company_stage="도약"),
+        current_user=user,
+        session=db_session,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await save_my_company_profile(
+            payload=CompanyProfileUpdate(business_type="예비창업자"),
+            current_user=user,
+            session=db_session,
+        )
+    assert exc_info.value.status_code == 400
 
 
 async def test_profiles_are_isolated_per_user(db_session):
