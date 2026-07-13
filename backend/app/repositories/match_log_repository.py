@@ -8,13 +8,14 @@ business_plan.title을 함께 돌려준다.
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, null, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_plan import BusinessPlan
 from app.models.category import KgCategory
 from app.models.match import MatchLog, MatchResult
 from app.models.notice import Notice
+from app.models.notice_bookmark import NoticeBookmark
 from app.models.organization import Organization
 
 
@@ -81,6 +82,34 @@ async def get_owned_by_user(
     return (row[0], row[1])
 
 
+async def get_result_owned_by_user(
+    session: AsyncSession, match_result_id: int, user_id: int
+) -> MatchResult | None:
+    """유저 소유의 추천 결과 한 건을 반환한다(소유권은 match_log.user_id 경유).
+
+    없거나 남의 결과면 None. 북마크가 추천 카드에서 담을 때 이 결과로부터
+    notice_id·business_plan_id 맥락을 끌어온다.
+    """
+    result = await session.execute(
+        select(MatchResult)
+        .join(MatchLog, MatchLog.id == MatchResult.recommendation_run_id)
+        .where(MatchResult.id == match_result_id, MatchLog.user_id == user_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_business_plan_id_for_result(
+    session: AsyncSession, match_result_id: int
+) -> int | None:
+    """추천 결과가 어느 사업계획서로 매칭됐는지(match_log.business_plan_id) 반환한다."""
+    result = await session.execute(
+        select(MatchLog.business_plan_id)
+        .join(MatchResult, MatchResult.recommendation_run_id == MatchLog.id)
+        .where(MatchResult.id == match_result_id)
+    )
+    return result.scalar_one_or_none()
+
+
 async def list_normalized_notice_candidates(
     session: AsyncSession, *, limit: int = 200
 ) -> list[Notice]:
@@ -116,20 +145,51 @@ class MatchResultWithNotice:
     notice: Notice
     organization_name: str | None
     category_name: str | None
+    bookmark_id: int | None = None
+    """이 카드가 (해당 유저·이 실행의 사업계획서 기준으로) 담겨 있으면 그 북마크 id.
+    별표 채움/해제 표시에 쓴다. 담지 않았으면 None."""
 
 
 async def list_results_by_log(
-    session: AsyncSession, match_log_id: int
+    session: AsyncSession,
+    match_log_id: int,
+    *,
+    user_id: int | None = None,
+    business_plan_id: int | None = None,
 ) -> list[MatchResultWithNotice]:
-    """한 매칭 실행의 결과들을 적합도 내림차순으로, 공고 정보와 함께 반환한다."""
-    result = await session.execute(
-        select(MatchResult, Notice, Organization.name, KgCategory.name)
+    """한 매칭 실행의 결과들을 적합도 내림차순으로, 공고 정보와 함께 반환한다.
+
+    user_id 를 주면 각 결과 공고가 (그 유저, 이 실행의 사업계획서) 기준으로
+    이미 북마크됐는지도 함께 조인해 bookmark_id 로 돌려준다(별표 표시용).
+    담김 판정은 match_result_id 가 아니라 (notice, business_plan) 단위다 —
+    같은 계획서면 다른 실행에서 담았어도 담긴 것으로 본다.
+    """
+    columns = [MatchResult, Notice, Organization.name, KgCategory.name]
+    stmt = (
+        select(*columns, NoticeBookmark.id if user_id is not None else null())
         .join(Notice, Notice.id == MatchResult.notice_id)
         .join(Organization, Notice.organization_id == Organization.id, isouter=True)
         .join(KgCategory, Notice.category_id == KgCategory.id, isouter=True)
-        .where(MatchResult.recommendation_run_id == match_log_id)
-        .order_by(MatchResult.total_score.desc().nulls_last(), MatchResult.id.asc())
     )
+    if user_id is not None:
+        plan_pred = (
+            NoticeBookmark.business_plan_id.is_(None)
+            if business_plan_id is None
+            else NoticeBookmark.business_plan_id == business_plan_id
+        )
+        stmt = stmt.join(
+            NoticeBookmark,
+            and_(
+                NoticeBookmark.notice_id == MatchResult.notice_id,
+                NoticeBookmark.user_id == user_id,
+                plan_pred,
+            ),
+            isouter=True,
+        )
+    stmt = stmt.where(MatchResult.recommendation_run_id == match_log_id).order_by(
+        MatchResult.total_score.desc().nulls_last(), MatchResult.id.asc()
+    )
+    result = await session.execute(stmt)
     return [
         MatchResultWithNotice(
             result=row[0],
@@ -137,6 +197,7 @@ async def list_results_by_log(
             organization_name=row[2],
             # KgCategory.name은 Enum 컬럼이라 멤버로 올 수 있어 표시값으로 푼다.
             category_name=getattr(row[3], "value", row[3]),
+            bookmark_id=row[4],
         )
         for row in result.all()
     ]

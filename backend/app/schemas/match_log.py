@@ -53,4 +53,8 @@ class MatchResultResponse(BaseModel):
     weakness: str | None
     strategy_suggestion: str | None
     result_json: dict | None = None
+    is_bookmarked: bool = False
+    """이 공고가 (현재 유저·이 실행의 사업계획서 기준) 담겨 있는지. 별표 채움 표시용."""
+    bookmark_id: int | None = None
+    """담겨 있으면 그 북마크 id(별표 해제 DELETE 에 사용). 아니면 None."""
     created_at: datetime
