@@ -381,6 +381,23 @@ async def save_attachment(
     await session.execute(stmt)
 
 
+async def prune_stale_attachments(
+    session: AsyncSession, notice_id: int, current_urls: set[str]
+) -> None:
+    """이번에 다시 가져온 첨부파일 목록(current_urls)에 없는 예전 첨부파일을 지운다.
+
+    save_attachment는 upsert만 해서 URL이 바뀐(파일이 교체된) 경우 새
+    URL은 추가되지만 예전 URL은 그대로 남는다 — 재수집(recollect)의
+    "첨부파일 교체 반영" 문서화된 목적과 어긋난다. current_urls가
+    비어있으면(공고에 첨부파일이 아예 없어진 경우) 이 공고의 첨부파일을
+    전부 지운다.
+    """
+    stmt = delete(NoticeAttachment).where(NoticeAttachment.notice_id == notice_id)
+    if current_urls:
+        stmt = stmt.where(NoticeAttachment.file_url.notin_(current_urls))
+    await session.execute(stmt)
+
+
 async def set_attachment_parsed_text(
     session: AsyncSession, attachment_id: int, parsed_text: str
 ) -> bool:

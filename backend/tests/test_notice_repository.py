@@ -28,6 +28,7 @@ from app.repositories.notice_repository import (
     get_or_create_organization,
     get_or_create_source,
     list_notices,
+    prune_stale_attachments,
     replace_notice_region,
     replace_notice_target_type,
     save_attachment,
@@ -349,6 +350,39 @@ async def test_save_attachment_upsert_does_not_clobber_parsed_text(db_session):
     )
     assert reloaded.file_name == "new_name.pdf"
     assert reloaded.parsed_text == "OCR 결과 텍스트"
+
+
+async def test_prune_stale_attachments_removes_urls_not_in_current_set(db_session):
+    source = await _create_source(db_session, "첨부정리출처1")
+    notice_id = await _create_notice(db_session, source, external_id="prune-1")
+    await save_attachment(
+        db_session, notice_id, "old.pdf", "https://a.com/old.pdf", "PDF"
+    )
+    await save_attachment(
+        db_session, notice_id, "keep.pdf", "https://a.com/keep.pdf", "PDF"
+    )
+
+    # 재수집 결과 old.pdf는 더 이상 없고 keep.pdf만 남은 상황을 재현.
+    await prune_stale_attachments(db_session, notice_id, {"https://a.com/keep.pdf"})
+
+    attachments = await get_notice_attachments(db_session, notice_id)
+    assert [a.file_url for a in attachments] == ["https://a.com/keep.pdf"]
+
+
+async def test_prune_stale_attachments_removes_all_when_current_urls_empty(
+    db_session,
+):
+    source = await _create_source(db_session, "첨부정리출처2")
+    notice_id = await _create_notice(db_session, source, external_id="prune-2")
+    await save_attachment(
+        db_session, notice_id, "gone.pdf", "https://a.com/gone.pdf", "PDF"
+    )
+
+    # 재수집 결과 첨부파일이 아예 없어진 상황을 재현.
+    await prune_stale_attachments(db_session, notice_id, set())
+
+    attachments = await get_notice_attachments(db_session, notice_id)
+    assert attachments == []
 
 
 async def test_set_attachment_parsed_text_returns_true_when_row_updated(db_session):
