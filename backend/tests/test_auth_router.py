@@ -11,10 +11,11 @@ from fastapi import HTTPException, Response
 from fastapi.security import HTTPAuthorizationCredentials
 from starlette.requests import Request
 
-from app.api.auth import logout, me, refresh, withdraw
+from app.api.auth import dev_login_endpoint, logout, me, refresh, withdraw
 from app.api.deps import get_current_user
+from app.core.config import get_settings
 from app.models.user import User
-from app.schemas.auth import RefreshRequest
+from app.schemas.auth import DevLoginRequest, RefreshRequest
 from app.utils import kakao_client
 from app.utils.auth_cookies import (
     ACCESS_TOKEN_COOKIE_NAME,
@@ -199,6 +200,37 @@ async def test_withdrawn_user_token_rejected_403(db_session, monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await get_current_user(request, credentials=None, session=db_session)
     assert exc.value.status_code == 403
+
+
+# --- dev_login_endpoint: ENVIRONMENT=local 게이트 ------------------------------
+
+
+async def test_dev_login_endpoint_issues_tokens_when_local(db_session, monkeypatch):
+    monkeypatch.setattr(get_settings(), "ENVIRONMENT", "local")
+    user = await _make_active_user(db_session)
+
+    result = await dev_login_endpoint(
+        DevLoginRequest(user_id=user.id), session=db_session
+    )
+
+    assert result.access_token and result.refresh_token
+
+
+async def test_dev_login_endpoint_404_outside_local(db_session, monkeypatch):
+    monkeypatch.setattr(get_settings(), "ENVIRONMENT", "production")
+    user = await _make_active_user(db_session)
+
+    with pytest.raises(HTTPException) as exc:
+        await dev_login_endpoint(DevLoginRequest(user_id=user.id), session=db_session)
+    assert exc.value.status_code == 404
+
+
+async def test_dev_login_endpoint_404_unknown_user(db_session, monkeypatch):
+    monkeypatch.setattr(get_settings(), "ENVIRONMENT", "local")
+
+    with pytest.raises(HTTPException) as exc:
+        await dev_login_endpoint(DevLoginRequest(user_id=999_999), session=db_session)
+    assert exc.value.status_code == 404
 
 
 # --- refresh -----------------------------------------------------------------

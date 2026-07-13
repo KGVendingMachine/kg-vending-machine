@@ -16,6 +16,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.auth import (
     AccessTokenResponse,
+    DevLoginRequest,
     KakaoLoginRequest,
     RefreshRequest,
     TokenResponse,
@@ -25,6 +26,8 @@ from app.services import company_service
 from app.services.auth_service import (
     InactiveAccountError,
     RefreshTokenError,
+    UserNotFoundError,
+    dev_login,
     login_with_kakao,
     refresh_access_token,
     withdraw_account,
@@ -176,6 +179,36 @@ async def kakao_login(
     except InactiveAccountError as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)
+        ) from exc
+    return TokenResponse(**tokens)
+
+
+@router.post(
+    "/dev-login",
+    response_model=TokenResponse,
+    summary="[개발용] user_id로 토큰 발급",
+    description=(
+        "카카오 로그인 없이 DB에 이미 존재하는 user_id만으로 access/refresh "
+        "토큰을 발급한다. 로컬 개발 환경(ENVIRONMENT=local)에서만 동작하며, "
+        "그 외 환경에서는 404를 반환한다."
+    ),
+    include_in_schema=get_settings().ENVIRONMENT == "local",
+    responses={
+        404: {"description": "개발 환경이 아니거나 user_id에 해당하는 유저가 없음"},
+    },
+)
+async def dev_login_endpoint(
+    payload: DevLoginRequest,
+    session: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    """개발 환경 전용 로그인. 운영 환경에서는 항상 404."""
+    if get_settings().ENVIRONMENT != "local":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    try:
+        tokens = await dev_login(session, payload.user_id)
+    except UserNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
         ) from exc
     return TokenResponse(**tokens)
 
