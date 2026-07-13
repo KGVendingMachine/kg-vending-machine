@@ -6,6 +6,7 @@ import type { BusinessPlanSummary } from '../../api/businessPlan'
 import { ApiError } from '../../api/client'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { PATHS } from '../../routes/paths'
+import { ANALYSIS_STATUS_LABELS } from '../../constants/analysisStatus'
 import styles from './UploadPage.module.css'
 
 // 서버 설정(MAX_UPLOAD_SIZE_BYTES)과 일치. 큰 파일을 다 올린 뒤 413으로
@@ -14,12 +15,6 @@ const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
 
 function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
-}
-
-const ANALYSIS_STATUS_LABELS: Record<string, string> = {
-  processing: '분석 중',
-  completed: '분석 완료',
-  failed: '분석 실패',
 }
 
 function analysisStatusLabel(status: BusinessPlanSummary['analysis_status']): string {

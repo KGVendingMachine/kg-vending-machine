@@ -7,9 +7,8 @@ import { getMatchLog, formatMatchLogDate } from '../../api/matchLogs'
 import type { MatchLog } from '../../api/matchLogs'
 import { useMatchedNotices } from '../../hooks/useMatchedNotices'
 import { PATHS } from '../../routes/paths'
+import { DEADLINE_FILTERS } from '../../constants/resultsFilters'
 import styles from './ResultsPage.module.css'
-
-const DEADLINE_FILTERS = ['7일 이내', '30일 이내', '상시 모집']
 
 export function ResultsPage() {
   const navigate = useNavigate()

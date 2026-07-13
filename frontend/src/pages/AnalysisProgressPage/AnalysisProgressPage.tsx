@@ -15,13 +15,8 @@ import {
 } from '../../api/matchLogs'
 import type { MatchLog } from '../../api/matchLogs'
 import { ApiError } from '../../api/client'
+import { STEP_LABELS } from '../../constants/analysisSteps'
 import styles from './AnalysisProgressPage.module.css'
-
-// 분석(문서 읽기 → 내용 정리)이 끝나면 바로 결과로 가지 않고, 사용자가 "공고
-// 매칭 시작"을 눌러 매칭 실행(match_log)을 만들거나 이전 매칭 기록에서 지난
-// 결과로 이동한다. 매칭 스코어링은 백엔드 미구현 스텁이라 실행 즉시 완료된다.
-// 문구는 비개발자 사용자 기준 — "추출/정규화/스키마" 같은 용어를 쓰지 않는다.
-const STEP_LABELS = ['문서 읽기', '내용 정리', '공고 매칭', '결과 생성']
 
 const POLL_INTERVAL_MS = 2000
 // 일시적 네트워크 오류 1회로 실패 처리하지 않도록, 상태 조회(GET)가 연속으로
