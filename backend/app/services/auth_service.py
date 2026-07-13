@@ -42,6 +42,10 @@ class InactiveAccountError(Exception):
     """
 
 
+class UserNotFoundError(Exception):
+    """dev-login에서 존재하지 않는 user_id를 요청했을 때. 라우터에서 404로 변환한다."""
+
+
 ACTIVE_STATUS = "ACTIVE"
 WITHDRAWN_STATUS = "WITHDRAWN"
 BLOCKED_STATUS = "BLOCKED"
@@ -87,6 +91,26 @@ async def login_with_kakao(session: AsyncSession, code: str) -> dict[str, str | 
     if user.status == WITHDRAWN_STATUS:
         await reactivate(session, user)
     await session.commit()
+
+    return {
+        "access_token": create_access_token(user.id, role=user.role),
+        "refresh_token": create_refresh_token(user.id),
+        "token_type": "bearer",
+        "user_id": user.id,
+    }
+
+
+async def dev_login(session: AsyncSession, user_id: int) -> dict[str, str | int]:
+    """개발 환경 전용: 카카오 로그인 없이 기존 user_id로 바로 토큰 쌍을 발급한다.
+
+    DB에 이미 있는 유저만 대상으로 한다(신규 생성 없음) - 각 개발자가 카카오
+    로그인으로 한 번 만들어둔 계정을 role/status 그대로 재사용해 API를
+    테스트하려는 용도라, status 검사는 하지 않는다(예: WITHDRAWN 계정으로
+    로그인해 이후 요청이 403 나는지 확인하는 것도 이 엔드포인트의 용도).
+    """
+    user = await get_by_id(session, user_id)
+    if user is None:
+        raise UserNotFoundError(f"user_id={user_id}에 해당하는 유저가 없습니다")
 
     return {
         "access_token": create_access_token(user.id, role=user.role),

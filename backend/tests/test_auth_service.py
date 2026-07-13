@@ -17,6 +17,8 @@ from app.models.notice_source import NoticeSource
 from app.models.user import User
 from app.services.auth_service import (
     InactiveAccountError,
+    UserNotFoundError,
+    dev_login,
     login_with_kakao,
     withdraw_account,
 )
@@ -81,6 +83,23 @@ async def test_login_active_account_stays_active(db_session, monkeypatch):
 
     assert tokens["user_id"] == user.id
     assert tokens["access_token"] and tokens["refresh_token"]
+
+
+# --- dev_login: 카카오 없이 user_id로 바로 토큰 발급 ---------------------------
+
+
+async def test_dev_login_issues_tokens_for_existing_user(db_session):
+    user = await _make_user(db_session, status="ACTIVE")
+
+    tokens = await dev_login(db_session, user.id)
+
+    assert tokens["user_id"] == user.id
+    assert tokens["access_token"] and tokens["refresh_token"]
+
+
+async def test_dev_login_unknown_user_raises(db_session):
+    with pytest.raises(UserNotFoundError):
+        await dev_login(db_session, 999_999)
 
 
 # --- withdraw_account: 딸린 데이터 연쇄 삭제 -----------------------------------
