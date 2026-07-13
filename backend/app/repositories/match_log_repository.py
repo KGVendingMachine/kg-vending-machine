@@ -5,14 +5,17 @@
 business_plan.title을 함께 돌려준다.
 """
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_plan import BusinessPlan
+from app.models.category import KgCategory
 from app.models.match import MatchLog, MatchResult
 from app.models.notice import Notice
+from app.models.organization import Organization
 
 
 async def create(
@@ -105,13 +108,35 @@ async def replace_results(
         await session.flush()
 
 
+@dataclass(frozen=True)
+class MatchResultWithNotice:
+    """결과 페이지 카드 표시에 필요한 공고 정보를 결과와 함께 담는다."""
+
+    result: MatchResult
+    notice: Notice
+    organization_name: str | None
+    category_name: str | None
+
+
 async def list_results_by_log(
     session: AsyncSession, match_log_id: int
-) -> list[tuple[MatchResult, str | None]]:
+) -> list[MatchResultWithNotice]:
+    """한 매칭 실행의 결과들을 적합도 내림차순으로, 공고 정보와 함께 반환한다."""
     result = await session.execute(
-        select(MatchResult, Notice.title)
+        select(MatchResult, Notice, Organization.name, KgCategory.name)
         .join(Notice, Notice.id == MatchResult.notice_id)
+        .join(Organization, Notice.organization_id == Organization.id, isouter=True)
+        .join(KgCategory, Notice.category_id == KgCategory.id, isouter=True)
         .where(MatchResult.recommendation_run_id == match_log_id)
         .order_by(MatchResult.total_score.desc().nulls_last(), MatchResult.id.asc())
     )
-    return [(row[0], row[1]) for row in result.all()]
+    return [
+        MatchResultWithNotice(
+            result=row[0],
+            notice=row[1],
+            organization_name=row[2],
+            # KgCategory.name은 Enum 컬럼이라 멤버로 올 수 있어 표시값으로 푼다.
+            category_name=getattr(row[3], "value", row[3]),
+        )
+        for row in result.all()
+    ]

@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.company import CompanyProfile
-from app.models.match import MatchLog, MatchResult
+from app.models.match import MatchLog
 from app.models.user import User
 from app.repositories import match_log_repository
 from app.repositories.business_plan_repository import get_owned_by_user
@@ -12,6 +12,7 @@ from app.schemas.business_plan import JobStatus
 from app.schemas.match_log import (
     MatchLogCreateRequest,
     MatchLogResponse,
+    MatchResultNoticeInfo,
     MatchResultResponse,
 )
 from app.services.matching_service import run_matching
@@ -31,13 +32,25 @@ def _to_response(log: MatchLog, business_plan_title: str | None) -> MatchLogResp
 
 
 def _result_to_response(
-    result: MatchResult, notice_title: str | None
+    item: match_log_repository.MatchResultWithNotice,
 ) -> MatchResultResponse:
+    result = item.result
     return MatchResultResponse(
         id=result.id,
         match_log_id=result.recommendation_run_id,
         notice_id=result.notice_id,
-        notice_title=notice_title,
+        notice_title=item.notice.title,
+        notice=MatchResultNoticeInfo(
+            id=item.notice.id,
+            title=item.notice.title,
+            organization_name=item.organization_name,
+            category_name=item.category_name,
+            status=item.notice.status,
+            application_end_date=item.notice.application_end_date,
+            amount_label=item.notice.amount_label,
+            source_url=item.notice.source_url,
+            apply_url=item.notice.apply_url,
+        ),
         total_score=result.total_score,
         eligibility_score=result.eligibility_score,
         item_fit_score=result.item_fit_score,
@@ -162,4 +175,4 @@ async def list_match_results(
         )
 
     results = await match_log_repository.list_results_by_log(session, match_log_id)
-    return [_result_to_response(result, title) for result, title in results]
+    return [_result_to_response(item) for item in results]
