@@ -45,6 +45,17 @@ from app.services.notice_service import validate_normalized_notice
 
 logger = logging.getLogger(__name__)
 
+# OpenAI 쪽은 CLOVA(clova_ocr_client._clova_call_semaphore, 실측으로 5개 확인)와
+# 달리 계정 전체 동시 호출 한도가 실측된 적은 없다. 하지만 배치 트리거(공고
+# 최대 30건 동시) × 후보 전부 동시 정규화(옵션4)가 겹치면 실제 동시 OpenAI
+# 호출이 100건을 넘을 수 있고, 이 상태에서 사업계획서 정규화가 문서 길이와
+# 무관하게 30초 타임아웃을 3회 연속 채우고 실패하는 것을 실측함(2026-07-13,
+# business_plan_id=207) — 이후 시간이 지나 재시도하니 정상 동작해, 그 시점에
+# 동시 요청이 몰려 응답이 느려졌던 것으로 추정된다. CLOVA만큼 빡빡하게 5로
+# 제한할 근거는 없어 계정 티어에 여유를 두고 10으로 둔다(이슈 #99).
+_NOTICE_LLM_CONCURRENCY_LIMIT = 10
+_notice_llm_semaphore = asyncio.Semaphore(_NOTICE_LLM_CONCURRENCY_LIMIT)
+
 
 class NoticeNormalizationError(Exception):
     """공고 정규화 실패에 대한 기본 예외."""
@@ -128,7 +139,8 @@ async def _try_normalize_candidate(
         raw_text=raw_text,
     )
     try:
-        normalized = await normalize_notice_text(prompt_text)
+        async with _notice_llm_semaphore:
+            normalized = await normalize_notice_text(prompt_text)
     except Exception:
         logger.exception(
             "공고 정규화 후보 시도 실패 (notice_id=%s, file_name=%s)",

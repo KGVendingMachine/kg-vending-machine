@@ -26,6 +26,7 @@ from app.repositories.notice_repository import (
     get_notices_missing_category,
     get_or_create_organization,
     get_or_create_source,
+    prune_stale_attachments,
     replace_notice_region,
     replace_notice_target_type,
     save_attachment,
@@ -490,7 +491,8 @@ async def _process_bizinfo_item(
             await replace_notice_region(
                 session, notice_id, _parse_bizinfo_regions(item.get("hashtags"))
             )
-            for file_name, file_url in _parse_bizinfo_attachments(item):
+            bizinfo_attachments = _parse_bizinfo_attachments(item)
+            for file_name, file_url in bizinfo_attachments:
                 await save_attachment(
                     session,
                     notice_id,
@@ -498,6 +500,15 @@ async def _process_bizinfo_item(
                     file_url,
                     _file_type_from_name(file_name),
                 )
+            # 기업마당은 목록 API 응답에 첨부파일 전체 목록이 항상 실려오므로
+            # (수집 시점이든 recollect든 동일), 이번에 없는 URL은 원본에서
+            # 사라진(교체·삭제된) 첨부파일로 보고 정리한다 — save_attachment는
+            # upsert만 해서 URL이 바뀐 경우 예전 URL이 그대로 남는 문제가
+            # 있었다(recollect_bizinfo_notice의 "첨부파일 교체 반영" 목적과
+            # 어긋남).
+            await prune_stale_attachments(
+                session, notice_id, {url for _, url in bizinfo_attachments}
+            )
 
             # 기업마당·K-Startup에 같은 사업의 같은 회차가 각자 다른
             # external_id로 중복 등록되는 경우, 기업마당을 우선한다.
