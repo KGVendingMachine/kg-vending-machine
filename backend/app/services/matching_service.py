@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,6 +16,8 @@ from app.models.notice import Notice
 from app.repositories import match_log_repository
 from app.schemas.business_plan import NormalizedBusinessPlanSchema
 from app.schemas.notice_normalization import NormalizedNoticeSchema
+
+logger = logging.getLogger(__name__)
 
 _QUALITY_REQUIRED_FIELDS: tuple[str, ...] = (
     "basic.title",
@@ -340,14 +343,32 @@ async def run_matching(
     normalized_plan = _parse_business_plan(plan)
     candidates = await match_log_repository.list_normalized_notice_candidates(session)
 
+    # docs/matching-pipeline.md "로깅 요구사항" — 1차 필터링(품질 필터 +
+    # 자격요건 필터) 단계는 별도 엔드포인트 없이 이 루프 안에 통합돼 있어,
+    # 어느 기준에서 몇 건이 걸러졌는지는 로그로만 추적할 수 있다.
+    quality_excluded_ids: list[int] = []
+    quality_missing_field_counts: dict[str, int] = {}
+    parse_failed_ids: list[int] = []
+    eligibility_counts: dict[str, int] = {
+        "eligible": 0,
+        "needs_review": 0,
+        "likely_ineligible": 0,
+    }
+
     scored: list[ScoredNotice] = []
     for notice in candidates:
         quality_errors = _quality_errors(notice.normalized_json or {})
         if quality_errors:
+            quality_excluded_ids.append(notice.id)
+            for field_path in quality_errors:
+                quality_missing_field_counts[field_path] = (
+                    quality_missing_field_counts.get(field_path, 0) + 1
+                )
             continue
 
         normalized_notice = _parse_notice(notice)
         if normalized_notice is None:
+            parse_failed_ids.append(notice.id)
             continue
 
         result = _score_notice(
@@ -357,10 +378,53 @@ async def run_matching(
             normalized_notice=normalized_notice,
         )
         result.recommendation_run_id = log.id
+        if result.eligibility_status in eligibility_counts:
+            eligibility_counts[result.eligibility_status] += 1
         scored.append(ScoredNotice(notice=notice, result=result))
 
     scored.sort(key=lambda item: item.result.total_score or Decimal("0"), reverse=True)
     selected = [item.result for item in scored[:max_results]]
+
+    logger.info(
+        "1차 필터링 [match_log_id=%s] 품질 필터: 입력 %d건 중 통과 %d건, 제외 %d건",
+        log.id,
+        len(candidates),
+        len(candidates) - len(quality_excluded_ids),
+        len(quality_excluded_ids),
+    )
+    if quality_missing_field_counts:
+        logger.info(
+            "1차 필터링 [match_log_id=%s] 품질 필터 제외 사유별 건수: %s",
+            log.id,
+            quality_missing_field_counts,
+        )
+    if parse_failed_ids:
+        logger.info(
+            "1차 필터링 [match_log_id=%s] 정규화 스키마 파싱 실패로 추가 제외: "
+            "%d건 (notice_id=%s)",
+            log.id,
+            len(parse_failed_ids),
+            parse_failed_ids,
+        )
+    logger.info(
+        "1차 필터링 [match_log_id=%s] 자격요건 필터 분포 (통과 %d건 중): "
+        "eligible=%d, needs_review=%d, likely_ineligible=%d"
+        " (likely_ineligible은 제외 대신 총점 49점 캡)",
+        log.id,
+        len(scored),
+        eligibility_counts["eligible"],
+        eligibility_counts["needs_review"],
+        eligibility_counts["likely_ineligible"],
+    )
+    logger.info(
+        "1차 필터링 [match_log_id=%s] 완료: 필터 통과 %d건 중 상위 %d건 선정, "
+        "notice_id=%s",
+        log.id,
+        len(scored),
+        len(selected),
+        [item.notice_id for item in selected],
+    )
+
     await match_log_repository.replace_results(session, log.id, selected)
 
     log.run_status = "completed"

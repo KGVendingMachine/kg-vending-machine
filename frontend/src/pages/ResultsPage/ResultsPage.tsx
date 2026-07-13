@@ -1,39 +1,49 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { NoticeCard } from '../../components/NoticeCard/NoticeCard'
 import { ScoreGauge } from '../../components/ScoreGauge/ScoreGauge'
-import { getMatchLog, formatMatchLogDate } from '../../api/matchLogs'
+import { getMatchLog, formatMatchLogDate, listMatchLogs } from '../../api/matchLogs'
 import type { MatchLog } from '../../api/matchLogs'
+import { useMatchedNotices } from '../../hooks/useMatchedNotices'
 import { NOTICE_CATEGORIES } from '../../mock/categories'
-import { notices } from '../../mock/notices'
 import { resultDetailPath } from '../../routes/paths'
 import styles from './ResultsPage.module.css'
-
-const FIELD_FILTERS = NOTICE_CATEGORIES.map((category) => ({
-  label: category,
-  count: notices.filter((notice) => notice.category === category).length,
-  checked: category === notices[0].category,
-}))
-
-const DEADLINE_FILTERS = ['7일 이내', '30일 이내', '상시 모집']
 
 export function ResultsPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const [selectedId, setSelectedId] = useState(notices[0].id)
-  const selected = notices.find((notice) => notice.id === selectedId)
 
   // 어느 매칭 실행(match_log)의 결과인지. 분석 페이지에서 새 매칭을 돌리거나
-  // 이전 기록을 클릭하면 ?matchLogId= 쿼리로 넘어온다. 공고 리스트 자체는
-  // 아직 매칭 스코어링 미구현이라 목데이터를 그대로 쓰고, 상단에 어떤
-  // 실행인지만 표시한다 — match_result 조회가 생기면 이 id로 교체한다.
+  // 이전 기록을 클릭하면 ?matchLogId= 쿼리로 넘어온다. 쿼리가 없으면(직접
+  // 진입) 가장 최근 실행 기록을 대신 불러온다.
   const matchLogIdParam = searchParams.get('matchLogId')
-  const matchLogId = matchLogIdParam ? Number(matchLogIdParam) : null
+  const [matchLogId, setMatchLogId] = useState<number | null>(
+    matchLogIdParam ? Number(matchLogIdParam) : null,
+  )
+
+  useEffect(() => {
+    if (matchLogIdParam) {
+      setMatchLogId(Number(matchLogIdParam))
+      return
+    }
+    let cancelled = false
+    listMatchLogs(1, 0)
+      .then((logs) => {
+        if (!cancelled) setMatchLogId(logs[0]?.id ?? null)
+      })
+      .catch(() => {
+        if (!cancelled) setMatchLogId(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [matchLogIdParam])
+
   const [matchLog, setMatchLog] = useState<MatchLog | null>(null)
 
   useEffect(() => {
-    if (matchLogId == null || Number.isNaN(matchLogId)) {
+    if (matchLogId == null) {
       setMatchLog(null)
       return
     }
@@ -50,6 +60,23 @@ export function ResultsPage() {
       cancelled = true
     }
   }, [matchLogId])
+
+  const { matchedNotices, loading, error } = useMatchedNotices(matchLogId)
+
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  useEffect(() => {
+    setSelectedId(matchedNotices[0]?.id ?? null)
+  }, [matchedNotices])
+  const selected = matchedNotices.find((notice) => notice.id === selectedId)
+
+  const fieldFilters = useMemo(
+    () =>
+      NOTICE_CATEGORIES.map((category) => ({
+        label: category,
+        count: matchedNotices.filter((notice) => notice.category === category).length,
+      })),
+    [matchedNotices],
+  )
 
   return (
     <div className={styles.page}>
@@ -70,127 +97,142 @@ export function ResultsPage() {
 
           <div className={styles.filterGroupTitle}>분야</div>
           <div className={styles.filterOptions}>
-            {FIELD_FILTERS.map((filter) => (
+            {fieldFilters.map((filter) => (
               <label className={styles.filterLabel} key={filter.label}>
-                <span
-                  className={
-                    filter.checked
-                      ? `${styles.checkbox} ${styles.checked}`
-                      : styles.checkbox
-                  }
-                />
+                <span className={styles.checkbox} />
                 {filter.label} ({filter.count})
               </label>
             ))}
           </div>
-
-          <div className={styles.filterGroupTitle}>마감</div>
-          <div className={styles.filterOptions}>
-            {DEADLINE_FILTERS.map((label) => (
-              <label className={styles.filterLabel} key={label}>
-                <span className={styles.checkbox} />
-                {label}
-              </label>
-            ))}
-          </div>
-
-          <div className={styles.filterGroupTitle}>지원규모</div>
-          <div className={styles.rangeTrack}>
-            <div className={styles.rangeFill} />
-          </div>
-          <div className={styles.rangeLabel}>~5천만원 · 5천만~3억</div>
         </aside>
 
         <div className={styles.list}>
           <div className={styles.listHeader}>
             <div className={styles.listCount}>
-              맞춤 공고 <span>{notices.length}</span>건
+              맞춤 공고 <span>{matchedNotices.length}</span>건
             </div>
             <div className={styles.sortLabel}>적합도순 ▾</div>
           </div>
 
-          {notices.map((notice) => (
-            <NoticeCard
-              key={notice.id}
-              notice={notice}
-              selected={notice.id === selectedId}
-              onClick={() => setSelectedId(notice.id)}
-            />
-          ))}
-          <div className={styles.moreLink}>+ 20건 더보기</div>
+          {loading ? (
+            <div className={styles.emptyDetail}>매칭 결과를 불러오는 중이에요…</div>
+          ) : error ? (
+            <div className={styles.emptyDetail}>
+              매칭 결과를 불러오지 못했어요. 잠시 후 다시 시도해주세요.
+            </div>
+          ) : matchedNotices.length === 0 ? (
+            <div className={styles.emptyDetail}>
+              아직 매칭 결과가 없어요. 사업계획서를 분석해 공고 매칭을 실행해주세요.
+            </div>
+          ) : (
+            matchedNotices.map((notice) => (
+              <NoticeCard
+                key={notice.id}
+                notice={notice}
+                selected={notice.id === selectedId}
+                onClick={() => setSelectedId(notice.id)}
+              />
+            ))
+          )}
         </div>
 
         <div className={styles.detail}>
           {selected ? (
             <>
               <span className={styles.detailBadge}>
-                {selected.category} · {selected.deadlineLabel}
+                {selected.category ?? '분류 없음'} · {selected.deadlineLabel}
               </span>
               <div className={styles.detailTitle}>{selected.title}</div>
               <div className={styles.detailOrg}>{selected.org}</div>
 
-              <div className={styles.gaugeBanner}>
-                <ScoreGauge score={selected.score} size={72} />
-                <div className={styles.gaugeBannerText}>
-                  적합도{' '}
-                  {selected.scoreLevel === 'high' ? '매우 높음' : '보통'}
-                  <br />
-                  <span>
-                    {selected.score >= 90 ? '상위 3% 추천' : '적합도 순위 반영'}
-                  </span>
+              {selected.score != null ? (
+                <div className={styles.gaugeBanner}>
+                  <ScoreGauge score={selected.score} size={72} />
+                  <div className={styles.gaugeBannerText}>
+                    적합도{' '}
+                    {selected.scoreLevel === 'high'
+                      ? '매우 높음'
+                      : selected.scoreLevel === 'medium'
+                        ? '보통'
+                        : '낮음'}
+                    <br />
+                    <span>
+                      {selected.score >= 90 ? '상위권 추천' : '적합도 순위 반영'}
+                    </span>
+                  </div>
                 </div>
-              </div>
+              ) : null}
 
-              <div className={styles.detailSectionTitle}>왜 추천했나요?</div>
-              <div className={styles.reasons}>
-                {selected.reasons.map((reason) => (
-                  <div
-                    className={
-                      reason.tone === 'warn'
-                        ? `${styles.reasonItem} ${styles.warn}`
-                        : styles.reasonItem
-                    }
-                    key={reason.detail}
-                  >
-                    {reason.detail}
+              {selected.strengths.length > 0 ? (
+                <>
+                  <div className={styles.detailSectionTitle}>왜 추천했나요?</div>
+                  <div className={styles.reasons}>
+                    {selected.strengths.map((reason) => (
+                      <div className={styles.reasonItem} key={reason}>
+                        {reason}
+                      </div>
+                    ))}
+                    {selected.weaknesses.map((reason) => (
+                      <div className={`${styles.reasonItem} ${styles.warn}`} key={reason}>
+                        {reason}
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </>
+              ) : null}
 
-              <div className={styles.detailSectionTitle} style={{ marginTop: 22 }}>
-                점수 구성
-              </div>
-              <div className={styles.breakdown}>
-                {selected.scoreBreakdown.map((item) => (
-                  <div key={item.label}>
-                    <div className={styles.breakdownRow}>
-                      <span>{item.label}</span>
-                      <span>
-                        {item.score}/{item.max}
-                      </span>
-                    </div>
-                    <div className={styles.breakdownTrack}>
-                      <div
-                        className={
-                          item.status === 'warn'
-                            ? `${styles.breakdownFill} ${styles.warn}`
-                            : styles.breakdownFill
-                        }
-                        style={{ width: `${(item.score / item.max) * 100}%` }}
-                      />
-                    </div>
+              {selected.scoreBreakdown ? (
+                <>
+                  <div className={styles.detailSectionTitle} style={{ marginTop: 22 }}>
+                    점수 구성
                   </div>
-                ))}
-              </div>
+                  <div className={styles.breakdown}>
+                    {selected.scoreBreakdown.map((item) => (
+                      <div key={item.key}>
+                        <div className={styles.breakdownRow}>
+                          <span>{item.label}</span>
+                          <span>
+                            {item.score}/{item.max}
+                          </span>
+                        </div>
+                        <div className={styles.breakdownTrack}>
+                          <div
+                            className={
+                              item.score < 50
+                                ? `${styles.breakdownFill} ${styles.warn}`
+                                : styles.breakdownFill
+                            }
+                            style={{ width: `${(item.score / item.max) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : null}
 
               <div className={styles.detailActions}>
-                <button type="button" className={styles.disabledAction} disabled>
-                  원문 공고 보기 ↗
-                </button>
+                {selected.sourceUrl ? (
+                  <a
+                    className={styles.secondaryAction}
+                    href={selected.sourceUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    원문 공고 보기 ↗
+                  </a>
+                ) : (
+                  <button type="button" className={styles.disabledAction} disabled>
+                    원문 공고 보기 ↗
+                  </button>
+                )}
                 <button
                   type="button"
                   className={styles.secondaryAction}
-                  onClick={() => navigate(resultDetailPath(selected.id))}
+                  onClick={() =>
+                    matchLogId != null &&
+                    navigate(resultDetailPath(selected.id, matchLogId))
+                  }
                 >
                   상세 분석 보기
                 </button>

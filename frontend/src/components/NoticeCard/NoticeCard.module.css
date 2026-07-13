@@ -109,6 +109,10 @@
   color: var(--color-warning);
 }
 
+.scoreValue.low {
+  color: var(--color-danger);
+}
+
 .scoreLabel {
   font-size: 11px;
   color: var(--color-faint);
