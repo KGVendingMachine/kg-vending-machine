@@ -35,6 +35,11 @@ SYSTEM_PROMPT = f"""\
 - team.capabilities에는 대표자/팀원의 "전공", "경력", "역할", "보유 역량", "기술력",
   "창업 경험", "수상/인증/네트워크" 정보를 한 문장으로 요약하세요. 팀원 목록을 찾았는데
   capabilities가 비어 있으면 잘못된 출력입니다.
+- company.industry_candidates에는 지원사업 매칭에 사용할 사업 분야 후보를 1~3개 담으세요.
+  label은 원문 업종/아이템을 바탕으로 "자금", "R&D·기술", "수출·글로벌", "인력",
+  "시설·공간·보육", "멘토링·컨설팅", "교육·행사·네트워킹", "기타" 중 가까운 통합
+  카테고리나 실제 업종 키워드로 작성하고, confidence는 0~1 사이 숫자로 두세요.
+  근거가 부족하면 빈 배열로 두고 추측하지 마세요.
 - 출력 전 자체 점검: problem.background, solution.summary, funding.scale_up_strategy,
   team.capabilities가 원문에서 확인 가능한데 null이면 다시 작성하세요.
 

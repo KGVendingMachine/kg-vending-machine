@@ -79,6 +79,63 @@ def _overlap_score(left: set[str], right: set[str], *, default: float = 50.0) ->
     return min(100.0, 35.0 + (overlap / base) * 65.0)
 
 
+def _industry_candidate_tokens(plan: NormalizedBusinessPlanSchema) -> set[str]:
+    values: list[Any] = [plan.company.industry]
+    for candidate in plan.company.industry_candidates:
+        values.extend(
+            [
+                candidate.label,
+                candidate.reason,
+                candidate.source_keywords,
+            ]
+        )
+    return _tokens(*values)
+
+
+def _field_match_result(
+    plan: NormalizedBusinessPlanSchema,
+    normalized_notice: NormalizedNoticeSchema,
+) -> tuple[float, dict[str, Any]]:
+    candidate_tokens = _industry_candidate_tokens(plan)
+    notice_tokens = _tokens(
+        normalized_notice.basic.category,
+        normalized_notice.support.support_type,
+        normalized_notice.support.support_content,
+        normalized_notice.eligibility.target_industries,
+        normalized_notice.matching.keywords,
+        normalized_notice.matching.matching_signals,
+    )
+    score = _overlap_score(candidate_tokens, notice_tokens)
+    matched_fields = sorted(candidate_tokens & notice_tokens)[:20]
+    has_candidates = bool(plan.company.industry_candidates)
+
+    if matched_fields:
+        status = "matched"
+        reason = "Business field candidates overlap with notice category, industries, or matching keywords."
+    elif has_candidates:
+        status = "needs_review"
+        reason = "Business field candidates did not clearly overlap with notice field signals."
+    else:
+        status = "fallback"
+        reason = "No structured field candidates were available; used company.industry and plan text signals."
+
+    return score, {
+        "status": status,
+        "score": round(score, 2),
+        "matched_fields": matched_fields,
+        "industry_candidates": [
+            {
+                "label": candidate.label,
+                "confidence": candidate.confidence,
+                "reason": candidate.reason,
+                "source_keywords": candidate.source_keywords,
+            }
+            for candidate in plan.company.industry_candidates
+        ],
+        "reason": reason,
+    }
+
+
 def _contains_any(text: str | None, candidates: list[str]) -> bool:
     if not text:
         return False
@@ -218,7 +275,9 @@ def _score_notice(
     eligibility_score, eligibility_status, cautions = _eligibility_score(
         profile, normalized_notice
     )
-    item_fit_score = _overlap_score(plan_item_tokens, notice_item_tokens)
+    field_match_score, field_match = _field_match_result(plan, normalized_notice)
+    base_item_fit_score = _overlap_score(plan_item_tokens, notice_item_tokens)
+    item_fit_score = (base_item_fit_score * 0.70) + (field_match_score * 0.30)
     business_fit_score = _overlap_score(plan_item_tokens, notice_matching_tokens)
     growth_score = _overlap_score(plan_growth_tokens, notice_matching_tokens)
     bonus_score = _overlap_score(
@@ -248,15 +307,29 @@ def _score_notice(
 
     result_json = {
         "notice_quality": {"status": "passed", "missing_fields": []},
+        "field_match": field_match,
         "score_breakdown": {
             "eligibility": round(eligibility_score, 2),
             "item_fit": round(item_fit_score, 2),
+            "item_fit_base": round(base_item_fit_score, 2),
+            "field_match": round(field_match_score, 2),
             "business_fit": round(business_fit_score, 2),
             "growth": round(growth_score, 2),
             "bonus": round(bonus_score, 2),
         },
         "matched_keywords": sorted(plan_item_tokens & notice_item_tokens)[:20],
+        "match_reasons": strengths,
+        "eligibility_check": {
+            "status": eligibility_status,
+            "score": round(eligibility_score, 2),
+            "cautions": cautions,
+            "target_regions": normalized_notice.eligibility.target_regions,
+            "target_company_size": normalized_notice.eligibility.target_company_size,
+            "target_business_stage": normalized_notice.eligibility.target_business_stage,
+            "target_industries": normalized_notice.eligibility.target_industries,
+        },
         "cautions": cautions + normalized_notice.matching.caution_points[:3],
+        "suggested_actions": [strategy] if strategy else [],
     }
 
     return MatchResult(
