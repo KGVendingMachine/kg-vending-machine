@@ -34,6 +34,36 @@
   flex-direction: column;
 }
 
+.group {
+  margin-top: 28px;
+}
+
+.groupHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.groupTitle {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.groupCount {
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.staleBadge {
+  font-size: 12px;
+  font-weight: 600;
+  color: #b45309;
+  background: #fef3c7;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
 .empty {
   border: 1px dashed var(--color-border-strong);
   border-radius: 8px;

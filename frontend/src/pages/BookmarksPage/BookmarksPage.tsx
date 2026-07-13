@@ -102,30 +102,14 @@ export function BookmarksPage() {
           <div className={styles.empty}>불러오는 중이에요…</div>
         ) : bookmarks.length > 0 ? (
           groups.map((group) => (
-            <section key={group.key} style={{ marginTop: 28 }}>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  marginBottom: 12,
-                }}
-              >
-                <span style={{ fontWeight: 700, fontSize: 15 }}>{group.title}</span>
-                <span style={{ color: '#888', fontSize: 13 }}>
-                  {group.items.length}건
-                </span>
+            <section key={group.key} className={styles.group}>
+              <div className={styles.groupHeader}>
+                <span className={styles.groupTitle}>{group.title}</span>
+                <span className={styles.groupCount}>{group.items.length}건</span>
                 {group.isStale ? (
                   <span
+                    className={styles.staleBadge}
                     title="이 추천은 예전 사업계획서 기준이에요. 지금 계획서로 다시 매칭해 보세요."
-                    style={{
-                      fontSize: 12,
-                      fontWeight: 600,
-                      color: '#b45309',
-                      background: '#fef3c7',
-                      borderRadius: 999,
-                      padding: '2px 8px',
-                    }}
                   >
                     예전 사업계획서 기준
                   </span>

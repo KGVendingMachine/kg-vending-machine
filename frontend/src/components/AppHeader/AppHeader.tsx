@@ -34,6 +34,9 @@ export function AppHeader() {
       <NavLink to={PATHS.RESULTS} className={tabClassName}>
         추천 결과
       </NavLink>
+      <NavLink to={PATHS.BOOKMARKS} className={tabClassName}>
+        북마크
+      </NavLink>
       <NavLink to={PATHS.MYPAGE} className={styles.right}>
         <span className={styles.company}>{displayName ?? '내 정보'}</span>
         <span className={styles.avatar} />
