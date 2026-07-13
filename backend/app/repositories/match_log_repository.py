@@ -7,11 +7,12 @@ business_plan.title을 함께 돌려준다.
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_plan import BusinessPlan
-from app.models.match import MatchLog
+from app.models.match import MatchLog, MatchResult
+from app.models.notice import Notice
 
 
 async def create(
@@ -75,3 +76,42 @@ async def get_owned_by_user(
     if row is None:
         return None
     return (row[0], row[1])
+
+
+async def list_normalized_notice_candidates(
+    session: AsyncSession, *, limit: int = 200
+) -> list[Notice]:
+    result = await session.execute(
+        select(Notice)
+        .where(
+            Notice.normalized_json.is_not(None),
+            Notice.normalization_status == "completed",
+            Notice.is_actionable.is_not(False),
+        )
+        .order_by(Notice.application_end_date.asc().nulls_last(), Notice.id.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def replace_results(
+    session: AsyncSession, match_log_id: int, results: list[MatchResult]
+) -> None:
+    await session.execute(
+        delete(MatchResult).where(MatchResult.recommendation_run_id == match_log_id)
+    )
+    if results:
+        session.add_all(results)
+        await session.flush()
+
+
+async def list_results_by_log(
+    session: AsyncSession, match_log_id: int
+) -> list[tuple[MatchResult, str | None]]:
+    result = await session.execute(
+        select(MatchResult, Notice.title)
+        .join(Notice, Notice.id == MatchResult.notice_id)
+        .where(MatchResult.recommendation_run_id == match_log_id)
+        .order_by(MatchResult.total_score.desc().nulls_last(), MatchResult.id.asc())
+    )
+    return [(row[0], row[1]) for row in result.all()]
