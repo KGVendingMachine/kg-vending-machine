@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     KAKAO_AUTHORIZE_URL: str = "https://kauth.kakao.com/oauth/authorize"
     KAKAO_TOKEN_URL: str = "https://kauth.kakao.com/oauth/token"
     KAKAO_USER_INFO_URL: str = "https://kapi.kakao.com/v2/user/me"
+    KAKAO_UNLINK_URL: str = "https://kapi.kakao.com/v1/user/unlink"
+    KAKAO_ADMIN_KEY: str = ""
+    """카카오 개발자 콘솔의 Admin 키. 회원탈퇴 시 연결 끊기(unlink)에 쓴다.
+    비어 있으면 unlink를 건너뛴다(로컬 개발용)."""
     KAKAO_REQUEST_TIMEOUT_SECONDS: int = 10
 
     # JWT (자체 발급 토큰)

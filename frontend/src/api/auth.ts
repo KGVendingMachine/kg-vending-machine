@@ -20,3 +20,8 @@ export function getMe(): Promise<AuthUser> {
 export function logout(): Promise<void> {
   return apiFetch<void>('/api/auth/logout', { method: 'POST' })
 }
+
+/** 회원탈퇴. 카카오 연결 해제, 딸린 데이터 삭제, 계정 익명화를 서버가 한 번에 처리한다. */
+export function withdrawAccount(): Promise<void> {
+  return apiFetch<void>('/api/auth/me', { method: 'DELETE' })
+}

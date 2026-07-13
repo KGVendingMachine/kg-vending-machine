@@ -27,6 +27,7 @@ from app.services.auth_service import (
     RefreshTokenError,
     login_with_kakao,
     refresh_access_token,
+    withdraw_account,
 )
 from app.utils.auth_cookies import (
     REFRESH_TOKEN_COOKIE_NAME,
@@ -237,6 +238,39 @@ async def refresh(
 )
 async def logout() -> Response:
     """인증 쿠키를 삭제한다."""
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    clear_auth_cookies(response)
+    return response
+
+
+@router.delete(
+    "/me",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="회원탈퇴",
+    description=(
+        "카카오 연결 끊기(unlink) 후 탈퇴 처리한다: 기업 프로필/사업계획서/"
+        "매칭 기록 등 딸린 데이터는 전부 삭제하고, 계정(user)은 status를 "
+        "WITHDRAWN으로 바꾸고 개인정보(email/name/nickname)를 익명화한다. "
+        "kakao_id는 남겨 같은 카카오 계정으로 다시 로그인하면 재가입 "
+        "처리되지만(이전 데이터는 복구되지 않음), 인증 쿠키도 함께 삭제한다."
+    ),
+    responses={
+        401: {"description": "인증되지 않음"},
+        403: {"description": "비활성화된 계정"},
+        502: {"description": "카카오 연결 끊기 실패 (탈퇴 미처리, 재시도 가능)"},
+    },
+)
+async def withdraw(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Response:
+    """현재 로그인한 유저를 탈퇴 처리하고 인증 쿠키를 삭제한다."""
+    try:
+        await withdraw_account(session, current_user)
+    except KakaoAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     clear_auth_cookies(response)
     return response
