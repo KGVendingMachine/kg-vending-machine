@@ -727,6 +727,25 @@ async def get_notice_attachment(
     return result.scalar_one_or_none()
 
 
+async def get_notice_ids_pending_normalization(
+    session: AsyncSession, limit: int
+) -> list[int]:
+    """아직 정규화를 시도한 적 없는(normalization_status가 NULL인) 공고
+    id를 마감일이 임박한 순으로 최대 limit개 가져온다 (스케줄러 배치용).
+
+    get_collection_stats의 by_normalization_status 집계와 같은 기준
+    (NULL = "not_started")이지만, 여긴 건수가 아니라 실제 id 목록이
+    필요해 별도 함수로 둔다.
+    """
+    result = await session.execute(
+        select(Notice.id)
+        .where(Notice.normalization_status.is_(None))
+        .order_by(Notice.application_end_date.asc().nulls_last(), Notice.id.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
 async def get_collection_stats(session: AsyncSession) -> dict:
     """수집 현황을 출처/카테고리/상태별 건수 + OCR 대기 건수로 집계한다.
 

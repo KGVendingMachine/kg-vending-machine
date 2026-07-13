@@ -23,6 +23,7 @@ from app.repositories.notice_repository import (
     get_notice_detail,
     get_notice_regions,
     get_notice_regions_by_ids,
+    get_notice_ids_pending_normalization,
     get_notice_target_types,
     get_notices_missing_category,
     get_or_create_organization,
@@ -190,6 +191,58 @@ async def test_get_notices_missing_category_scoped_to_given_raw_model(db_session
     rows = await get_notices_missing_category(db_session, BizinfoRaw)
 
     assert ks_notice_id not in {notice_id for notice_id, _ in rows}
+
+
+# ---------------------------------------------------------------------------
+# get_notice_ids_pending_normalization (스케줄러용, 이슈 #102)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_notice_ids_pending_normalization_excludes_already_attempted(
+    db_session,
+):
+    """normalization_status가 있는(완료든 실패든) 공고는 대상에서 빠지고,
+    아직 시도한 적 없는(NULL) 공고만 반환돼야 한다."""
+    source = await _create_source(db_session, "정규화대기출처")
+    pending_id = await _create_notice(db_session, source, external_id="pending-1")
+    completed_id = await _create_notice(db_session, source, external_id="completed-1")
+    failed_id = await _create_notice(db_session, source, external_id="failed-1")
+
+    await update_notice_normalization(
+        db_session,
+        completed_id,
+        normalized_json={"basic": {}},
+        normalization_status="completed",
+        normalization_error=None,
+        normalized_at=datetime(2026, 1, 1),
+    )
+    await update_notice_normalization(
+        db_session,
+        failed_id,
+        normalized_json=None,
+        normalization_status="failed",
+        normalization_error="테스트 실패",
+        normalized_at=datetime(2026, 1, 1),
+    )
+
+    # limit을 넉넉히 크게 준다 — 실제 DB(SAVEPOINT 밖의 기존 데이터)에도
+    # normalization_status가 NULL인 공고가 많아서, limit이 작으면 정렬
+    # 순위에 밀려 방금 만든 테스트 행이 결과에 아예 안 잡힐 수 있다.
+    result = await get_notice_ids_pending_normalization(db_session, limit=100_000)
+
+    assert pending_id in result
+    assert completed_id not in result
+    assert failed_id not in result
+
+
+async def test_get_notice_ids_pending_normalization_respects_limit(db_session):
+    source = await _create_source(db_session, "정규화대기제한출처")
+    for i in range(3):
+        await _create_notice(db_session, source, external_id=f"limit-{i}")
+
+    result = await get_notice_ids_pending_normalization(db_session, limit=2)
+
+    assert len(result) == 2
 
 
 # ---------------------------------------------------------------------------
