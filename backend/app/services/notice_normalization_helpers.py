@@ -11,7 +11,20 @@ notice_normalization.py(실제 DB 공고 기준) 둘 다 같은 보완 규칙을
 import re
 from datetime import date
 
+from app.schemas.business_plan import ValidationResult
 from app.schemas.notice_normalization import NormalizedNoticeSchema
+
+
+def score_validation_result(result: ValidationResult) -> tuple[int, int]:
+    """검증 결과를 비교용 튜플로 바꾼다 — 작을수록(min()으로 골랐을 때) 더 좋은 결과.
+
+    누락 필드 + 오류 개수 합이 우선 기준이고, 동점이면 is_valid=True인 쪽을
+    우선한다(0이 False보다 작으므로 0을 먼저 두기 위해 is_valid가 True면 0,
+    False면 1). 여러 첨부파일 후보를 전부 정규화해보고 가장 완성도 높은
+    결과를 채택할 때 쓴다(notice_normalization_service.normalize_notice 참고).
+    """
+    missing_and_errors = len(result.missing_required_fields) + len(result.errors)
+    return (missing_and_errors, 0 if result.is_valid else 1)
 
 
 def build_notice_prompt_text(

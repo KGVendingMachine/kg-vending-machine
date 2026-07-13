@@ -2,8 +2,12 @@
 tests/test_notice_normalization_service.py
 
 services/notice_normalization_service.py 테스트. conftest.db_session(SAVEPOINT
-롤백) 위에서 실제 DB로 검증하고, 실제 OpenAI 호출(normalize_notice_text)만
-monkeypatch로 대체한다.
+롤백) 위에서 실제 DB로 검증하고, 실제 OpenAI 호출(normalize_notice_text)과
+실제 다운로드(download_and_extract_attachment)만 monkeypatch로 대체한다.
+
+PDF/HWP/HWPX 첨부파일 후보 전부(+summary_text)를 각각 정규화해보고 검증
+결과가 가장 좋은 것을 채택하는 방식(2026-07-13, 옵션4)이라, 대부분의
+테스트가 "후보 여러 개 중 뭐가 채택되는지"를 확인하는 형태다.
 """
 
 import pytest
@@ -18,7 +22,14 @@ from app.repositories.notice_repository import (
     set_attachment_parsed_text,
     upsert_notice,
 )
-from app.schemas.notice_normalization import NoticeBasicInfo, NormalizedNoticeSchema
+from app.schemas.notice_normalization import (
+    NoticeApplicationInfo,
+    NoticeBasicInfo,
+    NoticeEligibilityInfo,
+    NoticeMatchingInfo,
+    NoticeSupportInfo,
+    NormalizedNoticeSchema,
+)
 from app.services import notice_normalization_service as svc
 from app.services.notice_normalization_service import (
     NoSourceTextForNormalizationError,
@@ -53,46 +64,141 @@ async def _create_notice(db_session, source: NoticeSource, **overrides) -> int:
     return await upsert_notice(db_session, **defaults)
 
 
-def _complete_normalized() -> NormalizedNoticeSchema:
-    return NormalizedNoticeSchema(basic=NoticeBasicInfo(title="LLM이 뽑은 제목"))
+def _empty_normalized() -> NormalizedNoticeSchema:
+    return NormalizedNoticeSchema()
 
 
-async def test_normalize_notice_uses_ocr_text_when_available(db_session, monkeypatch):
+def _complete_normalized(title: str = "완전한 결과") -> NormalizedNoticeSchema:
+    """REQUIRED_FIELDS(app/services/notice_service.py)를 전부 채운, 검증을
+    통과하는 결과 — "품질 좋은 후보"를 흉내낼 때 쓴다."""
+    return NormalizedNoticeSchema(
+        basic=NoticeBasicInfo(title=title),
+        application=NoticeApplicationInfo(method="이메일 제출"),
+        support=NoticeSupportInfo(
+            summary="지원 요약",
+            support_type=["자금지원"],
+            support_content=["지원 내용"],
+        ),
+        eligibility=NoticeEligibilityInfo(target_company_size=["중소기업"]),
+        matching=NoticeMatchingInfo(
+            keywords=["키워드"],
+            suitable_company_profile="적합 프로필",
+            matching_signals=["신호"],
+        ),
+    )
+
+
+async def test_normalize_notice_picks_better_candidate_among_multiple(
+    db_session, monkeypatch
+):
+    """첨부파일 후보가 2개면 둘 다 정규화해보고, 검증 결과(필수 필드 충족)가
+    더 좋은 쪽이 채택돼야 한다."""
     source = await _create_source(db_session, "정규화테스트출처1")
     notice_id = await _create_notice(
         db_session, source, external_id="norm-1", summary_text="요약문"
     )
     await save_attachment(
-        db_session, notice_id, "공고문.pdf", "https://example.com/a.pdf", "PDF"
+        db_session, notice_id, "부실한원문.pdf", "https://example.com/a.pdf", "PDF"
     )
-    attachment_id = (await get_notice_attachments(db_session, notice_id))[0].id
-    await set_attachment_parsed_text(db_session, attachment_id, "OCR로 뽑은 원문")
-
-    seen_prompts: list[str] = []
+    await save_attachment(
+        db_session, notice_id, "좋은원문.pdf", "https://example.com/b.pdf", "PDF"
+    )
+    attachments = await get_notice_attachments(db_session, notice_id)
+    for attachment in attachments:
+        if attachment.file_name == "부실한원문.pdf":
+            await set_attachment_parsed_text(
+                db_session, attachment.id, "부실한 OCR 원문"
+            )
+        else:
+            await set_attachment_parsed_text(db_session, attachment.id, "좋은 OCR 원문")
 
     async def fake_normalize(prompt_text: str) -> NormalizedNoticeSchema:
-        seen_prompts.append(prompt_text)
+        if "좋은 OCR 원문" in prompt_text:
+            return _complete_normalized(title="좋은 후보 결과")
+        return _empty_normalized()
+
+    monkeypatch.setattr(svc, "normalize_notice_text", fake_normalize)
+
+    outcome = await normalize_notice(db_session, notice_id)
+
+    assert outcome.normalized.basic.title == "좋은 후보 결과"
+    assert outcome.validation_result.is_valid is True
+
+    notice = await db_session.get(Notice, notice_id)
+    assert notice.normalization_status == "completed"
+    assert notice.normalized_json["basic"]["title"] == "좋은 후보 결과"
+
+
+async def test_normalize_notice_reuses_already_parsed_text_without_redownload(
+    db_session, monkeypatch
+):
+    """이미 parsed_text가 있는 첨부파일은 다시 다운로드하지 않아야 한다
+    (성공 캐싱 규칙)."""
+    source = await _create_source(db_session, "정규화테스트출처2")
+    notice_id = await _create_notice(db_session, source, external_id="norm-2")
+    await save_attachment(
+        db_session, notice_id, "이미처리됨.pdf", "https://example.com/a.pdf", "PDF"
+    )
+    attachment_id = (await get_notice_attachments(db_session, notice_id))[0].id
+    await set_attachment_parsed_text(db_session, attachment_id, "이미 OCR된 원문")
+
+    async def fail_if_called(source_name, attachment):
+        raise AssertionError("이미 parsed_text가 있는데 다시 다운로드하면 안 됨")
+
+    monkeypatch.setattr(svc, "download_and_extract_attachment", fail_if_called)
+
+    async def fake_normalize(prompt_text: str) -> NormalizedNoticeSchema:
+        assert "이미 OCR된 원문" in prompt_text
         return _complete_normalized()
 
     monkeypatch.setattr(svc, "normalize_notice_text", fake_normalize)
 
     outcome = await normalize_notice(db_session, notice_id)
 
-    assert "OCR로 뽑은 원문" in seen_prompts[0]
-    assert "요약문" not in seen_prompts[0]  # OCR 텍스트가 있으면 summary_text는 안 씀
-    assert outcome.normalized.basic.title == "LLM이 뽑은 제목"
-
-    notice = await db_session.get(Notice, notice_id)
-    assert notice.normalization_status == "completed"
-    assert notice.normalized_json is not None
+    assert outcome.normalized.basic.title == "완전한 결과"
 
 
-async def test_normalize_notice_falls_back_to_summary_text_when_no_ocr(
+async def test_normalize_notice_skips_candidate_whose_download_fails(
     db_session, monkeypatch
 ):
-    source = await _create_source(db_session, "정규화테스트출처2")
+    """후보 하나가 다운로드에 실패해도 나머지 후보로 정상 완료돼야 한다."""
+    source = await _create_source(db_session, "정규화테스트출처3")
+    notice_id = await _create_notice(db_session, source, external_id="norm-3")
+    await save_attachment(
+        db_session, notice_id, "실패할파일.pdf", "https://example.com/broken.pdf", "PDF"
+    )
+    await save_attachment(
+        db_session, notice_id, "성공할파일.pdf", "https://example.com/ok.pdf", "PDF"
+    )
+
+    async def fake_download(source_name, attachment):
+        if attachment.file_name == "실패할파일.pdf":
+            raise RuntimeError("다운로드 실패")
+        return "다운로드 성공한 원문"
+
+    monkeypatch.setattr(svc, "download_and_extract_attachment", fake_download)
+
+    async def fake_normalize(prompt_text: str) -> NormalizedNoticeSchema:
+        return _complete_normalized()
+
+    monkeypatch.setattr(svc, "normalize_notice_text", fake_normalize)
+
+    outcome = await normalize_notice(db_session, notice_id)
+
+    assert outcome.normalized.basic.title == "완전한 결과"
+
+    attachments = await get_notice_attachments(db_session, notice_id)
+    by_name = {a.file_name: a for a in attachments}
+    assert by_name["실패할파일.pdf"].parsed_text is None  # 실패한 건 저장 안 됨
+    assert by_name["성공할파일.pdf"].parsed_text == "다운로드 성공한 원문"
+
+
+async def test_normalize_notice_falls_back_to_summary_text_when_no_attachments(
+    db_session, monkeypatch
+):
+    source = await _create_source(db_session, "정규화테스트출처4")
     notice_id = await _create_notice(
-        db_session, source, external_id="norm-2", summary_text="요약문만 있음"
+        db_session, source, external_id="norm-4", summary_text="요약문만 있음"
     )
 
     seen_prompts: list[str] = []
@@ -114,9 +220,9 @@ async def test_normalize_notice_raises_not_found_for_unknown_id(db_session):
 
 
 async def test_normalize_notice_raises_no_source_text_error(db_session):
-    source = await _create_source(db_session, "정규화테스트출처3")
+    source = await _create_source(db_session, "정규화테스트출처5")
     notice_id = await _create_notice(
-        db_session, source, external_id="norm-3", summary_text=None
+        db_session, source, external_id="norm-5", summary_text=None
     )
 
     with pytest.raises(NoSourceTextForNormalizationError):
@@ -128,12 +234,12 @@ async def test_normalize_notice_raises_no_source_text_error(db_session):
     assert notice.normalized_json is None
 
 
-async def test_normalize_notice_persists_failure_status_on_ai_error(
+async def test_normalize_notice_persists_failure_status_when_all_candidates_fail(
     db_session, monkeypatch
 ):
-    source = await _create_source(db_session, "정규화테스트출처4")
+    source = await _create_source(db_session, "정규화테스트출처6")
     notice_id = await _create_notice(
-        db_session, source, external_id="norm-4", summary_text="요약문"
+        db_session, source, external_id="norm-6", summary_text="요약문"
     )
 
     async def fake_normalize_failing(prompt_text: str) -> NormalizedNoticeSchema:
@@ -146,7 +252,7 @@ async def test_normalize_notice_persists_failure_status_on_ai_error(
 
     notice = await db_session.get(Notice, notice_id)
     assert notice.normalization_status == "failed"
-    assert notice.normalization_error == "LLM 실패"
+    assert "모두 시도했지만 전부 실패" in notice.normalization_error
     assert notice.normalized_json is None
 
 
@@ -158,9 +264,9 @@ async def test_normalize_notice_raises_not_found_when_notice_deleted_during_llm_
     반영되는데, 이를 확인하지 않으면 이미 사라진 공고에 COMPLETED를
     반환하게 된다(notice_ocr.py의 동일한 문제와 같은 원인). 실제로 재현
     확인함(2026-07-13)."""
-    source = await _create_source(db_session, "정규화테스트출처6")
+    source = await _create_source(db_session, "정규화테스트출처7")
     notice_id = await _create_notice(
-        db_session, source, external_id="norm-6", summary_text="요약문"
+        db_session, source, external_id="norm-7", summary_text="요약문"
     )
 
     async def fake_normalize_with_concurrent_delete(
@@ -183,17 +289,17 @@ async def test_normalize_notice_raises_not_found_when_notice_deleted_during_llm_
 async def test_normalize_notice_enriches_with_real_metadata(db_session, monkeypatch):
     """LLM 결과에 빠진 title/category는 실제 공고 메타데이터로 채워져야 한다
     (notice_samples.py의 _enrich_from_sample_metadata와 같은 규칙)."""
-    source = await _create_source(db_session, "정규화테스트출처5")
+    source = await _create_source(db_session, "정규화테스트출처8")
     notice_id = await _create_notice(
         db_session,
         source,
-        external_id="norm-5",
+        external_id="norm-8",
         title="실제 공고 제목",
         summary_text="중소기업 대상 지원 사업입니다.",
     )
 
     async def fake_normalize_empty(prompt_text: str) -> NormalizedNoticeSchema:
-        return NormalizedNoticeSchema()  # title 등 전부 비어있는 결과
+        return _empty_normalized()
 
     monkeypatch.setattr(svc, "normalize_notice_text", fake_normalize_empty)
 

@@ -1,9 +1,20 @@
+import logging
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
 from app.api.router import api_router
 from app.core.config import get_settings
+
+# 앱 로거(app.*) 출력 설정. uvicorn은 자기 로거만 설정하므로 이게 없으면
+# 서비스 계층의 logger.info(...)가 전부 버려진다. env LOG_LEVEL=DEBUG로 낮추면
+# debug 로그까지 보인다.
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(levelname)s:     [%(name)s] %(message)s",
+)
 
 settings = get_settings()
 

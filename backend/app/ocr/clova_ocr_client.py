@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import io
+import logging
 import time
 import uuid
 from pathlib import Path
@@ -9,6 +10,8 @@ import httpx
 from pypdf import PdfReader, PdfWriter
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 _SUPPORTED_FORMATS = {
     ".pdf": "pdf",
@@ -121,9 +124,21 @@ async def call_clova_ocr_bytes(file_bytes: bytes, image_format: str, name: str) 
                 return "\n".join(page_texts)
             except (httpx.HTTPError, ValueError, RuntimeError) as exc:
                 last_error = exc
+                logger.warning(
+                    "CLOVA OCR 실패 (name=%s, attempt=%d/%d): %s",
+                    name,
+                    attempt,
+                    settings.CLOVA_OCR_MAX_RETRIES,
+                    exc,
+                )
                 if attempt < settings.CLOVA_OCR_MAX_RETRIES:
                     await asyncio.sleep(attempt)
 
+    logger.error(
+        "CLOVA OCR 요청이 %d회 모두 실패했습니다 (name=%s)",
+        settings.CLOVA_OCR_MAX_RETRIES,
+        name,
+    )
     raise RuntimeError(
         f"CLOVA OCR 요청이 {settings.CLOVA_OCR_MAX_RETRIES}회 모두 실패했습니다"
     ) from last_error
