@@ -15,7 +15,7 @@ from app.schemas.match_log import (
     MatchResultNoticeInfo,
     MatchResultResponse,
 )
-from app.services.matching_service import run_matching
+from app.services.matching_service import MatchingNotReadyError, run_matching
 
 router = APIRouter(prefix="/match-logs", tags=["match-logs"])
 
@@ -105,13 +105,23 @@ async def create_match_log(
         run_status=JobStatus.PROCESSING.value,
         query_json=plan.analysis_json,
     )
-    await run_matching(
-        session,
-        log=log,
-        plan=plan,
-        profile=profile,
-        max_results=payload.max_results,
-    )
+    try:
+        await run_matching(
+            session,
+            log=log,
+            plan=plan,
+            profile=profile,
+            max_results=payload.max_results,
+        )
+    except MatchingNotReadyError as exc:
+        # 실행 이력은 남기되(실패 원인 추적용) 빈 결과로 완료 처리하지 않는다.
+        log.run_status = JobStatus.FAILED.value
+        log.completed_at = None
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
     await session.commit()
     return _to_response(log, plan.title)
 
