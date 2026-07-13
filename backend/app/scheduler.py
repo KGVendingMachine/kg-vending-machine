@@ -7,8 +7,9 @@ APScheduler를 FastAPI 앱 안에 내장하는 방식(app/main.py의 lifespan에
 EC2 host crontab보다 git에 다 기록되는 이쪽이 관리하기 쉽다(2026-07-13
 결정, crontab -l로 기존에 아무것도 없는 것 확인함).
 
-흐름: 수집(기업마당 → K-Startup 순서 필수) → 아직 정규화를 시도한 적
-없는 공고를 정규화 배치로 트리거. 첨부파일 OCR은 별도 배치를 안 거친다
+흐름: 수집(기업마당 → K-Startup → 과학기술정보통신부, 앞 두 순서는 필수 —
+notice_collection_service.py 참고) → 아직 정규화를 시도한 적 없는 공고를
+정규화 배치로 트리거. 첨부파일 OCR은 별도 배치를 안 거친다
 — notice_normalization_service.normalize_notice(옵션4)가 후보마다
 parsed_text 없으면 자기가 알아서 다운로드+OCR까지 하므로, 정규화 전에
 OCR 배치를 따로 돌리는 건 중복 작업이다.
@@ -53,6 +54,7 @@ async def _run_collection(session: "AsyncSession") -> None:
     from app.services.notice_collection_service import (
         collect_all_bizinfo_notices,
         collect_all_kstartup_notices,
+        collect_all_msit_notices,
     )
 
     try:
@@ -78,6 +80,20 @@ async def _run_collection(session: "AsyncSession") -> None:
         )
     except Exception:
         logger.exception("스케줄러: K-Startup 수집 실패 — 정규화 단계는 계속 진행한다")
+
+    try:
+        # 기업마당/K-Startup의 "기업마당 우선" 중복 제거와 무관한 별도
+        # 소스(R&D 카테고리 고정, 이슈 #104)라 순서 제약은 없다.
+        msit_result = await collect_all_msit_notices(session)
+        logger.info(
+            "스케줄러: 과학기술정보통신부 수집 완료 (성공 %d건, 실패 %d건)",
+            msit_result.saved_count,
+            msit_result.failed_count,
+        )
+    except Exception:
+        logger.exception(
+            "스케줄러: 과학기술정보통신부 수집 실패 — 정규화 단계는 계속 진행한다"
+        )
 
 
 async def _run_normalization_batch(session: "AsyncSession") -> None:

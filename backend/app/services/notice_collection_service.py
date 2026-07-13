@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.crawler.bizinfo_client import fetch_bizinfo_notice_by_id, fetch_bizinfo_notices
 from app.crawler.kstartup_attachment_client import fetch_kstartup_attachments
 from app.crawler.kstartup_client import fetch_kstartup_notices
+from app.crawler.msit_client import fetch_msit_notices
+from app.models.category import CategoryName
 from app.models.raw import BizinfoRaw, KstartupRaw
 from app.repositories.notice_repository import (
     delete_notice,
@@ -16,6 +18,7 @@ from app.repositories.notice_repository import (
     find_notice_ids_by_source_title_and_dates,
     get_bizinfo_notices_with_raw,
     get_category_mapping,
+    get_kg_category_id,
     get_kstartup_notices_with_raw,
     get_max_bizinfo_registration_time,
     get_max_notice_external_id,
@@ -40,6 +43,7 @@ logger = logging.getLogger(__name__)
 
 BIZINFO_SOURCE_NAME = "기업마당"
 KSTARTUP_SOURCE_NAME = "K-Startup"
+MSIT_SOURCE_NAME = "과학기술정보통신부"
 
 
 class NoticeRecollectionError(Exception):
@@ -690,6 +694,184 @@ async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult
 
         if reached_known_items:
             logger.info("기업마당 직전 수집 시점(%s) 부근 도달, 조기 종료", stop_before)
+            break
+
+        page += 1
+
+    return collection_result
+
+
+# 과학기술정보통신부 사업공고 API(msit_client.py)는 신청기간 필드가 아예
+# 없는 게시판형 API라, 이미 마감·종료된 항목까지 실측으로 확인함(2026-07-13,
+# 이슈 #104) — "~선정결과 공고"처럼 이미 끝난 과제의 결과 발표가 신규
+# 모집 공고와 같은 목록에 섞여 온다. 날짜로 거를 방법이 없으니 제목
+# 키워드로 결과 발표성 게시물을 제외한다.
+_MSIT_RESULT_KEYWORDS = ("선정결과", "결과")
+
+
+def _is_msit_result_announcement(subject: str | None) -> bool:
+    if not subject:
+        return False
+    return any(keyword in subject for keyword in _MSIT_RESULT_KEYWORDS)
+
+
+def _parse_msit_date(value: str | None) -> date | None:
+    """ "2026-07-13" 형식의 게시일(pressDt)을 date로 변환한다."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        logger.warning(
+            "과학기술정보통신부 게시일 형식을 해석하지 못했습니다: %r", value
+        )
+        return None
+
+
+_MSIT_VIEW_URL_ID_PATTERN = re.compile(r"nttSeqNo=(\d+)")
+
+
+def _extract_msit_external_id(view_url: str | None) -> str | None:
+    """상세페이지 URL(viewUrl)의 nttSeqNo를 고유 id로 쓴다.
+
+    이 API 응답에는 별도 게시물 id 필드가 없다 — viewUrl 안의
+    nttSeqNo(게시물 순번)가 실제로 게시물마다 고유한 것을 실측으로
+    확인함(2026-07-13).
+    """
+    if not view_url:
+        return None
+    match = _MSIT_VIEW_URL_ID_PATTERN.search(view_url)
+    return match.group(1) if match else None
+
+
+async def _process_msit_item(
+    session: AsyncSession,
+    source_id: int,
+    item: dict,
+    collection_result: CollectionResult,
+    category_id: int | None,
+) -> None:
+    """과학기술정보통신부 사업공고 한 건을 처리해 collection_result에 결과를 반영한다."""
+    if not isinstance(item, dict):
+        return
+    subject = item.get("subject")
+    view_url = item.get("viewUrl")
+    external_id = _extract_msit_external_id(view_url)
+    if not external_id:
+        logger.warning(
+            "과학기술정보통신부 게시물 id를 추출하지 못했습니다: %r", view_url
+        )
+        return
+    if _is_msit_result_announcement(subject):
+        return
+
+    press_date = _parse_msit_date(item.get("pressDt"))
+    if not _within_collection_window(press_date):
+        return
+
+    try:
+        async with session.begin_nested():
+            organization = await get_or_create_organization(session, MSIT_SOURCE_NAME)
+
+            # 신청기간 필드가 없어(위 주석 참고) 상태를 날짜로 판단할 수
+            # 없다 — "~선정결과" 등 이미 끝난 게시물은 위에서 걸러졌으므로,
+            # 남은 항목은 열려있는 것으로 간주한다(한계: 결과 발표
+            # 문구 없이 조용히 마감된 경우는 걸러내지 못함).
+            notice_id = await upsert_notice(
+                session,
+                source_id=source_id,
+                external_id=external_id,
+                title=subject,
+                organization_id=organization.id,
+                notice_group_key=None,
+                category_id=category_id,
+                application_start_date=None,
+                application_end_date=None,
+                status="모집중",
+                is_actionable=True,
+                source_url=view_url,
+                apply_url=view_url,
+                summary_text=None,
+            )
+
+            msit_attachments = [
+                (f.get("fileName"), f.get("fileUrl"))
+                for f in item.get("files") or []
+                if f.get("fileName") and f.get("fileUrl")
+            ]
+            for file_name, file_url in msit_attachments:
+                await save_attachment(
+                    session,
+                    notice_id,
+                    file_name,
+                    file_url,
+                    _file_type_from_name(file_name),
+                )
+            await prune_stale_attachments(
+                session, notice_id, {url for _, url in msit_attachments}
+            )
+    except Exception:
+        logger.exception(
+            "과학기술정보통신부 공고 저장 실패 (external_id=%s)", external_id
+        )
+        collection_result.failed_count += 1
+        collection_result.failed_ids.append(external_id)
+        return
+
+    collection_result.saved_count += 1
+
+
+async def collect_all_msit_notices(session: AsyncSession) -> CollectionResult:
+    """과학기술정보통신부 사업공고를 첫 페이지부터 올해~작년치까지 수집한다.
+
+    이 API는 기업마당(creatPnttm)처럼 등록시각 기준 조기종료 커서를 쓰기엔
+    실측으로 순서를 확정하지 못했다 — 대신 매 페이지 항목의 게시일이
+    수집 기간(올해~작년, _within_collection_window와 동일 기준) 밖으로
+    나가면 그 페이지에서 멈춘다. 응답이 최신순으로 온다는 전제이며(실측
+    샘플에서 확인함), 전제가 깨지면 오래된 항목을 놓칠 수 있다 — 발견되면
+    페이지 전체를 끝까지 훑는 방식으로 재검토 필요.
+    """
+    source = await get_or_create_source(
+        session,
+        source_name=MSIT_SOURCE_NAME,
+        base_url="https://www.msit.go.kr",
+        collect_type="API",
+    )
+    category_id = await get_kg_category_id(session, CategoryName.TECH)
+    if category_id is None:
+        logger.error(
+            "kg_category에 'R&D·기술'이 없어 과학기술정보통신부 수집을 건너뜁니다"
+        )
+        return CollectionResult()
+
+    collection_result = CollectionResult()
+    page = 1
+    while True:
+        items = await fetch_msit_notices(page=page)
+        if not items:
+            break
+
+        reached_old_items = any(
+            not _within_collection_window(_parse_msit_date(item.get("pressDt")))
+            for item in items
+        )
+        for item in items:
+            await _process_msit_item(
+                session, source.id, item, collection_result, category_id
+            )
+        await session.commit()
+
+        logger.info(
+            "과학기술정보통신부 페이지 %d 처리 완료 (누적 saved=%d, failed=%d)",
+            page,
+            collection_result.saved_count,
+            collection_result.failed_count,
+        )
+
+        if reached_old_items:
+            logger.info(
+                "과학기술정보통신부 수집 기간(올해~작년) 밖 항목 도달, 조기 종료"
+            )
             break
 
         page += 1

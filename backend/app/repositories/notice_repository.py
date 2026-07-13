@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
-from app.models.category import CategoryMapping, KgCategory
+from app.models.category import CategoryMapping, CategoryName, KgCategory
 from app.models.notice import Notice, NoticeAttachment, NoticeRegion, NoticeTargetType
 from app.models.notice_source import NoticeSource
 from app.models.organization import Organization
@@ -415,6 +415,19 @@ async def set_attachment_parsed_text(
         .values(parsed_text=parsed_text)
     )
     return result.rowcount > 0
+
+
+async def get_kg_category_id(session: AsyncSession, name: CategoryName) -> int | None:
+    """kg_category.name(고정 8종, docs/notice-category-mapping.md)으로
+    id를 찾는다.
+
+    category_mapping을 거치는 get_category_mapping과 달리, 원본 카테고리
+    필드가 아예 없는 출처(과학기술정보통신부 API 등 — 소스 자체가
+    단일 분야라 항목별 분류가 필요 없음)에서 카테고리를 고정값으로
+    지정할 때 쓴다.
+    """
+    result = await session.execute(select(KgCategory.id).where(KgCategory.name == name))
+    return result.scalar_one_or_none()
 
 
 async def get_category_mapping(session: AsyncSession) -> dict[str, int]:
