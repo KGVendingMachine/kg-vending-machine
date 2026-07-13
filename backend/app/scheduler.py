@@ -53,6 +53,7 @@ async def _run_collection(session: "AsyncSession") -> None:
     from app.services.notice_collection_service import (
         collect_all_bizinfo_notices,
         collect_all_kstartup_notices,
+        collect_all_msit_notices,
     )
 
     try:
@@ -78,6 +79,20 @@ async def _run_collection(session: "AsyncSession") -> None:
         )
     except Exception:
         logger.exception("스케줄러: K-Startup 수집 실패 — 정규화 단계는 계속 진행한다")
+
+    try:
+        # 기업마당/K-Startup의 "기업마당 우선" 중복 제거와 무관한 별도
+        # 소스(R&D 카테고리 고정, 이슈 #104)라 순서 제약은 없다.
+        msit_result = await collect_all_msit_notices(session)
+        logger.info(
+            "스케줄러: 과학기술정보통신부 수집 완료 (성공 %d건, 실패 %d건)",
+            msit_result.saved_count,
+            msit_result.failed_count,
+        )
+    except Exception:
+        logger.exception(
+            "스케줄러: 과학기술정보통신부 수집 실패 — 정규화 단계는 계속 진행한다"
+        )
 
 
 async def _run_normalization_batch(session: "AsyncSession") -> None:

@@ -9,6 +9,7 @@ from datetime import date, datetime
 
 import pytest
 
+from app.models.category import CategoryName
 from app.models.notice import Notice, NoticeAttachment
 from app.models.notice_source import NoticeSource
 from app.models.raw import BizinfoRaw, KstartupRaw
@@ -23,6 +24,7 @@ from app.repositories.notice_repository import (
     get_notice_detail,
     get_notice_regions,
     get_notice_regions_by_ids,
+    get_kg_category_id,
     get_notice_ids_pending_normalization,
     get_notice_target_types,
     get_notices_missing_category,
@@ -191,6 +193,19 @@ async def test_get_notices_missing_category_scoped_to_given_raw_model(db_session
     rows = await get_notices_missing_category(db_session, BizinfoRaw)
 
     assert ks_notice_id not in {notice_id for notice_id, _ in rows}
+
+
+# ---------------------------------------------------------------------------
+# get_kg_category_id (이슈 #104)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_kg_category_id_returns_seeded_id(db_session):
+    """kg_category는 docs/notice-category-mapping.md 기준 고정 8종이 이미
+    마이그레이션 시드 데이터로 들어있다 - 여기서 새로 만들지 않는다."""
+    category_id = await get_kg_category_id(db_session, CategoryName.TECH)
+
+    assert category_id is not None
 
 
 # ---------------------------------------------------------------------------

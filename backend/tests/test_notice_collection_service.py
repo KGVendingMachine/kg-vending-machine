@@ -29,16 +29,19 @@ from app.services.notice_collection_service import (
     UnsupportedRecollectionSourceError,
     _bizinfo_raw_category_key,
     _derive_status_from_dates,
+    _extract_msit_external_id,
     _find_cross_source_duplicate_notice_ids,
     _is_bizinfo_fund_category,
     _is_closed_by_keyword,
     _is_kstartup_fund_category,
+    _is_msit_result_announcement,
     _is_rolling_open,
     _kstartup_raw_category_key,
     _parse_bizinfo_attachments,
     _parse_bizinfo_date_range,
     _parse_bizinfo_regions,
     _parse_kstartup_date,
+    _parse_msit_date,
     _parse_regions,
     _within_collection_window,
     backfill_bizinfo_nationwide_regions,
@@ -134,6 +137,45 @@ def test_parse_kstartup_date_parses_yyyymmdd():
 def test_parse_kstartup_date_none_when_invalid():
     assert _parse_kstartup_date("2026-07-27") is None
     assert _parse_kstartup_date(None) is None
+
+
+def test_parse_msit_date_parses_iso_format():
+    assert _parse_msit_date("2026-07-13") == date(2026, 7, 13)
+
+
+def test_parse_msit_date_none_when_invalid():
+    assert _parse_msit_date("20260713") is None
+    assert _parse_msit_date(None) is None
+
+
+def test_is_msit_result_announcement_matches_known_keywords():
+    """실측(2026-07-13): 이 API는 신청기간 필드가 없어 이미 끝난 과제의
+    "선정결과 공고"가 신규 모집 공고와 같은 목록에 섞여 온다."""
+    assert (
+        _is_msit_result_announcement("2026년도 OO사업 신규과제 선정결과 공고") is True
+    )
+    assert _is_msit_result_announcement("2026년 OO사업 결과 발표") is True
+
+
+def test_is_msit_result_announcement_false_for_new_call():
+    assert (
+        _is_msit_result_announcement("전 국민 AI 서비스 보편적 활용 지원 사업 공고")
+        is False
+    )
+    assert _is_msit_result_announcement(None) is False
+
+
+def test_extract_msit_external_id_finds_ntt_seq_no():
+    view_url = (
+        "https://www.msit.go.kr/bbs/view.do?sCode=user&mId=311&mPid=121"
+        "&bbsSeqNo=100&nttSeqNo=3186816"
+    )
+    assert _extract_msit_external_id(view_url) == "3186816"
+
+
+def test_extract_msit_external_id_none_when_missing_or_absent():
+    assert _extract_msit_external_id("https://www.msit.go.kr/bbs/view.do") is None
+    assert _extract_msit_external_id(None) is None
 
 
 def test_is_rolling_open_matches_known_keywords():

@@ -53,6 +53,7 @@ from app.services.notice_collection_service import (
     backfill_notice_region_codes,
     collect_all_bizinfo_notices,
     collect_all_kstartup_notices,
+    collect_all_msit_notices,
     recollect_bizinfo_notice,
     refresh_notice_statuses,
 )
@@ -71,11 +72,14 @@ def _to_source_result(result: CollectionResult) -> SourceCollectionResult:
 
 
 async def _run_collection_job(session: AsyncSession, job_id: str) -> None:
-    """기업마당 → K-Startup 순서로 전체 수집을 실행하고 _JOBS 상태를 갱신한다.
+    """기업마당 → K-Startup → 과학기술정보통신부 순서로 전체 수집을 실행하고
+    _JOBS 상태를 갱신한다.
 
     반드시 기업마당을 먼저 수집해야 한다 — K-Startup을 먼저 하면 "기업마당
     우선" 중복 제거 로직이 방금 크롤링한 K-Startup 첨부파일까지 지울 수
-    있다 (docs/matching-pipeline.md 운영 규칙 참고).
+    있다 (docs/matching-pipeline.md 운영 규칙 참고). 과학기술정보통신부는
+    이 중복 제거 로직과 무관한 별도 소스(R&D 카테고리 고정)라 순서
+    제약은 없지만, 진행 표시를 위해 세 번째 단계로 둔다.
     """
     _JOBS[job_id] = CollectionJobStatusResponse(
         job_id=job_id,
@@ -111,9 +115,29 @@ async def _run_collection_job(session: AsyncSession, job_id: str) -> None:
 
     _JOBS[job_id] = CollectionJobStatusResponse(
         job_id=job_id,
+        status=CollectionJobStatus.RUNNING,
+        current_phase="과학기술정보통신부 수집 중",
+        bizinfo_result=_to_source_result(bizinfo_result),
+        kstartup_result=_to_source_result(kstartup_result),
+    )
+    try:
+        msit_result = await collect_all_msit_notices(session)
+    except Exception as exc:
+        _JOBS[job_id] = CollectionJobStatusResponse(
+            job_id=job_id,
+            status=CollectionJobStatus.FAILED,
+            bizinfo_result=_to_source_result(bizinfo_result),
+            kstartup_result=_to_source_result(kstartup_result),
+            error_message=f"과학기술정보통신부 수집 실패: {exc}",
+        )
+        return
+
+    _JOBS[job_id] = CollectionJobStatusResponse(
+        job_id=job_id,
         status=CollectionJobStatus.COMPLETED,
         bizinfo_result=_to_source_result(bizinfo_result),
         kstartup_result=_to_source_result(kstartup_result),
+        msit_result=_to_source_result(msit_result),
     )
 
 
