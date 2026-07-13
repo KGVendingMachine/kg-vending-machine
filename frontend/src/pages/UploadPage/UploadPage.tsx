@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getMyBusinessPlan, uploadBusinessPlan } from '../../api/businessPlan'
 import type { BusinessPlanSummary } from '../../api/businessPlan'
 import { ApiError } from '../../api/client'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
+import { useFetchOnMount } from '../../hooks/useFetchOnMount'
 import { PATHS } from '../../routes/paths'
-import styles from './UploadPage.module.css'
+import { ANALYSIS_STATUS_LABELS } from '../../constants/analysisStatus'
 
 // 서버 설정(MAX_UPLOAD_SIZE_BYTES)과 일치. 큰 파일을 다 올린 뒤 413으로
 // 거절당하지 않도록 선택 시점에 미리 걸러준다.
@@ -14,12 +15,6 @@ const MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
 
 function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
-}
-
-const ANALYSIS_STATUS_LABELS: Record<string, string> = {
-  processing: '분석 중',
-  completed: '분석 완료',
-  failed: '분석 실패',
 }
 
 function analysisStatusLabel(status: BusinessPlanSummary['analysis_status']): string {
@@ -65,26 +60,11 @@ export function UploadPage() {
   const [dragOver, setDragOver] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [checking, setChecking] = useState(true)
-  const [existingPlan, setExistingPlan] = useState<BusinessPlanSummary | null>(null)
   const [replacing, setReplacing] = useState(false)
 
-  useEffect(() => {
-    let cancelled = false
-    getMyBusinessPlan()
-      .then((plan) => {
-        if (!cancelled) setExistingPlan(plan)
-      })
-      .catch(() => {
-        // 조회 실패가 업로드 흐름을 막을 이유는 없다 — 빈 드롭존으로 폴백.
-      })
-      .finally(() => {
-        if (!cancelled) setChecking(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  // 조회 실패가 업로드 흐름을 막을 이유는 없다 — 빈 드롭존으로 폴백.
+  const { data: existingPlan, loading: checking } =
+    useFetchOnMount<BusinessPlanSummary>(() => getMyBusinessPlan(), [])
 
   const showExistingCard = !checking && existingPlan != null && !replacing && !file
 
@@ -129,34 +109,36 @@ export function UploadPage() {
   }
 
   return (
-    <div className={styles.page}>
+    <div className="flex flex-1 flex-col">
       <AppHeader />
-      <div className={styles.body}>
-        <div className={styles.heading}>사업계획서 업로드</div>
-        <div className={styles.subheading}>
+      <div className="mx-auto box-border w-full max-w-[640px] px-10 py-8">
+        <div className="text-[22px] font-extrabold tracking-[-0.5px]">
+          사업계획서 업로드
+        </div>
+        <div className="mt-1.5 text-sm text-muted">
           사업계획서를 올리면 맞는 공고를 찾아드려요
         </div>
 
-        <div className={styles.dropzoneCol}>
+        <div className="mt-7">
           {checking ? null : showExistingCard && existingPlan ? (
             <>
-              <div className={styles.uploadedItem}>
-                <span className={styles.fileIcon} />
-                <div className={styles.fileInfo}>
-                  <div className={styles.fileName}>
+              <div className="mt-3.5 flex items-center gap-3 rounded border border-border px-3.5 py-3">
+                <span className="h-10 w-[34px] flex-shrink-0 rounded-[3px] bg-[#e9edf2]" />
+                <div className="flex-1">
+                  <div className="text-sm font-semibold">
                     {existingPlan.title ?? '사업계획서'}
                   </div>
-                  <div className={styles.fileMeta}>
+                  <div className="text-xs text-faint">
                     {formatUploadedAt(existingPlan.uploaded_at)} 업로드
                   </div>
                 </div>
-                <span className={styles.fileStatus}>
+                <span className="text-xs font-semibold text-success">
                   {analysisStatusLabel(existingPlan.analysis_status)}
                 </span>
               </div>
               <button
                 type="button"
-                className={styles.linkButton}
+                className="mt-2.5 cursor-pointer border-0 bg-transparent p-0 text-[13px] font-semibold text-muted underline"
                 onClick={() => setReplacing(true)}
               >
                 다른 파일 업로드
@@ -166,7 +148,9 @@ export function UploadPage() {
             <>
               <div
                 className={
-                  dragOver ? `${styles.dropzone} ${styles.dragOver}` : styles.dropzone
+                  dragOver
+                    ? 'flex h-[300px] cursor-pointer flex-col items-center justify-center gap-3 rounded-md border-2 border-dashed border-primary bg-primary-soft text-center'
+                    : 'flex h-[300px] cursor-pointer flex-col items-center justify-center gap-3 rounded-md border-2 border-dashed border-[#c8cdd3] bg-surface-subtle text-center'
                 }
                 onClick={() => fileInputRef.current?.click()}
                 onDragOver={(event) => {
@@ -178,14 +162,14 @@ export function UploadPage() {
                 role="button"
                 tabIndex={0}
               >
-                <div className={styles.dropIcon} />
-                <div className={styles.dropTitle}>
+                <div className="h-12 w-12 rounded-md border-2 border-[#aeb4ba]" />
+                <div className="text-base font-bold">
                   파일을 끌어다 놓거나 클릭해 선택
                 </div>
-                <div className={styles.dropHint}>
+                <div className="text-[13px] text-faint">
                   PDF · HWP · HWPX · 이미지(JPG/PNG/TIFF)
                 </div>
-                <div className={styles.dropLimit}>최대 50MB</div>
+                <div className="text-xs text-[#b0b5bb]">최대 50MB</div>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -196,20 +180,20 @@ export function UploadPage() {
               </div>
 
               {file ? (
-                <div className={styles.uploadedItem}>
-                  <span className={styles.fileIcon} />
-                  <div className={styles.fileInfo}>
-                    <div className={styles.fileName}>{file.name}</div>
-                    <div className={styles.fileMeta}>{formatFileSize(file.size)}</div>
+                <div className="mt-3.5 flex items-center gap-3 rounded border border-border px-3.5 py-3">
+                  <span className="h-10 w-[34px] flex-shrink-0 rounded-[3px] bg-[#e9edf2]" />
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold">{file.name}</div>
+                    <div className="text-xs text-faint">{formatFileSize(file.size)}</div>
                   </div>
-                  <span className={styles.fileStatus}>선택됨</span>
+                  <span className="text-xs font-semibold text-success">선택됨</span>
                 </div>
               ) : null}
 
               {replacing && existingPlan ? (
                 <button
                   type="button"
-                  className={styles.linkButton}
+                  className="mt-2.5 cursor-pointer border-0 bg-transparent p-0 text-[13px] font-semibold text-muted underline"
                   onClick={() => {
                     setReplacing(false)
                     setFile(null)
@@ -222,13 +206,13 @@ export function UploadPage() {
             </>
           )}
 
-          {error ? <div className={styles.error}>{error}</div> : null}
+          {error ? <div className="mt-3.5 text-[13px] text-danger">{error}</div> : null}
         </div>
 
-        <div className={styles.actions}>
+        <div className="mt-8 flex justify-between gap-2.5">
           <button
             type="button"
-            className={styles.secondaryButton}
+            className="h-[46px] cursor-pointer rounded border border-border-strong bg-white px-[22px] text-[15px] font-semibold text-muted"
             disabled={uploading}
             onClick={() => navigate(PATHS.COMPANY_PROFILE)}
           >
@@ -237,7 +221,7 @@ export function UploadPage() {
           {showExistingCard && existingPlan ? (
             <button
               type="button"
-              className={styles.primaryButton}
+              className="h-[46px] cursor-pointer rounded border-0 bg-primary px-7 text-[15px] font-bold text-white"
               onClick={() =>
                 navigate(PATHS.ANALYSIS, {
                   state: { businessPlanId: existingPlan.id },
@@ -249,7 +233,7 @@ export function UploadPage() {
           ) : (
             <button
               type="button"
-              className={styles.primaryButton}
+              className="h-[46px] cursor-pointer rounded border-0 bg-primary px-7 text-[15px] font-bold text-white disabled:cursor-not-allowed disabled:bg-border-strong"
               disabled={!file || uploading}
               onClick={handleStartAnalysis}
             >
