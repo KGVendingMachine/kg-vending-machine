@@ -6,7 +6,7 @@ import { getMyCompanyProfile } from '../../api/companyProfile'
 import type { CompanyProfile } from '../../api/companyProfile'
 import { useMatchedNotices } from '../../hooks/useMatchedNotices'
 import { PATHS } from '../../routes/paths'
-import { useBookmarks } from '../../store/BookmarkContext'
+import { toggleBookmark } from '../../api/bookmarks'
 import styles from './MatchDetailPage.module.css'
 
 const APPLICATION_CHECKLIST = [
@@ -34,9 +34,11 @@ export function MatchDetailPage() {
   const matchLogId = matchLogIdParam ? Number(matchLogIdParam) : null
 
   const navigate = useNavigate()
-  const { isBookmarked, toggleBookmark } = useBookmarks()
   const { matchedNotices, loading } = useMatchedNotices(matchLogId)
   const [profile, setProfile] = useState<CompanyProfile | null>(null)
+  // 별표 상태는 결과에서 온 bookmarkId를 로컬로 들고 토글마다 갱신한다.
+  const [bookmarkId, setBookmarkId] = useState<number | null>(null)
+  const [bookmarkBusy, setBookmarkBusy] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -51,6 +53,11 @@ export function MatchDetailPage() {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    const found = matchedNotices.find((item) => item.id === noticeId)
+    setBookmarkId(found?.bookmarkId ?? null)
+  }, [matchedNotices, noticeId])
 
   if (noticeId == null || Number.isNaN(noticeId) || matchLogId == null) {
     return <Navigate to={PATHS.RESULTS} replace />
@@ -71,8 +78,25 @@ export function MatchDetailPage() {
   }
 
   const otherNotices = matchedNotices.filter((item) => item.id !== notice.id)
-  const bookmarked = isBookmarked(notice.id)
+  const bookmarked = bookmarkId != null
   const targetLabel = targetCompanyLabel(profile)
+
+  async function handleToggleBookmark() {
+    if (bookmarkBusy || !notice) return
+    setBookmarkBusy(true)
+    try {
+      const nextBookmarkId = await toggleBookmark({
+        bookmarkId,
+        matchResultId: notice.matchResultId,
+        noticeId: notice.id,
+      })
+      setBookmarkId(nextBookmarkId)
+    } catch {
+      // 실패하면 상태를 그대로 두어 다시 시도할 수 있게 한다.
+    } finally {
+      setBookmarkBusy(false)
+    }
+  }
 
   return (
     <div className={styles.page}>
@@ -95,7 +119,8 @@ export function MatchDetailPage() {
               : styles.bookmarkButton
           }
           aria-label={bookmarked ? '북마크 해제' : '북마크 추가'}
-          onClick={() => toggleBookmark(notice.id)}
+          disabled={bookmarkBusy}
+          onClick={handleToggleBookmark}
         >
           {bookmarked ? '★ 북마크됨' : '☆ 북마크'}
         </button>

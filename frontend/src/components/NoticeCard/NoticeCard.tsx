@@ -1,16 +1,24 @@
 import type { MatchedNotice } from '../../types/notice'
-import { useBookmarks } from '../../store/BookmarkContext'
 import styles from './NoticeCard.module.css'
 
 interface NoticeCardProps {
   notice: MatchedNotice
   selected: boolean
   onClick: () => void
+  /** 별표 토글 핸들러. 넘기지 않으면 별표를 표시하지 않는다. */
+  onToggleBookmark?: () => void
+  /** 토글 요청이 진행 중이면 별표를 잠깐 비활성화한다(중복 클릭 방지). */
+  bookmarkBusy?: boolean
 }
 
-export function NoticeCard({ notice, selected, onClick }: NoticeCardProps) {
-  const { isBookmarked, toggleBookmark } = useBookmarks()
-  const bookmarked = isBookmarked(notice.id)
+export function NoticeCard({
+  notice,
+  selected,
+  onClick,
+  onToggleBookmark,
+  bookmarkBusy = false,
+}: NoticeCardProps) {
+  const bookmarked = notice.bookmarkId != null
 
   return (
     <div
@@ -56,21 +64,24 @@ export function NoticeCard({ notice, selected, onClick }: NoticeCardProps) {
             <div className={styles.scoreLabel}>적합도</div>
           </div>
         ) : null}
-        <button
-          type="button"
-          className={
-            bookmarked
-              ? `${styles.bookmarkButton} ${styles.bookmarked}`
-              : styles.bookmarkButton
-          }
-          aria-label={bookmarked ? '북마크 해제' : '북마크 추가'}
-          onClick={(event) => {
-            event.stopPropagation()
-            toggleBookmark(notice.id)
-          }}
-        >
-          {bookmarked ? '★' : '☆'}
-        </button>
+        {onToggleBookmark ? (
+          <button
+            type="button"
+            className={
+              bookmarked
+                ? `${styles.bookmarkButton} ${styles.bookmarked}`
+                : styles.bookmarkButton
+            }
+            aria-label={bookmarked ? '북마크 해제' : '북마크 추가'}
+            disabled={bookmarkBusy}
+            onClick={(event) => {
+              event.stopPropagation()
+              onToggleBookmark()
+            }}
+          >
+            {bookmarked ? '★' : '☆'}
+          </button>
+        ) : null}
       </div>
       {selected && notice.matchReasonShort ? (
         <div className={styles.reason}>{notice.matchReasonShort}</div>

@@ -8,6 +8,8 @@ interface UseMatchedNoticesResult {
   matchedNotices: MatchedNotice[]
   loading: boolean
   error: unknown
+  /** 별표 토글 후 해당 공고의 bookmarkId를 갱신한다(해제면 null). */
+  applyBookmark: (noticeId: number, bookmarkId: number | null) => void
 }
 
 /**
@@ -58,5 +60,13 @@ export function useMatchedNotices(matchLogId: number | null): UseMatchedNoticesR
     }
   }, [matchLogId])
 
-  return { matchedNotices, loading, error }
+  function applyBookmark(noticeId: number, bookmarkId: number | null) {
+    setMatchedNotices((current) =>
+      current.map((notice) =>
+        notice.id === noticeId ? { ...notice, bookmarkId } : notice,
+      ),
+    )
+  }
+
+  return { matchedNotices, loading, error, applyBookmark }
 }
