@@ -147,7 +147,7 @@ async def test_run_normalization_job_fails_when_ai_normalization_errors(
 
     job = _JOBS[job_id]
     assert job.status == NoticeNormalizationJobStatus.FAILED
-    assert job.error_message == "LLM 호출 실패"
+    assert "모두 시도했지만 전부 실패" in job.error_message
 
 
 async def test_start_notice_normalization_returns_pending_and_schedules_task():
