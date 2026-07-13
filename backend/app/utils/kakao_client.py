@@ -5,9 +5,13 @@
 서비스 인증은 별도로 발급하는 자체 JWT가 담당한다.
 """
 
+import logging
+
 import httpx
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class KakaoAuthError(Exception):
@@ -68,3 +72,34 @@ async def fetch_kakao_user(access_token: str) -> dict:
             f"카카오 사용자 정보 조회 실패({response.status_code}): {response.text}"
         )
     return response.json()
+
+
+async def unlink_user(kakao_id: str) -> None:
+    """회원탈퇴 시 카카오 계정과 앱의 연결을 끊는다(Admin 키 방식).
+
+    로그인 때 받은 카카오 토큰은 저장하지 않으므로, 서버가 보관하는
+    Admin 키 + 회원번호(target_id)로 호출한다. Admin 키가 설정되지 않은
+    환경(로컬 개발)에서는 건너뛴다. 실패 시 KakaoAuthError를 던져 호출자가
+    탈퇴를 중단(재시도 가능)할 수 있게 한다.
+    """
+    settings = get_settings()
+    if not settings.KAKAO_ADMIN_KEY:
+        logger.warning("KAKAO_ADMIN_KEY 미설정 - 카카오 unlink를 건너뜁니다")
+        return
+
+    async with httpx.AsyncClient(
+        timeout=settings.KAKAO_REQUEST_TIMEOUT_SECONDS
+    ) as client:
+        try:
+            response = await client.post(
+                settings.KAKAO_UNLINK_URL,
+                headers={"Authorization": f"KakaoAK {settings.KAKAO_ADMIN_KEY}"},
+                data={"target_id_type": "user_id", "target_id": kakao_id},
+            )
+        except httpx.HTTPError as exc:
+            raise KakaoAuthError(f"카카오 연결 끊기 요청 실패: {exc}") from exc
+
+    if response.status_code != 200:
+        raise KakaoAuthError(
+            f"카카오 연결 끊기 실패({response.status_code}): {response.text}"
+        )
