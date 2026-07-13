@@ -42,6 +42,50 @@ export function getMatchLog(matchLogId: number): Promise<MatchLog> {
   return apiFetch<MatchLog>(`/api/match-logs/${matchLogId}`)
 }
 
+/**
+ * matching_service._score_notice가 채우는 result_json 중 프론트가 쓰는 부분.
+ * score_breakdown은 eligibility_score 등 top-level 컬럼과 같은 값의 중복이라
+ * 화면에서는 top-level 필드를 쓰고, 여기서는 cautions만 추가로 사용한다.
+ */
+export interface MatchResultJson {
+  notice_quality: { status: string; missing_fields: string[] }
+  score_breakdown: {
+    eligibility: number
+    item_fit: number
+    business_fit: number
+    growth: number
+    bonus: number
+  }
+  matched_keywords: string[]
+  cautions: string[]
+}
+
+/** backend/app/schemas/match_log.py MatchResultResponse */
+export interface MatchResult {
+  id: number
+  match_log_id: number
+  notice_id: number
+  notice_title: string | null
+  total_score: number | null
+  eligibility_score: number | null
+  item_fit_score: number | null
+  business_fit_score: number | null
+  growth_score: number | null
+  bonus_score: number | null
+  eligibility_status: string | null
+  recommendation_level: string | null
+  summary_reason: string | null
+  weakness: string | null
+  strategy_suggestion: string | null
+  result_json: MatchResultJson | null
+  created_at: string
+}
+
+/** 한 매칭 실행(match_log)의 결과를 총점 내림차순으로 조회한다. */
+export function listMatchResults(matchLogId: number): Promise<MatchResult[]> {
+  return apiFetch<MatchResult[]>(`/api/match-logs/${matchLogId}/results`)
+}
+
 /** 서버의 UTC naive 일시 문자열을 사용자 로컬 시간 표기로 바꾼다. */
 export function formatMatchLogDate(value: string): string {
   // 타임존 표기가 없으면 UTC로 해석되도록 Z를 붙인다.

@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
-from app.models.category import CategoryMapping, KgCategory
+from app.models.category import CategoryMapping, CategoryName, KgCategory
 from app.models.notice import Notice, NoticeAttachment, NoticeRegion, NoticeTargetType
 from app.models.notice_source import NoticeSource
 from app.models.organization import Organization
@@ -381,6 +381,23 @@ async def save_attachment(
     await session.execute(stmt)
 
 
+async def prune_stale_attachments(
+    session: AsyncSession, notice_id: int, current_urls: set[str]
+) -> None:
+    """이번에 다시 가져온 첨부파일 목록(current_urls)에 없는 예전 첨부파일을 지운다.
+
+    save_attachment는 upsert만 해서 URL이 바뀐(파일이 교체된) 경우 새
+    URL은 추가되지만 예전 URL은 그대로 남는다 — 재수집(recollect)의
+    "첨부파일 교체 반영" 문서화된 목적과 어긋난다. current_urls가
+    비어있으면(공고에 첨부파일이 아예 없어진 경우) 이 공고의 첨부파일을
+    전부 지운다.
+    """
+    stmt = delete(NoticeAttachment).where(NoticeAttachment.notice_id == notice_id)
+    if current_urls:
+        stmt = stmt.where(NoticeAttachment.file_url.notin_(current_urls))
+    await session.execute(stmt)
+
+
 async def set_attachment_parsed_text(
     session: AsyncSession, attachment_id: int, parsed_text: str
 ) -> bool:
@@ -398,6 +415,19 @@ async def set_attachment_parsed_text(
         .values(parsed_text=parsed_text)
     )
     return result.rowcount > 0
+
+
+async def get_kg_category_id(session: AsyncSession, name: CategoryName) -> int | None:
+    """kg_category.name(고정 8종, docs/notice-category-mapping.md)으로
+    id를 찾는다.
+
+    category_mapping을 거치는 get_category_mapping과 달리, 원본 카테고리
+    필드가 아예 없는 출처(과학기술정보통신부 API 등 — 소스 자체가
+    단일 분야라 항목별 분류가 필요 없음)에서 카테고리를 고정값으로
+    지정할 때 쓴다.
+    """
+    result = await session.execute(select(KgCategory.id).where(KgCategory.name == name))
+    return result.scalar_one_or_none()
 
 
 async def get_category_mapping(session: AsyncSession) -> dict[str, int]:
@@ -708,6 +738,25 @@ async def get_notice_attachment(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def get_notice_ids_pending_normalization(
+    session: AsyncSession, limit: int
+) -> list[int]:
+    """아직 정규화를 시도한 적 없는(normalization_status가 NULL인) 공고
+    id를 마감일이 임박한 순으로 최대 limit개 가져온다 (스케줄러 배치용).
+
+    get_collection_stats의 by_normalization_status 집계와 같은 기준
+    (NULL = "not_started")이지만, 여긴 건수가 아니라 실제 id 목록이
+    필요해 별도 함수로 둔다.
+    """
+    result = await session.execute(
+        select(Notice.id)
+        .where(Notice.normalization_status.is_(None))
+        .order_by(Notice.application_end_date.asc().nulls_last(), Notice.id.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
 
 
 async def get_collection_stats(session: AsyncSession) -> dict:

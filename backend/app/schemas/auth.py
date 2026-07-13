@@ -13,6 +13,12 @@ class KakaoLoginRequest(BaseModel):
     )
 
 
+class DevLoginRequest(BaseModel):
+    """개발 환경 전용: 카카오 로그인 없이 DB에 있는 user.id로 바로 토큰을 발급받는다."""
+
+    user_id: int = Field(..., examples=[1], description="DB에 존재하는 user.id")
+
+
 class TokenResponse(BaseModel):
     """로그인 성공 시 발급하는 자체 JWT 토큰 쌍."""
 

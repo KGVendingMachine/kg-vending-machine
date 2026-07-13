@@ -9,6 +9,7 @@ from datetime import date, datetime
 
 import pytest
 
+from app.models.category import CategoryName
 from app.models.notice import Notice, NoticeAttachment
 from app.models.notice_source import NoticeSource
 from app.models.raw import BizinfoRaw, KstartupRaw
@@ -23,11 +24,14 @@ from app.repositories.notice_repository import (
     get_notice_detail,
     get_notice_regions,
     get_notice_regions_by_ids,
+    get_kg_category_id,
+    get_notice_ids_pending_normalization,
     get_notice_target_types,
     get_notices_missing_category,
     get_or_create_organization,
     get_or_create_source,
     list_notices,
+    prune_stale_attachments,
     replace_notice_region,
     replace_notice_target_type,
     save_attachment,
@@ -192,6 +196,71 @@ async def test_get_notices_missing_category_scoped_to_given_raw_model(db_session
 
 
 # ---------------------------------------------------------------------------
+# get_kg_category_id (이슈 #104)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_kg_category_id_returns_seeded_id(db_session):
+    """kg_category는 docs/notice-category-mapping.md 기준 고정 8종이 이미
+    마이그레이션 시드 데이터로 들어있다 - 여기서 새로 만들지 않는다."""
+    category_id = await get_kg_category_id(db_session, CategoryName.TECH)
+
+    assert category_id is not None
+
+
+# ---------------------------------------------------------------------------
+# get_notice_ids_pending_normalization (스케줄러용, 이슈 #102)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_notice_ids_pending_normalization_excludes_already_attempted(
+    db_session,
+):
+    """normalization_status가 있는(완료든 실패든) 공고는 대상에서 빠지고,
+    아직 시도한 적 없는(NULL) 공고만 반환돼야 한다."""
+    source = await _create_source(db_session, "정규화대기출처")
+    pending_id = await _create_notice(db_session, source, external_id="pending-1")
+    completed_id = await _create_notice(db_session, source, external_id="completed-1")
+    failed_id = await _create_notice(db_session, source, external_id="failed-1")
+
+    await update_notice_normalization(
+        db_session,
+        completed_id,
+        normalized_json={"basic": {}},
+        normalization_status="completed",
+        normalization_error=None,
+        normalized_at=datetime(2026, 1, 1),
+    )
+    await update_notice_normalization(
+        db_session,
+        failed_id,
+        normalized_json=None,
+        normalization_status="failed",
+        normalization_error="테스트 실패",
+        normalized_at=datetime(2026, 1, 1),
+    )
+
+    # limit을 넉넉히 크게 준다 — 실제 DB(SAVEPOINT 밖의 기존 데이터)에도
+    # normalization_status가 NULL인 공고가 많아서, limit이 작으면 정렬
+    # 순위에 밀려 방금 만든 테스트 행이 결과에 아예 안 잡힐 수 있다.
+    result = await get_notice_ids_pending_normalization(db_session, limit=100_000)
+
+    assert pending_id in result
+    assert completed_id not in result
+    assert failed_id not in result
+
+
+async def test_get_notice_ids_pending_normalization_respects_limit(db_session):
+    source = await _create_source(db_session, "정규화대기제한출처")
+    for i in range(3):
+        await _create_notice(db_session, source, external_id=f"limit-{i}")
+
+    result = await get_notice_ids_pending_normalization(db_session, limit=2)
+
+    assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
 # find_notice_ids_by_source_and_title / find_notice_ids_by_source_title_and_dates
 # / delete_notice
 # ---------------------------------------------------------------------------
@@ -349,6 +418,39 @@ async def test_save_attachment_upsert_does_not_clobber_parsed_text(db_session):
     )
     assert reloaded.file_name == "new_name.pdf"
     assert reloaded.parsed_text == "OCR 결과 텍스트"
+
+
+async def test_prune_stale_attachments_removes_urls_not_in_current_set(db_session):
+    source = await _create_source(db_session, "첨부정리출처1")
+    notice_id = await _create_notice(db_session, source, external_id="prune-1")
+    await save_attachment(
+        db_session, notice_id, "old.pdf", "https://a.com/old.pdf", "PDF"
+    )
+    await save_attachment(
+        db_session, notice_id, "keep.pdf", "https://a.com/keep.pdf", "PDF"
+    )
+
+    # 재수집 결과 old.pdf는 더 이상 없고 keep.pdf만 남은 상황을 재현.
+    await prune_stale_attachments(db_session, notice_id, {"https://a.com/keep.pdf"})
+
+    attachments = await get_notice_attachments(db_session, notice_id)
+    assert [a.file_url for a in attachments] == ["https://a.com/keep.pdf"]
+
+
+async def test_prune_stale_attachments_removes_all_when_current_urls_empty(
+    db_session,
+):
+    source = await _create_source(db_session, "첨부정리출처2")
+    notice_id = await _create_notice(db_session, source, external_id="prune-2")
+    await save_attachment(
+        db_session, notice_id, "gone.pdf", "https://a.com/gone.pdf", "PDF"
+    )
+
+    # 재수집 결과 첨부파일이 아예 없어진 상황을 재현.
+    await prune_stale_attachments(db_session, notice_id, set())
+
+    attachments = await get_notice_attachments(db_session, notice_id)
+    assert attachments == []
 
 
 async def test_set_attachment_parsed_text_returns_true_when_row_updated(db_session):

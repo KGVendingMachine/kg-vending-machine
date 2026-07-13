@@ -282,3 +282,52 @@
   text-align: center;
   margin-top: 60px;
 }
+
+.linkAction {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border-strong);
+  background: #fff;
+  color: var(--color-text);
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.stateWrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 60px 24px;
+  text-align: center;
+}
+
+.stateTitle {
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.stateText {
+  font-size: 14px;
+  color: var(--color-muted);
+  line-height: 1.6;
+}
+
+.stateButton {
+  margin-top: 12px;
+  height: 44px;
+  padding: 0 24px;
+  border: none;
+  background: var(--color-primary);
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+}

@@ -5,9 +5,19 @@ services/notice_normalization_service.py
 호출)를 실행하고 결과를 Notice에 저장한다. app/api/notice_samples.py(로컬 샘플 JSON
 기준 테스트용 엔드포인트)와 같은 보완 규칙을 notice_normalization_helpers에서
 공유해서 쓴다 — 다른 점은 원문을 로컬 파일이 아니라 실제 공고 메타데이터 +
-OCR 결과(notice_ocr.py가 이미 채워둔 parsed_text)에서 가져온다는 것뿐이다.
+OCR 결과에서 가져온다는 것뿐이다.
+
+공고 하나에 PDF/HWP/HWPX 첨부파일이 여러 개일 수 있는데, 파일명만으로 "진짜
+공고문"을 하나 고르는 방식(notice_ocr_target.pick_ocr_target)은 새로운 파일명
+패턴(안내서/지침/FAQ 등)에 계속 뚫려 AI팀 정규화 품질 저하로 이어졌다
+(docs/normalization-quality-report.md). 그래서 이 정규화 흐름에서는 후보를
+미리 하나로 좁히지 않고, PDF/HWP/HWPX 후보 전부(+summary_text)를 각각 OCR·
+정규화해본 뒤 검증 결과가 가장 좋은 것을 채택한다(2026-07-13 결정 — 비용은
+gpt-4o-mini 기준 후보당 0.1센트 미만이라 무시할 만함).
 """
 
+import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -15,19 +25,36 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.normalizer import AiNormalizationError
 from app.ai.notice_normalizer import normalize_notice_text
+from app.models.notice import NoticeAttachment
 from app.repositories.notice_repository import (
     get_notice_attachments,
     get_notice_detail,
+    set_attachment_parsed_text,
     update_notice_normalization,
 )
 from app.schemas.business_plan import ValidationResult
 from app.schemas.notice_normalization import NormalizedNoticeSchema
+from app.services.notice_attachment_download import download_and_extract_attachment
 from app.services.notice_normalization_helpers import (
     build_notice_prompt_text,
     enrich_normalized_notice,
+    score_validation_result,
 )
-from app.services.notice_ocr_target import pick_ocr_target
+from app.services.notice_ocr_target import OCR_TARGET_FILE_TYPES
 from app.services.notice_service import validate_normalized_notice
+
+logger = logging.getLogger(__name__)
+
+# OpenAI 쪽은 CLOVA(clova_ocr_client._clova_call_semaphore, 실측으로 5개 확인)와
+# 달리 계정 전체 동시 호출 한도가 실측된 적은 없다. 하지만 배치 트리거(공고
+# 최대 30건 동시) × 후보 전부 동시 정규화(옵션4)가 겹치면 실제 동시 OpenAI
+# 호출이 100건을 넘을 수 있고, 이 상태에서 사업계획서 정규화가 문서 길이와
+# 무관하게 30초 타임아웃을 3회 연속 채우고 실패하는 것을 실측함(2026-07-13,
+# business_plan_id=207) — 이후 시간이 지나 재시도하니 정상 동작해, 그 시점에
+# 동시 요청이 몰려 응답이 느려졌던 것으로 추정된다. CLOVA만큼 빡빡하게 5로
+# 제한할 근거는 없어 계정 티어에 여유를 두고 10으로 둔다(이슈 #99).
+_NOTICE_LLM_CONCURRENCY_LIMIT = 10
+_notice_llm_semaphore = asyncio.Semaphore(_NOTICE_LLM_CONCURRENCY_LIMIT)
 
 
 class NoticeNormalizationError(Exception):
@@ -49,18 +76,108 @@ class NoticeNormalizationOutcome:
     normalized_at: datetime
 
 
+@dataclass
+class _CandidateAttempt:
+    file_name: str | None
+    file_type: str | None
+    raw_text: str
+    normalized: NormalizedNoticeSchema
+    validation_result: ValidationResult
+
+
+async def _resolve_candidate_text(
+    source_name: str, attachment: NoticeAttachment
+) -> tuple[NoticeAttachment, str | None]:
+    """후보 첨부파일의 텍스트를 확보한다(이미 있으면 재사용, 없으면 다운로드+OCR).
+
+    다운로드·OCR은 후보마다 독립적인 외부 호출이라 DB 세션 없이 동시에
+    실행할 수 있다(notice_ocr.py의 세션 분리와 같은 이유). 실패하면 이
+    후보를 조용히 포기하도록 None을 반환한다 — 하나 실패해도 나머지
+    후보로 계속 진행하기 위함.
+    """
+    if attachment.parsed_text is not None:
+        return attachment, attachment.parsed_text
+
+    try:
+        text = await download_and_extract_attachment(source_name, attachment)
+    except Exception:
+        logger.exception(
+            "정규화용 첨부파일 다운로드/OCR 실패 (attachment_id=%s)", attachment.id
+        )
+        return attachment, None
+    return attachment, text
+
+
+async def _try_normalize_candidate(
+    *,
+    notice_id: int,
+    title: str | None,
+    source_name: str | None,
+    category_name: str | None,
+    status_: str | None,
+    application_start_date,
+    application_end_date,
+    file_name: str | None,
+    file_type: str | None,
+    raw_text: str,
+) -> _CandidateAttempt | None:
+    """후보 하나를 정규화해본다. LLM 호출 등 어떤 이유로든 실패하면 이 후보를
+    포기하도록 None을 반환한다(하나 실패해도 나머지 후보 비교는 계속 진행)."""
+    prompt_text = build_notice_prompt_text(
+        label="공고",
+        metadata={
+            "notice_id": str(notice_id),
+            "title": title or "",
+            "source": source_name or "",
+            "category": category_name or "",
+            "status": status_ or "",
+            "application_start_date": str(application_start_date or ""),
+            "application_end_date": str(application_end_date or ""),
+            "file_name": file_name or "",
+            "file_type": file_type or "",
+        },
+        raw_text=raw_text,
+    )
+    try:
+        async with _notice_llm_semaphore:
+            normalized = await normalize_notice_text(prompt_text)
+    except Exception:
+        logger.exception(
+            "공고 정규화 후보 시도 실패 (notice_id=%s, file_name=%s)",
+            notice_id,
+            file_name,
+        )
+        return None
+
+    normalized = enrich_normalized_notice(
+        normalized,
+        title=title,
+        source=source_name,
+        category=category_name,
+        status=status_,
+        application_start_date=application_start_date,
+        application_end_date=application_end_date,
+        raw_text=raw_text,
+    )
+    validation_result = validate_normalized_notice(normalized, source_text=raw_text)
+    return _CandidateAttempt(
+        file_name=file_name,
+        file_type=file_type,
+        raw_text=raw_text,
+        normalized=normalized,
+        validation_result=validation_result,
+    )
+
+
 async def normalize_notice(
     session: AsyncSession, notice_id: int
 ) -> NoticeNormalizationOutcome:
-    """공고 하나를 실제 저장된 메타데이터 + OCR 텍스트로 정규화하고 결과를 저장한다.
+    """공고 하나를 실제 저장된 메타데이터 + 첨부파일 원문으로 정규화하고 결과를 저장한다.
 
-    OCR 텍스트(notice_attachment.parsed_text)가 있으면 그걸 우선 쓴다. 없으면
-    summary_text로 대체한다 — 첨부파일이 아예 없는 공고가 실제로 약 76%에
-    달해서(docs/matching-pipeline.md 참고), OCR 텍스트만 요구하면 대다수
-    공고를 정규화할 방법이 없어진다. summary_text만으로는 세부 자격요건까지
-    정확히 못 뽑을 수 있지만, 그 한계는 validation_result의
-    missing_required_fields로 드러나므로 정규화 자체를 막을 이유는 아니다
-    (AI 매칭 스코어링처럼 이 결과 자체가 최종 판단에 쓰이는 건 아님).
+    PDF/HWP/HWPX 첨부파일 후보 전부(+summary_text)를 각각 정규화해보고,
+    검증 결과(missing_required_fields+errors가 적을수록, is_valid=True 우선)가
+    가장 좋은 것을 채택한다. 첨부파일이 아예 없는 공고가 실제로 약 76%에
+    달해서(docs/matching-pipeline.md 참고) summary_text도 항상 후보에 포함한다.
     """
     row = await get_notice_detail(session, notice_id)
     if row is None:
@@ -70,19 +187,35 @@ async def normalize_notice(
     notice, source_name, category_name = row
 
     attachments = await get_notice_attachments(session, notice_id)
-    ocr_target = pick_ocr_target(attachments)
+    candidates = [a for a in attachments if a.file_type in OCR_TARGET_FILE_TYPES]
 
-    raw_text: str | None = None
-    file_name: str | None = None
-    file_type: str | None = None
-    if ocr_target is not None and ocr_target.parsed_text:
-        raw_text = ocr_target.parsed_text
-        file_name = ocr_target.file_name
-        file_type = ocr_target.file_type
-    elif notice.summary_text:
-        raw_text = notice.summary_text
+    # 1단계: 후보 텍스트 확보(다운로드·OCR은 서로 독립적이라 동시 실행).
+    resolved = (
+        await asyncio.gather(
+            *(_resolve_candidate_text(source_name, a) for a in candidates)
+        )
+        if candidates
+        else []
+    )
 
-    if not raw_text:
+    # 2단계: 새로 OCR한 결과만 저장(이미 있던 건 재저장 불필요). DB 쓰기는
+    # 커넥션 풀 문제를 피하려고 여기서 순차적으로 짧게 끝낸다.
+    text_candidates: list[tuple[str | None, str | None, str]] = []
+    for attachment, text in resolved:
+        if attachment.parsed_text is None and text is not None:
+            await set_attachment_parsed_text(session, attachment.id, text)
+        if text:
+            text_candidates.append((attachment.file_name, attachment.file_type, text))
+    if any(
+        attachment.parsed_text is None and text is not None
+        for attachment, text in resolved
+    ):
+        await session.commit()
+
+    if notice.summary_text:
+        text_candidates.append((None, None, notice.summary_text))
+
+    if not text_candidates:
         error_message = "정규화에 쓸 원문이 없습니다(OCR 텍스트도 summary_text도 없음)."
         await update_notice_normalization(
             session,
@@ -95,64 +228,59 @@ async def normalize_notice(
         await session.commit()
         raise NoSourceTextForNormalizationError(error_message)
 
-    prompt_text = build_notice_prompt_text(
-        label="공고",
-        metadata={
-            "notice_id": str(notice_id),
-            "title": notice.title or "",
-            "source": source_name or "",
-            "category": category_name or "",
-            "status": notice.status or "",
-            "application_start_date": str(notice.application_start_date or ""),
-            "application_end_date": str(notice.application_end_date or ""),
-            "file_name": file_name or "",
-            "file_type": file_type or "",
-        },
-        raw_text=raw_text,
+    # 3단계: LLM 호출은 길면 수십 초(타임아웃 30초 × 재시도 3회)까지 걸리는
+    # 외부 호출이라, 후보가 여러 개면 그만큼 오래 걸릴 수 있다 — 위 조회·쓰기가
+    # 열어둔 트랜잭션(=DB 커넥션)을 커밋해 반납한 뒤에 실행한다(배치 트리거로
+    # 여러 건이 동시에 돌 때 커넥션 풀이 고갈되는 것을 실제로 재현한 적 있음,
+    # 2026-07-12). 후보끼리도 서로 독립적인 외부 호출이라 동시 실행한다.
+    await session.commit()
+
+    attempts = await asyncio.gather(
+        *(
+            _try_normalize_candidate(
+                notice_id=notice_id,
+                title=notice.title,
+                source_name=source_name,
+                category_name=category_name,
+                status_=notice.status,
+                application_start_date=notice.application_start_date,
+                application_end_date=notice.application_end_date,
+                file_name=file_name,
+                file_type=file_type,
+                raw_text=raw_text,
+            )
+            for file_name, file_type, raw_text in text_candidates
+        )
     )
+    successes = [attempt for attempt in attempts if attempt is not None]
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    # LLM 호출은 길면 수십 초(타임아웃 30초 × 재시도 3회)까지 걸리는 외부
-    # 호출이라, 그동안 위 조회들이 열어둔 트랜잭션(=DB 커넥션)을 계속 물고
-    # 있으면 안 된다 — 배치 트리거로 여러 건이 동시에 돌 때 커넥션 풀
-    # (기본 5+overflow 10)이 고갈되는 것을 실제로 재현함(2026-07-12,
-    # 20건 동시 실행 시 QueuePool limit ... connection timed out).
-    # notice_ocr.py가 다운로드·CLOVA 호출 동안 세션을 닫는 것과 같은 이유로,
-    # 읽기는 여기서 끝내고 커넥션을 풀에 반납한 뒤 LLM을 호출한다
-    # (expire_on_commit=False라 위에서 읽어둔 값은 계속 쓸 수 있다).
-    await session.commit()
-
-    try:
-        normalized = await normalize_notice_text(prompt_text)
-    except AiNormalizationError as exc:
+    if not successes:
+        error_message = (
+            f"정규화 후보 {len(text_candidates)}건을 모두 시도했지만 전부 실패했습니다"
+            "(LLM 호출 오류 등)."
+        )
         await update_notice_normalization(
             session,
             notice_id,
             normalized_json=None,
             normalization_status="failed",
-            normalization_error=str(exc),
+            normalization_error=error_message,
             normalized_at=now,
         )
         await session.commit()
-        raise
+        raise AiNormalizationError(error_message)
 
-    normalized = enrich_normalized_notice(
-        normalized,
-        title=notice.title,
-        source=source_name,
-        category=category_name,
-        status=notice.status,
-        application_start_date=notice.application_start_date,
-        application_end_date=notice.application_end_date,
-        raw_text=raw_text,
+    winner = min(
+        successes,
+        key=lambda attempt: score_validation_result(attempt.validation_result),
     )
-    validation_result = validate_normalized_notice(normalized, source_text=raw_text)
 
     saved = await update_notice_normalization(
         session,
         notice_id,
-        normalized_json=normalized.model_dump(mode="json"),
+        normalized_json=winner.normalized.model_dump(mode="json"),
         normalization_status="completed",
         normalization_error=None,
         normalized_at=now,
@@ -160,17 +288,18 @@ async def normalize_notice(
     await session.commit()
 
     if not saved:
-        # LLM 호출(길면 수십 초)이 도는 동안 "기업마당 우선 정책"으로 이
-        # 공고 자체가 삭제됐을 수 있다 — 실제로 재현함(2026-07-12): 다른
-        # 트랜잭션이 delete_notice를 호출하면 update_notice_normalization이
-        # 0행을 반영하는데, 여기서 확인하지 않으면 이미 사라진 공고에
-        # 대해 COMPLETED를 반환하게 된다(notice_ocr.py의 동일한 문제와
-        # 같은 이유로 확인 필요).
+        # 정규화(길면 후보 여러 개 × 수십 초)가 도는 동안 "기업마당 우선
+        # 정책"으로 이 공고 자체가 삭제됐을 수 있다 — 실제로 재현함
+        # (2026-07-12): 다른 트랜잭션이 delete_notice를 호출하면
+        # update_notice_normalization이 0행을 반영하는데, 여기서 확인하지
+        # 않으면 이미 사라진 공고에 대해 COMPLETED를 반환하게 된다.
         raise NoticeNotFoundForNormalizationError(
             "정규화는 끝났지만 공고가 더 이상 존재하지 않아 저장하지 못했습니다"
             "(다른 출처의 중복 공고로 정리됐을 수 있습니다)."
         )
 
     return NoticeNormalizationOutcome(
-        normalized=normalized, validation_result=validation_result, normalized_at=now
+        normalized=winner.normalized,
+        validation_result=winner.validation_result,
+        normalized_at=now,
     )

@@ -11,6 +11,7 @@ import {
   createMatchLog,
   formatMatchLogDate,
   listMatchLogs,
+  listMatchResults,
 } from '../../api/matchLogs'
 import type { MatchLog } from '../../api/matchLogs'
 import { ApiError } from '../../api/client'
@@ -157,6 +158,7 @@ export function AnalysisProgressPage() {
     /** 응답을 화면 국면에 반영하고, 종료 상태(완료/실패)면 true를 돌려준다. */
     function applyStatus(status: AnalysisStatus): boolean {
       if (status.status === 'completed') {
+        console.log('##### 사업계획서 분석 결과 (analysis_json):', status.analysis_json)
         setPhase('analyzed')
         return true
       }
@@ -266,6 +268,9 @@ export function AnalysisProgressPage() {
     const startedAt = Date.now()
     try {
       const log = await createMatchLog(businessPlanId)
+      console.log('공고 매칭 로그 (match_log):', log)
+      const results = await listMatchResults(log.id)
+      console.log('공고 매칭 결과 (match_results):', results)
       const remain = MIN_MATCHING_VISIBLE_MS - (Date.now() - startedAt)
       if (remain > 0) {
         await new Promise((resolve) => setTimeout(resolve, remain))

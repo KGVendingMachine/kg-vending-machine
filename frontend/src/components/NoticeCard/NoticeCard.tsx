@@ -1,9 +1,9 @@
-import type { Notice } from '../../types/notice'
+import type { MatchedNotice } from '../../types/notice'
 import { useBookmarks } from '../../store/BookmarkContext'
 import styles from './NoticeCard.module.css'
 
 interface NoticeCardProps {
-  notice: Notice
+  notice: MatchedNotice
   selected: boolean
   onClick: () => void
 }
@@ -28,7 +28,9 @@ export function NoticeCard({ notice, selected, onClick }: NoticeCardProps) {
       <div className={styles.row}>
         <div className={styles.main}>
           <div className={styles.badges}>
-            <span className={styles.category}>{notice.category}</span>
+            {notice.category ? (
+              <span className={styles.category}>{notice.category}</span>
+            ) : null}
             <span
               className={
                 notice.isUrgent
@@ -42,18 +44,18 @@ export function NoticeCard({ notice, selected, onClick }: NoticeCardProps) {
           <div className={styles.title}>{notice.title}</div>
           <div className={styles.org}>{notice.org}</div>
           <div className={styles.meta}>
-            <span>💰 {notice.amountLabel}</span>
+            {notice.amountLabel ? <span>💰 {notice.amountLabel}</span> : null}
             <span>🗓 {notice.dueDateLabel}</span>
           </div>
         </div>
-        <div className={styles.scoreCol}>
-          <div
-            className={`${styles.scoreValue} ${styles[notice.scoreLevel]}`}
-          >
-            {notice.score}
+        {notice.score != null && notice.scoreLevel != null ? (
+          <div className={styles.scoreCol}>
+            <div className={`${styles.scoreValue} ${styles[notice.scoreLevel]}`}>
+              {notice.score}
+            </div>
+            <div className={styles.scoreLabel}>적합도</div>
           </div>
-          <div className={styles.scoreLabel}>적합도</div>
-        </div>
+        ) : null}
         <button
           type="button"
           className={
@@ -70,7 +72,9 @@ export function NoticeCard({ notice, selected, onClick }: NoticeCardProps) {
           {bookmarked ? '★' : '☆'}
         </button>
       </div>
-      {selected ? <div className={styles.reason}>{notice.matchReasonShort}</div> : null}
+      {selected && notice.matchReasonShort ? (
+        <div className={styles.reason}>{notice.matchReasonShort}</div>
+      ) : null}
     </div>
   )
 }

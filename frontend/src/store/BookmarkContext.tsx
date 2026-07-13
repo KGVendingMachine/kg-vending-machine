@@ -1,37 +1,38 @@
 import { createContext, useContext, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 
-const STORAGE_KEY = 'kgvm-bookmarked-notice-ids'
+// 공고 id가 문자열 슬러그(mock)에서 백엔드 notice.id(number)로 바뀌어 키를 갱신한다.
+const STORAGE_KEY = 'kgvm-bookmarked-notice-ids-v2'
 
 interface BookmarkContextValue {
-  bookmarkedIds: string[]
-  isBookmarked: (noticeId: string) => boolean
-  toggleBookmark: (noticeId: string) => void
+  bookmarkedIds: number[]
+  isBookmarked: (noticeId: number) => boolean
+  toggleBookmark: (noticeId: number) => void
 }
 
 const BookmarkContext = createContext<BookmarkContextValue | null>(null)
 
-function loadBookmarks(): string[] {
+function loadBookmarks(): number[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? (JSON.parse(raw) as string[]) : []
+    return raw ? (JSON.parse(raw) as number[]) : []
   } catch {
     return []
   }
 }
 
 export function BookmarkProvider({ children }: { children: ReactNode }) {
-  const [bookmarkedIds, setBookmarkedIds] = useState<string[]>(loadBookmarks)
+  const [bookmarkedIds, setBookmarkedIds] = useState<number[]>(loadBookmarks)
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(bookmarkedIds))
   }, [bookmarkedIds])
 
-  function isBookmarked(noticeId: string): boolean {
+  function isBookmarked(noticeId: number): boolean {
     return bookmarkedIds.includes(noticeId)
   }
 
-  function toggleBookmark(noticeId: string) {
+  function toggleBookmark(noticeId: number) {
     setBookmarkedIds((current) =>
       current.includes(noticeId)
         ? current.filter((id) => id !== noticeId)

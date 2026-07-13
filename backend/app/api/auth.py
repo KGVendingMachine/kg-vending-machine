@@ -16,6 +16,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.auth import (
     AccessTokenResponse,
+    DevLoginRequest,
     KakaoLoginRequest,
     RefreshRequest,
     TokenResponse,
@@ -25,8 +26,11 @@ from app.services import company_service
 from app.services.auth_service import (
     InactiveAccountError,
     RefreshTokenError,
+    UserNotFoundError,
+    dev_login,
     login_with_kakao,
     refresh_access_token,
+    withdraw_account,
 )
 from app.utils.auth_cookies import (
     REFRESH_TOKEN_COOKIE_NAME,
@@ -180,6 +184,36 @@ async def kakao_login(
 
 
 @router.post(
+    "/dev-login",
+    response_model=TokenResponse,
+    summary="[개발용] user_id로 토큰 발급",
+    description=(
+        "카카오 로그인 없이 DB에 이미 존재하는 user_id만으로 access/refresh "
+        "토큰을 발급한다. 로컬 개발 환경(ENVIRONMENT=local)에서만 동작하며, "
+        "그 외 환경에서는 404를 반환한다."
+    ),
+    include_in_schema=get_settings().ENVIRONMENT == "local",
+    responses={
+        404: {"description": "개발 환경이 아니거나 user_id에 해당하는 유저가 없음"},
+    },
+)
+async def dev_login_endpoint(
+    payload: DevLoginRequest,
+    session: AsyncSession = Depends(get_db),
+) -> TokenResponse:
+    """개발 환경 전용 로그인. 운영 환경에서는 항상 404."""
+    if get_settings().ENVIRONMENT != "local":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    try:
+        tokens = await dev_login(session, payload.user_id)
+    except UserNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    return TokenResponse(**tokens)
+
+
+@router.post(
     "/refresh",
     response_model=AccessTokenResponse,
     summary="access token 재발급",
@@ -237,6 +271,39 @@ async def refresh(
 )
 async def logout() -> Response:
     """인증 쿠키를 삭제한다."""
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    clear_auth_cookies(response)
+    return response
+
+
+@router.delete(
+    "/me",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="회원탈퇴",
+    description=(
+        "카카오 연결 끊기(unlink) 후 탈퇴 처리한다: 기업 프로필/사업계획서/"
+        "매칭 기록 등 딸린 데이터는 전부 삭제하고, 계정(user)은 status를 "
+        "WITHDRAWN으로 바꾸고 개인정보(email/name/nickname)를 익명화한다. "
+        "kakao_id는 남겨 같은 카카오 계정으로 다시 로그인하면 재가입 "
+        "처리되지만(이전 데이터는 복구되지 않음), 인증 쿠키도 함께 삭제한다."
+    ),
+    responses={
+        401: {"description": "인증되지 않음"},
+        403: {"description": "비활성화된 계정"},
+        502: {"description": "카카오 연결 끊기 실패 (탈퇴 미처리, 재시도 가능)"},
+    },
+)
+async def withdraw(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> Response:
+    """현재 로그인한 유저를 탈퇴 처리하고 인증 쿠키를 삭제한다."""
+    try:
+        await withdraw_account(session, current_user)
+    except KakaoAuthError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     clear_auth_cookies(response)
     return response

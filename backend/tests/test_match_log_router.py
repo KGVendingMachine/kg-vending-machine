@@ -2,12 +2,16 @@ from datetime import date
 
 import pytest
 
+from sqlalchemy import select
+
 from app.api.match_log import create_match_log, list_match_results
 from app.models.business_plan import BusinessPlan
 from app.models.company import CompanyProfile
+from app.models.match import MatchLog
 from app.models.notice import Notice
 from app.models.notice_source import NoticeSource
 from app.models.user import User
+from app.repositories import match_log_repository
 from app.schemas.business_plan import JobStatus
 from app.schemas.match_log import MatchLogCreateRequest
 
@@ -149,15 +153,16 @@ async def test_create_match_log_scores_and_persists_results(db_session):
             "AI smart factory support", ["AI", "manufacturing", "vision"]
         ),
     )
-    await _make_notice(
+    low_quality_notice = await _make_notice(
         db_session,
         source,
         title="low quality notice",
         normalized_json={"basic": {"title": "low quality notice"}},
     )
 
+    # 로컬 DB에 실제 정규화된 공고가 있어도 밀려나지 않게 여유 있게 요청한다.
     response = await create_match_log(
-        payload=MatchLogCreateRequest(business_plan_id=plan.id, max_results=5),
+        payload=MatchLogCreateRequest(business_plan_id=plan.id, max_results=50),
         current_user=user,
         session=db_session,
     )
@@ -169,11 +174,47 @@ async def test_create_match_log_scores_and_persists_results(db_session):
         current_user=user,
         session=db_session,
     )
-    assert len(results) == 1
-    assert results[0].notice_id == strong_notice.id
-    assert results[0].total_score is not None
-    assert results[0].result_json["notice_quality"]["status"] == "passed"
-    assert results[0].recommendation_level in {"strong", "recommended", "normal"}
+    # 개발 DB에 이미 있는 공고가 결과에 섞일 수 있으므로(conftest는 실제 DB 위
+    # 트랜잭션 롤백 방식) 이 테스트가 만든 공고 기준으로만 단언한다.
+    ours = [r for r in results if r.notice_id == strong_notice.id]
+    assert len(ours) == 1
+    assert ours[0].total_score is not None
+    assert ours[0].result_json["notice_quality"]["status"] == "passed"
+    assert ours[0].recommendation_level in {"strong", "recommended", "normal"}
+    # 필수 필드가 빈 공고는 품질 게이트에서 제외된다.
+    assert all(r.notice_id != low_quality_notice.id for r in results)
+
+
+async def test_create_match_log_fails_when_no_normalized_notices(
+    db_session, monkeypatch
+):
+    """정규화된 공고가 0건이면 빈 결과로 완료하지 않고 409로 실패해야 한다."""
+    user = await _make_user(db_session, "match-empty-user")
+    profile = CompanyProfile(user_id=user.id)
+    db_session.add(profile)
+    await db_session.flush()
+    plan = await _make_plan(db_session, profile)
+
+    async def _no_candidates(session, *, limit=200):
+        return []
+
+    monkeypatch.setattr(
+        match_log_repository, "list_normalized_notice_candidates", _no_candidates
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await create_match_log(
+            payload=MatchLogCreateRequest(business_plan_id=plan.id),
+            current_user=user,
+            session=db_session,
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 409
+
+    # 실행 이력은 failed로 남는다.
+    row = await db_session.execute(select(MatchLog).where(MatchLog.user_id == user.id))
+    log = row.scalar_one()
+    assert log.run_status == JobStatus.FAILED.value
 
 
 async def test_create_match_log_rejects_unanalyzed_plan(db_session):

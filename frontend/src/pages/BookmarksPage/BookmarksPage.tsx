@@ -1,17 +1,43 @@
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { NoticeCard } from '../../components/NoticeCard/NoticeCard'
-import { notices } from '../../mock/notices'
-import { resultDetailPath } from '../../routes/paths'
+import { getNoticeDetail } from '../../api/notices'
+import { toMatchedNotice } from '../../types/notice'
+import type { MatchedNotice } from '../../types/notice'
 import { useBookmarks } from '../../store/BookmarkContext'
 import styles from './BookmarksPage.module.css'
 
 export function BookmarksPage() {
-  const navigate = useNavigate()
   const { bookmarkedIds } = useBookmarks()
-  const bookmarkedNotices = notices.filter((notice) =>
-    bookmarkedIds.includes(notice.id),
-  )
+  const [notices, setNotices] = useState<MatchedNotice[]>([])
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (bookmarkedIds.length === 0) {
+      setNotices([])
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    Promise.all(
+      bookmarkedIds.map((id) =>
+        getNoticeDetail(id)
+          .then((detail) => toMatchedNotice(detail))
+          .catch(() => null),
+      ),
+    )
+      .then((results) => {
+        if (!cancelled) {
+          setNotices(results.filter((item): item is MatchedNotice => item !== null))
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [bookmarkedIds])
 
   return (
     <div className={styles.page}>
@@ -19,17 +45,23 @@ export function BookmarksPage() {
       <div className={styles.body}>
         <div className={styles.heading}>북마크한 공고</div>
         <div className={styles.subheading}>
-          북마크 <span>{bookmarkedNotices.length}</span>건
+          북마크 <span>{notices.length}</span>건
         </div>
 
-        {bookmarkedNotices.length > 0 ? (
+        {loading ? (
+          <div className={styles.empty}>불러오는 중이에요…</div>
+        ) : notices.length > 0 ? (
           <div className={styles.list}>
-            {bookmarkedNotices.map((notice) => (
+            {notices.map((notice) => (
               <NoticeCard
                 key={notice.id}
                 notice={notice}
                 selected={false}
-                onClick={() => navigate(resultDetailPath(notice.id))}
+                onClick={() => {
+                  if (notice.sourceUrl) {
+                    window.open(notice.sourceUrl, '_blank', 'noreferrer')
+                  }
+                }}
               />
             ))}
           </div>

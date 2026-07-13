@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     KSTARTUP_REQUEST_TIMEOUT_SECONDS: int = 15
     KSTARTUP_MAX_RETRIES: int = 3
 
+    MSIT_API_KEY: str = ""
+    MSIT_API_URL: str = (
+        "https://apis.data.go.kr/1721000/msitannouncementinfo/businessAnnouncMentList"
+    )
+    # 문서상 http로 나와있지만 실제로는 https가 아니면 400(Request Blocked)이
+    # 반환되는 것을 실측으로 확인함(2026-07-13).
+    MSIT_PAGE_SIZE: int = 100
+    MSIT_REQUEST_TIMEOUT_SECONDS: int = 15
+    MSIT_MAX_RETRIES: int = 3
+
     CLOVA_OCR_INVOKE_URL: str = ""
     CLOVA_OCR_SECRET_KEY: str = ""
     CLOVA_OCR_TIMEOUT_SECONDS: int = 30
@@ -66,6 +76,10 @@ class Settings(BaseSettings):
     KAKAO_AUTHORIZE_URL: str = "https://kauth.kakao.com/oauth/authorize"
     KAKAO_TOKEN_URL: str = "https://kauth.kakao.com/oauth/token"
     KAKAO_USER_INFO_URL: str = "https://kapi.kakao.com/v2/user/me"
+    KAKAO_UNLINK_URL: str = "https://kapi.kakao.com/v1/user/unlink"
+    KAKAO_ADMIN_KEY: str = ""
+    """카카오 개발자 콘솔의 Admin 키. 회원탈퇴 시 연결 끊기(unlink)에 쓴다.
+    비어 있으면 unlink를 건너뛴다(로컬 개발용)."""
     KAKAO_REQUEST_TIMEOUT_SECONDS: int = 10
 
     # JWT (자체 발급 토큰)

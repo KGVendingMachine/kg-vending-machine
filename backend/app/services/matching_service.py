@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -16,6 +17,8 @@ from app.repositories import match_log_repository
 from app.schemas.business_plan import NormalizedBusinessPlanSchema
 from app.schemas.notice_normalization import NormalizedNoticeSchema
 
+logger = logging.getLogger(__name__)
+
 _QUALITY_REQUIRED_FIELDS: tuple[str, ...] = (
     "basic.title",
     "support.summary",
@@ -28,6 +31,15 @@ _QUALITY_REQUIRED_FIELDS: tuple[str, ...] = (
 
 _TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
 _ALL_REGIONS = {"전국", "ALL", "all", "전체", "전 지역", "nationwide"}
+
+
+class MatchingNotReadyError(Exception):
+    """매칭을 실행할 수 있는 공고가 없어 점수 산출이 불가능할 때 발생.
+
+    정규화된 공고가 아예 없거나(수집만 되고 정규화 배치를 안 돌린 상태),
+    전부 품질 기준 미달인 경우다. 사용자가 아니라 운영 쪽에서 공고 정규화를
+    돌려야 해결되므로, 빈 결과로 조용히 완료하지 않고 명시적으로 실패시킨다.
+    """
 
 
 @dataclass(frozen=True)
@@ -412,15 +424,44 @@ async def run_matching(
 ) -> list[MatchResult]:
     normalized_plan = _parse_business_plan(plan)
     candidates = await match_log_repository.list_normalized_notice_candidates(session)
+    logger.info(
+        "매칭 시작 (match_log_id=%s, business_plan_id=%s): 정규화 완료 후보 공고 %d건",
+        log.id,
+        plan.id,
+        len(candidates),
+    )
+
+    if not candidates:
+        logger.warning(
+            "매칭 불가 (match_log_id=%s): 정규화 완료된 공고가 0건 — 공고 정규화"
+            " 배치(POST /internal/notices/normalize/batch)를 먼저 실행해야 한다",
+            log.id,
+        )
+        raise MatchingNotReadyError(
+            "매칭할 수 있는 공고가 없습니다. 공고 정규화가 완료된 뒤 다시 시도해주세요."
+        )
+
+    # docs/matching-pipeline.md "로깅 요구사항" — 1차 필터링(품질 필터 +
+    # 자격요건 필터) 단계는 별도 엔드포인트 없이 이 루프 안에 통합돼 있어,
+    # 어느 기준에서 몇 건이 걸러졌는지는 로그로만 추적할 수 있다.
+    quality_failed: dict[int, list[str]] = {}
+    parse_failed_ids: list[int] = []
+    eligibility_counts: dict[str, int] = {
+        "eligible": 0,
+        "needs_review": 0,
+        "likely_ineligible": 0,
+    }
 
     scored: list[ScoredNotice] = []
     for notice in candidates:
         quality_errors = _quality_errors(notice.normalized_json or {})
         if quality_errors:
+            quality_failed[notice.id] = quality_errors
             continue
 
         normalized_notice = _parse_notice(notice)
         if normalized_notice is None:
+            parse_failed_ids.append(notice.id)
             continue
 
         result = _score_notice(
@@ -430,12 +471,98 @@ async def run_matching(
             normalized_notice=normalized_notice,
         )
         result.recommendation_run_id = log.id
+        if result.eligibility_status in eligibility_counts:
+            eligibility_counts[result.eligibility_status] += 1
         scored.append(ScoredNotice(notice=notice, result=result))
+        logger.debug(
+            "공고 %s 점수: total=%s (자격=%s/아이템=%s/사업화=%s/성장=%s/가점=%s,"
+            " 자격상태=%s, 일치키워드=%s)",
+            notice.id,
+            result.total_score,
+            result.eligibility_score,
+            result.item_fit_score,
+            result.business_fit_score,
+            result.growth_score,
+            result.bonus_score,
+            result.eligibility_status,
+            (result.result_json or {}).get("matched_keywords"),
+        )
+
+    if not scored:
+        logger.warning(
+            "매칭 불가 (match_log_id=%s): 후보 %d건 전부 품질 기준 미달 또는 파싱 실패",
+            log.id,
+            len(candidates),
+        )
+        raise MatchingNotReadyError(
+            "매칭 기준을 충족하는 공고가 없습니다. 공고 정규화 품질을 확인해주세요."
+        )
 
     scored.sort(key=lambda item: item.result.total_score or Decimal("0"), reverse=True)
     selected = [item.result for item in scored[:max_results]]
+
+    logger.info(
+        "1차 필터링 [match_log_id=%s] 품질 필터: 입력 %d건 중 통과 %d건, 제외 %d건",
+        log.id,
+        len(candidates),
+        len(candidates) - len(quality_failed),
+        len(quality_failed),
+    )
+    if quality_failed:
+        missing_field_counts: dict[str, int] = {}
+        for errors in quality_failed.values():
+            for field_path in errors:
+                missing_field_counts[field_path] = (
+                    missing_field_counts.get(field_path, 0) + 1
+                )
+        logger.info(
+            "1차 필터링 [match_log_id=%s] 품질 필터 제외 사유별 건수: %s",
+            log.id,
+            missing_field_counts,
+        )
+    if parse_failed_ids:
+        logger.info(
+            "1차 필터링 [match_log_id=%s] 정규화 스키마 파싱 실패로 추가 제외: "
+            "%d건 (notice_id=%s)",
+            log.id,
+            len(parse_failed_ids),
+            parse_failed_ids,
+        )
+    logger.info(
+        "1차 필터링 [match_log_id=%s] 자격요건 필터 분포 (통과 %d건 중): "
+        "eligible=%d, needs_review=%d, likely_ineligible=%d"
+        " (likely_ineligible은 제외 대신 총점 49점 캡)",
+        log.id,
+        len(scored),
+        eligibility_counts["eligible"],
+        eligibility_counts["needs_review"],
+        eligibility_counts["likely_ineligible"],
+    )
+    logger.info(
+        "1차 필터링 [match_log_id=%s] 완료: 필터 통과 %d건 중 상위 %d건 선정, "
+        "notice_id=%s",
+        log.id,
+        len(scored),
+        len(selected),
+        [item.notice_id for item in selected],
+    )
+
     await match_log_repository.replace_results(session, log.id, selected)
 
     log.run_status = "completed"
     log.completed_at = _now_naive()
+    logger.info(
+        "매칭 완료 (match_log_id=%s): 점수 산출 %d건 중 상위 %d건 저장 — %s",
+        log.id,
+        len(scored),
+        len(selected),
+        [
+            (
+                item.notice.id,
+                str(item.result.total_score),
+                item.result.recommendation_level,
+            )
+            for item in scored[:max_results]
+        ],
+    )
     return selected

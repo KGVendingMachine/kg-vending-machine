@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiFetch } from '../../api/client'
+import { getMe, logout, withdrawAccount, type AuthUser } from '../../api/auth'
+import { ApiError } from '../../api/client'
 import {
   getMyCompanyProfile,
   type CompanyProfile,
@@ -11,21 +12,38 @@ import styles from './MyPage.module.css'
 
 const EMPTY = '—'
 
+const WITHDRAW_ERROR_FALLBACK =
+  '탈퇴 처리 중 문제가 발생했습니다. 잠시 후 다시 시도해주세요.'
+
 export function MyPage() {
   const navigate = useNavigate()
   const [profile, setProfile] = useState<CompanyProfile | null>(null)
+  const [user, setUser] = useState<AuthUser | null>(null)
   const [loading, setLoading] = useState(true)
+  const [showWithdrawConfirm, setShowWithdrawConfirm] = useState(false)
+  const [withdrawing, setWithdrawing] = useState(false)
+  const [withdrawError, setWithdrawError] = useState<string | null>(null)
 
-  // 마운트 시 본인 기업 프로필을 조회한다. 인증 쿠키가 없으면 apiFetch가
+  // 마운트 시 본인 유저·기업 프로필을 조회한다. 인증 쿠키가 없으면 apiFetch가
   // refresh 실패 후 로그인 페이지로 보낸다(여기서 별도 처리 불필요).
   useEffect(() => {
     let active = true
-    getMyCompanyProfile()
-      .then((data) => {
-        if (active) setProfile(data)
-      })
-      .catch(() => {
-        // 조회 실패 시 프로필 없음으로 둔다.
+    Promise.all([
+      getMyCompanyProfile().catch(() => null),
+      getMe()
+        .then((data) => {
+          console.log('getMe() 응답:', data)
+          return data
+        })
+        .catch((err) => {
+          console.log('getMe() 실패:', err)
+          return null
+        }),
+    ])
+      .then(([profileData, userData]) => {
+        if (!active) return
+        setProfile(profileData)
+        setUser(userData)
       })
       .finally(() => {
         if (active) setLoading(false)
@@ -39,11 +57,27 @@ export function MyPage() {
     // 서버가 인증 쿠키를 삭제하게 한다. 실패하더라도(이미 만료 등) 사용자
     // 의도는 로그아웃이므로 어느 경우든 루트 페이지로 보낸다.
     try {
-      await apiFetch('/api/auth/logout', { method: 'POST' })
+      await logout()
     } catch {
       // 무시하고 이동한다.
     } finally {
       navigate(PATHS.LANDING)
+    }
+  }
+
+  async function handleWithdraw(): Promise<void> {
+    setWithdrawing(true)
+    setWithdrawError(null)
+    try {
+      await withdrawAccount()
+      navigate(PATHS.LANDING)
+    } catch (error) {
+      const message =
+        error instanceof ApiError && typeof error.body === 'object'
+          ? ((error.body as { detail?: string } | null)?.detail ?? null)
+          : null
+      setWithdrawError(message ?? WITHDRAW_ERROR_FALLBACK)
+      setWithdrawing(false)
     }
   }
 
@@ -58,9 +92,11 @@ export function MyPage() {
           <span className={styles.avatar} />
           <div>
             <div className={styles.name}>
-              {profile?.representative_name ?? '내 기업 프로필'}
+              {profile?.representative_name ?? user?.nickname ?? '내 기업 프로필'}
             </div>
-            <div className={styles.subtext}>카카오 계정으로 로그인됨</div>
+            <div className={styles.subtext}>
+              {user?.nickname ? `${user.nickname} · ` : ''}카카오 계정으로 로그인됨
+            </div>
           </div>
         </div>
 
@@ -98,14 +134,60 @@ export function MyPage() {
           </button>
         </div>
 
-        <button
-          type="button"
-          className={styles.logoutButton}
-          onClick={handleLogout}
-        >
-          로그아웃
-        </button>
+        <div className={styles.actions}>
+          <button
+            type="button"
+            className={styles.withdrawLink}
+            onClick={() => setShowWithdrawConfirm(true)}
+          >
+            회원탈퇴
+          </button>
+          <button
+            type="button"
+            className={styles.logoutButton}
+            onClick={handleLogout}
+          >
+            로그아웃
+          </button>
+        </div>
       </div>
+
+      {showWithdrawConfirm && (
+        <div className={styles.overlay}>
+          <div className={styles.confirmCard}>
+            <div className={styles.confirmTitle}>정말 탈퇴하시겠어요?</div>
+            <div className={styles.confirmBody}>
+              탈퇴 시 카카오 계정 연결이 해제되고 개인정보가 삭제됩니다.
+              <br />
+              작성한 기업 프로필과 매칭 기록은 복구할 수 없습니다.
+            </div>
+            {withdrawError && (
+              <div className={styles.confirmError}>{withdrawError}</div>
+            )}
+            <div className={styles.confirmActions}>
+              <button
+                type="button"
+                className={styles.cancelButton}
+                onClick={() => {
+                  setShowWithdrawConfirm(false)
+                  setWithdrawError(null)
+                }}
+                disabled={withdrawing}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                className={styles.confirmWithdrawButton}
+                onClick={handleWithdraw}
+                disabled={withdrawing}
+              >
+                {withdrawing ? '탈퇴 처리 중…' : '탈퇴하기'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
