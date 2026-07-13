@@ -16,7 +16,6 @@ import {
 import type { MatchLog } from '../../api/matchLogs'
 import { ApiError } from '../../api/client'
 import { STEP_LABELS } from '../../constants/analysisSteps'
-import styles from './AnalysisProgressPage.module.css'
 
 const POLL_INTERVAL_MS = 2000
 // 일시적 네트워크 오류 1회로 실패 처리하지 않도록, 상태 조회(GET)가 연속으로
@@ -95,6 +94,20 @@ function buildLogLines(phase: Phase): LogLine[] {
     case 'failed':
       return []
   }
+}
+
+type StepState = 'done' | 'active' | 'pending'
+
+const CIRCLE_STATE_CLASS: Record<StepState, string> = {
+  done: 'bg-success text-white',
+  active: 'border-[3px] border-primary border-t-transparent animate-spin',
+  pending: 'border-2 border-border-strong text-[#c8cdd3]',
+}
+
+const STEP_STATUS_TEXT_CLASS: Record<StepState, string> = {
+  done: 'text-success',
+  active: 'text-primary',
+  pending: 'text-[#b0b5bb]',
 }
 
 function apiErrorDetail(error: unknown): string | null {
@@ -307,10 +320,10 @@ export function AnalysisProgressPage() {
   }
 
   return (
-    <div className={styles.page}>
+    <div className="flex flex-1 flex-col">
       <AppHeader />
-      <div className={styles.body}>
-        <div className={styles.heading}>
+      <div className="mx-auto box-border w-full max-w-[1000px] px-15 py-12">
+        <div className="text-[22px] font-extrabold tracking-[-0.5px]">
           {analyzed
             ? '분석이 완료됐어요'
             : phase === 'matching'
@@ -321,7 +334,7 @@ export function AnalysisProgressPage() {
                   ? '분석 중 문제가 발생했어요'
                   : '사업계획서를 분석하고 있어요'}
         </div>
-        <div className={styles.subheading}>
+        <div className="mt-1.5 text-sm text-muted">
           {analyzed
             ? '공고 매칭을 시작하거나, 이전 매칭 결과를 다시 볼 수 있어요.'
             : phase === 'matched'
@@ -329,13 +342,15 @@ export function AnalysisProgressPage() {
               : '보통 1~2분 정도 걸려요. 창을 닫아도 분석은 계속됩니다.'}
         </div>
 
-        <div className={styles.stepper}>
+        <div className="mt-11 flex items-center">
           {STEP_LABELS.map((label, index) => {
             const status = stepStatus(index)
             return (
               <Fragment key={label}>
-                <div className={styles.step}>
-                  <div className={`${styles.circle} ${styles[status]}`}>
+                <div className="flex w-[140px] shrink-0 flex-col items-center gap-2.5">
+                  <div
+                    className={`flex h-11 w-11 items-center justify-center rounded-full font-bold ${CIRCLE_STATE_CLASS[status]}`}
+                  >
                     {status === 'done'
                       ? '✓'
                       : status === 'active'
@@ -345,15 +360,15 @@ export function AnalysisProgressPage() {
                   <div
                     className={
                       status === 'active'
-                        ? `${styles.stepLabel} ${styles.activeLabel}`
+                        ? 'text-[13px] font-bold text-primary'
                         : status === 'pending'
-                          ? `${styles.stepLabel} ${styles.pendingLabel}`
-                          : styles.stepLabel
+                          ? 'text-[13px] font-bold text-faint'
+                          : 'text-[13px] font-bold'
                     }
                   >
                     {label}
                   </div>
-                  <div className={`${styles.stepStatus} ${styles[status]}`}>
+                  <div className={`text-[11px] ${STEP_STATUS_TEXT_CLASS[status]}`}>
                     {status === 'done'
                       ? '완료'
                       : status === 'active'
@@ -365,8 +380,8 @@ export function AnalysisProgressPage() {
                   <div
                     className={
                       stepStatus(index) === 'done'
-                        ? `${styles.connector} ${styles.done}`
-                        : styles.connector
+                        ? 'h-0.5 flex-1 bg-success'
+                        : 'h-0.5 flex-1 bg-border'
                     }
                   />
                 ) : null}
@@ -375,32 +390,32 @@ export function AnalysisProgressPage() {
           })}
         </div>
 
-        <div className={styles.log}>
-          <div className={styles.logHeader}>
-            <span className={styles.logTitle}>진행 상황</span>
-            <span className={styles.logPercent}>{progress}%</span>
+        <div className="mt-11 rounded-md border border-border bg-surface-subtle px-6 py-5">
+          <div className="mb-3.5 flex items-center justify-between">
+            <span className="text-[13px] font-bold text-muted">진행 상황</span>
+            <span className="text-[13px] font-bold text-primary">{progress}%</span>
           </div>
-          <div className={styles.progressBar}>
+          <div className="mb-4 h-1.5 overflow-hidden rounded-[3px] bg-border">
             <div
-              className={styles.progressFill}
+              className="h-full bg-primary transition-[width] duration-200 ease-linear"
               style={{ width: `${progress}%` }}
             />
           </div>
-          <div className={styles.logText}>
+          <div className="text-[13px] text-muted">
             {failed ? (
-              <div className={styles.logLine}>{error}</div>
+              <div className="py-0.5">{error}</div>
             ) : (
               logLines.map((line) => (
                 <div
                   key={line.text}
-                  className={line.active ? styles.logLineActive : styles.logLine}
+                  className={line.active ? 'py-0.5 font-semibold text-primary' : 'py-0.5'}
                 >
                   {line.text}
                 </div>
               ))
             )}
           </div>
-          <div className={styles.logFootnote}>
+          <div className="mt-4 text-xs text-faint">
             연결이 잠시 끊겨도 자동으로 다시 확인해요. 분석이 실패하면 다시
             시도 버튼이 나타나요.
           </div>
@@ -409,14 +424,16 @@ export function AnalysisProgressPage() {
         {matchStage ? (
           <>
             {matchError ? (
-              <div className={styles.matchError}>{matchError}</div>
+              <div className="mt-5 rounded-md border border-[#fecaca] bg-[#fef2f2] px-4 py-3 text-[13px] text-[#b91c1c]">
+                {matchError}
+              </div>
             ) : null}
             <button
               type="button"
               className={
                 phase === 'matched'
-                  ? styles.secondaryButton
-                  : styles.resultButton
+                  ? 'h-12 cursor-pointer rounded border border-border-strong bg-white px-7 text-[15px] font-semibold text-muted'
+                  : 'mt-7 h-12 cursor-pointer rounded bg-primary px-7 text-[15px] font-bold text-white'
               }
               onClick={handleStartMatch}
               disabled={phase === 'matching'}
@@ -429,14 +446,14 @@ export function AnalysisProgressPage() {
             </button>
 
             {matchLogs && matchLogs.length > 0 ? (
-              <div className={styles.history}>
-                <div className={styles.historyTitle}>
+              <div className="mt-9">
+                <div className="text-[15px] font-extrabold">
                   {phase === 'matched' ? '매칭 기록' : '이전 매칭 기록'}
                 </div>
-                <div className={styles.historySub}>
+                <div className="mt-1 text-[13px] text-muted">
                   새로 매칭하지 않아도 지난 결과를 바로 볼 수 있어요.
                 </div>
-                <div className={styles.historyList}>
+                <div className="mt-3.5 flex flex-col gap-2">
                   {matchLogs.map((log) => {
                     const isNew = log.id === newMatchLogId
                     return (
@@ -445,21 +462,23 @@ export function AnalysisProgressPage() {
                         key={log.id}
                         className={
                           isNew
-                            ? `${styles.historyItem} ${styles.historyItemNew}`
-                            : styles.historyItem
+                            ? 'flex cursor-pointer items-center gap-3.5 rounded-md border border-primary bg-primary-soft px-[18px] py-3.5 text-left text-[13px] hover:border-primary'
+                            : 'flex cursor-pointer items-center gap-3.5 rounded-md border border-border bg-white px-[18px] py-3.5 text-left text-[13px] hover:border-primary'
                         }
                         onClick={() => navigate(resultsPath(log.id))}
                       >
                         {isNew ? (
-                          <span className={styles.newBadge}>NEW</span>
+                          <span className="shrink-0 rounded-[3px] bg-primary px-1.5 py-0.5 text-[10px] font-extrabold text-white">
+                            NEW
+                          </span>
                         ) : null}
-                        <span className={styles.historyItemTitle}>
+                        <span className="min-w-0 flex-1 truncate font-bold">
                           {log.business_plan_title ?? '사업계획서'}
                         </span>
-                        <span className={styles.historyItemDate}>
+                        <span className="shrink-0 text-muted">
                           {formatMatchLogDate(log.created_at)}
                         </span>
-                        <span className={styles.historyItemArrow}>
+                        <span className="shrink-0 font-bold text-primary">
                           결과 보기 →
                         </span>
                       </button>
@@ -469,7 +488,7 @@ export function AnalysisProgressPage() {
                 {hasMoreLogs ? (
                   <button
                     type="button"
-                    className={styles.historyMore}
+                    className="mt-2.5 w-full cursor-pointer rounded-md border border-dashed border-border-strong bg-transparent px-0 py-2.5 text-[13px] font-semibold text-muted hover:border-primary hover:text-primary disabled:cursor-default disabled:text-faint"
                     onClick={handleLoadMoreLogs}
                     disabled={loadingMoreLogs}
                   >
@@ -481,17 +500,17 @@ export function AnalysisProgressPage() {
           </>
         ) : null}
         {failed ? (
-          <div className={styles.failedActions}>
+          <div className="mt-7 flex gap-3">
             <button
               type="button"
-              className={styles.resultButton}
+              className="h-12 cursor-pointer rounded bg-primary px-7 text-[15px] font-bold text-white"
               onClick={handleRetry}
             >
               다시 시도
             </button>
             <button
               type="button"
-              className={styles.secondaryButton}
+              className="h-12 cursor-pointer rounded border border-border-strong bg-white px-7 text-[15px] font-semibold text-muted"
               onClick={() => navigate(PATHS.UPLOAD)}
             >
               다시 업로드하기

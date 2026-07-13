@@ -12,7 +12,10 @@ import {
   REGIONS,
 } from '../../constants/companyProfileOptions'
 import { PATHS } from '../../routes/paths'
-import styles from './CompanyProfilePage.module.css'
+
+const FIELD_LABEL_CLASS = 'mb-1.5 block text-xs text-muted'
+const FIELD_INPUT_CLASS =
+  'h-[42px] w-full rounded border border-border-strong bg-white px-3 text-sm text-ink disabled:cursor-not-allowed disabled:bg-surface-subtle disabled:text-faint'
 
 export function CompanyProfilePage() {
   const navigate = useNavigate()
@@ -125,28 +128,32 @@ export function CompanyProfilePage() {
   }
 
   return (
-    <div className={styles.page}>
-      <div className={styles.body}>
-        <div className={styles.card}>
-          <div className={styles.heading}>기업 프로필을 알려주세요</div>
-          <div className={styles.subheading}>
+    <div className="flex flex-1 flex-col">
+      <div className="flex flex-1 items-center justify-center p-6">
+        <div className="w-[520px] max-w-full rounded-lg border border-border bg-white p-11 shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
+          <div className="text-[22px] font-extrabold tracking-[-0.5px]">
+            기업 프로필을 알려주세요
+          </div>
+          <div className="mt-1.5 text-sm leading-normal text-muted">
             정확한 매칭을 위해 몇 가지만 입력해주세요. 선택 입력이며, 비워두면
             사업계획서에서 자동으로 채워요.
           </div>
 
-          <div className={styles.formFields}>
-            <div className={styles.fieldRow}>
-              <div className={styles.field}>
-                <label>대표자명</label>
+          <div className="mt-7 flex flex-col gap-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={FIELD_LABEL_CLASS}>대표자명</label>
                 <input
+                  className={FIELD_INPUT_CLASS}
                   value={representativeName}
                   placeholder="예: 홍길동"
                   onChange={(event) => setRepresentativeName(event.target.value)}
                 />
               </div>
-              <div className={styles.field}>
-                <label>사업자등록번호</label>
+              <div>
+                <label className={FIELD_LABEL_CLASS}>사업자등록번호</label>
                 <input
+                  className={FIELD_INPUT_CLASS}
                   value={businessRegistrationNumber}
                   placeholder="예: 000-00-00000"
                   disabled={isPreFounder}
@@ -156,10 +163,11 @@ export function CompanyProfilePage() {
                 />
               </div>
             </div>
-            <div className={styles.fieldRow}>
-              <div className={styles.field}>
-                <label>사업자 유형</label>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={FIELD_LABEL_CLASS}>사업자 유형</label>
                 <select
+                  className={FIELD_INPUT_CLASS}
                   value={businessType}
                   onChange={(event) =>
                     handleBusinessTypeChange(event.target.value)
@@ -173,9 +181,10 @@ export function CompanyProfilePage() {
                   ))}
                 </select>
               </div>
-              <div className={styles.field}>
-                <label>기업 단계</label>
+              <div>
+                <label className={FIELD_LABEL_CLASS}>기업 단계</label>
                 <select
+                  className={FIELD_INPUT_CLASS}
                   value={companyStage}
                   disabled={isPreFounder}
                   onChange={(event) => setCompanyStage(event.target.value)}
@@ -189,9 +198,10 @@ export function CompanyProfilePage() {
                 </select>
               </div>
             </div>
-            <div className={styles.field}>
-              <label>업종 (한국표준산업분류)</label>
+            <div>
+              <label className={FIELD_LABEL_CLASS}>업종 (한국표준산업분류)</label>
               <select
+                className={FIELD_INPUT_CLASS}
                 value={industryCode}
                 onChange={(event) => setIndustryCode(event.target.value)}
               >
@@ -203,9 +213,10 @@ export function CompanyProfilePage() {
                 ))}
               </select>
             </div>
-            <div className={styles.field}>
-              <label>지역</label>
+            <div>
+              <label className={FIELD_LABEL_CLASS}>지역</label>
               <select
+                className={FIELD_INPUT_CLASS}
                 value={region}
                 onChange={(event) => setRegion(event.target.value)}
               >
@@ -217,19 +228,21 @@ export function CompanyProfilePage() {
                 ))}
               </select>
             </div>
-            <div className={styles.fieldRow}>
-              <div className={styles.field}>
-                <label>설립연도</label>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={FIELD_LABEL_CLASS}>설립연도</label>
                 <input
+                  className={FIELD_INPUT_CLASS}
                   value={foundedYear}
                   placeholder="예: 2021"
                   disabled={isPreFounder}
                   onChange={(event) => setFoundedYear(event.target.value)}
                 />
               </div>
-              <div className={styles.field}>
-                <label>기업 규모</label>
+              <div>
+                <label className={FIELD_LABEL_CLASS}>기업 규모</label>
                 <select
+                  className={FIELD_INPUT_CLASS}
                   value={companySize}
                   disabled={isPreFounder}
                   onChange={(event) => setCompanySize(event.target.value)}
@@ -241,19 +254,21 @@ export function CompanyProfilePage() {
                 </select>
               </div>
             </div>
-            <div className={styles.fieldRow}>
-              <div className={styles.field}>
-                <label>상시근로자 수</label>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={FIELD_LABEL_CLASS}>상시근로자 수</label>
                 <input
+                  className={FIELD_INPUT_CLASS}
                   value={employeeCount}
                   placeholder="예: 15"
                   disabled={isPreFounder}
                   onChange={(event) => setEmployeeCount(event.target.value)}
                 />
               </div>
-              <div className={styles.field}>
-                <label>매출액 (억원)</label>
+              <div>
+                <label className={FIELD_LABEL_CLASS}>매출액 (억원)</label>
                 <input
+                  className={FIELD_INPUT_CLASS}
                   value={annualRevenue}
                   placeholder="예: 12"
                   disabled={isPreFounder}
@@ -261,23 +276,23 @@ export function CompanyProfilePage() {
                 />
               </div>
             </div>
-            <div className={styles.hint}>
+            <div className="rounded bg-surface-subtle p-3 text-xs leading-[1.6] text-faint">
               입력값은 계획서에서 추출한 정보를 보완하는 데 쓰여요. 비워두면
               문서에서 자동 추론합니다.
             </div>
           </div>
 
-          <div className={styles.actions}>
+          <div className="mt-8 flex justify-end gap-2.5">
             <button
               type="button"
-              className={styles.secondaryButton}
+              className="h-[46px] cursor-pointer rounded border border-border-strong bg-white px-[22px] text-[15px] font-semibold text-muted"
               onClick={goToUpload}
             >
               건너뛰기
             </button>
             <button
               type="button"
-              className={styles.primaryButton}
+              className="h-[46px] cursor-pointer rounded border-0 bg-primary px-7 text-[15px] font-bold text-white"
               onClick={handleSave}
               disabled={saving || loading}
             >
