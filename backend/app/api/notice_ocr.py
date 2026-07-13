@@ -28,21 +28,14 @@ OCR한다(2026-07-11 프로토타입 범위 결정, `_pick_ocr_target` 참고) �
 """
 
 import asyncio
-import tempfile
 import uuid
-from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.crawler.bizinfo_client import download_bizinfo_attachment
-from app.crawler.kstartup_attachment_client import (
-    download_kstartup_attachment,
-    fetch_kstartup_attachments,
-)
+from app.crawler.kstartup_attachment_client import fetch_kstartup_attachments
 from app.db.session import async_session_factory, get_db
 from app.models.notice import NoticeAttachment
-from app.ocr.extract import extract_text
 from app.repositories.notice_repository import (
     get_notice_attachment,
     get_notice_attachments,
@@ -60,14 +53,13 @@ from app.schemas.notice_ocr import (
     NoticeOcrJobStatus,
     NoticeOcrJobStatusResponse,
 )
+from app.services.notice_attachment_download import download_and_extract_attachment
 from app.services.notice_collection_service import KSTARTUP_SOURCE_NAME
 from app.services.notice_ocr_target import pick_ocr_target as _pick_ocr_target
 
 router = APIRouter(prefix="/internal/notices", tags=["internal-notices"])
 
 _JOBS: dict[str, NoticeOcrJobStatusResponse] = {}
-
-_SUFFIX_BY_FILE_TYPE = {"PDF": ".pdf", "HWP": ".hwp", "HWPX": ".hwpx"}
 
 
 def _file_type_from_name(file_name: str) -> str | None:
@@ -167,42 +159,19 @@ async def _run_notice_ocr_job(job_id: str, notice_id: int) -> None:
         return
 
     attachment_id = target.id
-    attachment_file_url = target.file_url
-    attachment_file_type = target.file_type
     attachment_file_name = target.file_name
 
     try:
-        if source_name == KSTARTUP_SOURCE_NAME:
-            data = await download_kstartup_attachment(attachment_file_url)
-        else:
-            data = await download_bizinfo_attachment(attachment_file_url)
+        text = await download_and_extract_attachment(source_name, target)
     except Exception as exc:
         _JOBS[job_id] = NoticeOcrJobStatusResponse(
             job_id=job_id,
             notice_id=notice_id,
             status=NoticeOcrJobStatus.FAILED,
             attachment_id=attachment_id,
-            error_message=f"첨부파일 다운로드 실패: {exc}",
+            error_message=f"첨부파일 다운로드/OCR 실패: {exc}",
         )
         return
-
-    suffix = _SUFFIX_BY_FILE_TYPE.get(attachment_file_type or "", ".pdf")
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp_path = tmp.name
-    try:
-        Path(tmp_path).write_bytes(data)
-        text, _ = await extract_text(tmp_path)
-    except Exception as exc:
-        _JOBS[job_id] = NoticeOcrJobStatusResponse(
-            job_id=job_id,
-            notice_id=notice_id,
-            status=NoticeOcrJobStatus.FAILED,
-            attachment_id=attachment_id,
-            error_message=f"OCR 실패: {exc}",
-        )
-        return
-    finally:
-        Path(tmp_path).unlink(missing_ok=True)
 
     async with async_session_factory() as session:
         saved = await set_attachment_parsed_text(session, attachment_id, text)
