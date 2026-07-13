@@ -10,8 +10,12 @@ export const PATHS = {
   MYPAGE: '/mypage',
 } as const
 
-export function resultDetailPath(noticeId: string): string {
-  return `/results/${noticeId}`
+/**
+ * 매칭 상세 페이지 경로. 점수·추천 근거는 공고 단독이 아니라 특정 매칭
+ * 실행(match_log) 기준이라 matchLogId를 함께 실어야 한다.
+ */
+export function resultDetailPath(noticeId: number, matchLogId: number): string {
+  return `/results/${noticeId}?matchLogId=${matchLogId}`
 }
 
 /**

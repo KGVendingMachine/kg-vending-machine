@@ -17,6 +17,8 @@ from app.repositories import match_log_repository
 from app.schemas.business_plan import NormalizedBusinessPlanSchema
 from app.schemas.notice_normalization import NormalizedNoticeSchema
 
+logger = logging.getLogger(__name__)
+
 _QUALITY_REQUIRED_FIELDS: tuple[str, ...] = (
     "basic.title",
     "support.summary",
@@ -26,8 +28,6 @@ _QUALITY_REQUIRED_FIELDS: tuple[str, ...] = (
     "matching.suitable_company_profile",
     "matching.matching_signals",
 )
-
-logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
 _ALL_REGIONS = {"전국", "ALL", "all", "전체", "전 지역", "nationwide"}
@@ -368,7 +368,17 @@ async def run_matching(
             "매칭할 수 있는 공고가 없습니다. 공고 정규화가 완료된 뒤 다시 시도해주세요."
         )
 
+    # docs/matching-pipeline.md "로깅 요구사항" — 1차 필터링(품질 필터 +
+    # 자격요건 필터) 단계는 별도 엔드포인트 없이 이 루프 안에 통합돼 있어,
+    # 어느 기준에서 몇 건이 걸러졌는지는 로그로만 추적할 수 있다.
     quality_failed: dict[int, list[str]] = {}
+    parse_failed_ids: list[int] = []
+    eligibility_counts: dict[str, int] = {
+        "eligible": 0,
+        "needs_review": 0,
+        "likely_ineligible": 0,
+    }
+
     scored: list[ScoredNotice] = []
     for notice in candidates:
         quality_errors = _quality_errors(notice.normalized_json or {})
@@ -378,6 +388,7 @@ async def run_matching(
 
         normalized_notice = _parse_notice(notice)
         if normalized_notice is None:
+            parse_failed_ids.append(notice.id)
             continue
 
         result = _score_notice(
@@ -387,6 +398,8 @@ async def run_matching(
             normalized_notice=normalized_notice,
         )
         result.recommendation_run_id = log.id
+        if result.eligibility_status in eligibility_counts:
+            eligibility_counts[result.eligibility_status] += 1
         scored.append(ScoredNotice(notice=notice, result=result))
         logger.debug(
             "공고 %s 점수: total=%s (자격=%s/아이템=%s/사업화=%s/성장=%s/가점=%s,"
@@ -402,16 +415,9 @@ async def run_matching(
             (result.result_json or {}).get("matched_keywords"),
         )
 
-    if quality_failed:
-        logger.info(
-            "품질 게이트 미달로 제외 %d건: %s",
-            len(quality_failed),
-            {nid: errs for nid, errs in list(quality_failed.items())[:10]},
-        )
-
     if not scored:
         logger.warning(
-            "매칭 불가 (match_log_id=%s): 후보 %d건 전부 품질 기준 미달",
+            "매칭 불가 (match_log_id=%s): 후보 %d건 전부 품질 기준 미달 또는 파싱 실패",
             log.id,
             len(candidates),
         )
@@ -421,6 +427,53 @@ async def run_matching(
 
     scored.sort(key=lambda item: item.result.total_score or Decimal("0"), reverse=True)
     selected = [item.result for item in scored[:max_results]]
+
+    logger.info(
+        "1차 필터링 [match_log_id=%s] 품질 필터: 입력 %d건 중 통과 %d건, 제외 %d건",
+        log.id,
+        len(candidates),
+        len(candidates) - len(quality_failed),
+        len(quality_failed),
+    )
+    if quality_failed:
+        missing_field_counts: dict[str, int] = {}
+        for errors in quality_failed.values():
+            for field_path in errors:
+                missing_field_counts[field_path] = (
+                    missing_field_counts.get(field_path, 0) + 1
+                )
+        logger.info(
+            "1차 필터링 [match_log_id=%s] 품질 필터 제외 사유별 건수: %s",
+            log.id,
+            missing_field_counts,
+        )
+    if parse_failed_ids:
+        logger.info(
+            "1차 필터링 [match_log_id=%s] 정규화 스키마 파싱 실패로 추가 제외: "
+            "%d건 (notice_id=%s)",
+            log.id,
+            len(parse_failed_ids),
+            parse_failed_ids,
+        )
+    logger.info(
+        "1차 필터링 [match_log_id=%s] 자격요건 필터 분포 (통과 %d건 중): "
+        "eligible=%d, needs_review=%d, likely_ineligible=%d"
+        " (likely_ineligible은 제외 대신 총점 49점 캡)",
+        log.id,
+        len(scored),
+        eligibility_counts["eligible"],
+        eligibility_counts["needs_review"],
+        eligibility_counts["likely_ineligible"],
+    )
+    logger.info(
+        "1차 필터링 [match_log_id=%s] 완료: 필터 통과 %d건 중 상위 %d건 선정, "
+        "notice_id=%s",
+        log.id,
+        len(scored),
+        len(selected),
+        [item.notice_id for item in selected],
+    )
+
     await match_log_repository.replace_results(session, log.id, selected)
 
     log.run_status = "completed"
