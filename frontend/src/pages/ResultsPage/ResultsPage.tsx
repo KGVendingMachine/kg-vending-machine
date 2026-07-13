@@ -3,10 +3,9 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { NoticeCard } from '../../components/NoticeCard/NoticeCard'
 import { ScoreGauge } from '../../components/ScoreGauge/ScoreGauge'
-import { getMatchLog, formatMatchLogDate, listMatchLogs } from '../../api/matchLogs'
+import { getMatchLog, formatMatchLogDate } from '../../api/matchLogs'
 import type { MatchLog } from '../../api/matchLogs'
-import { getMatchResults, matchResultToNotice } from '../../api/matchResults'
-import type { Notice } from '../../types/notice'
+import { useMatchedNotices } from '../../hooks/useMatchedNotices'
 import { PATHS } from '../../routes/paths'
 import styles from './ResultsPage.module.css'
 
@@ -24,10 +23,11 @@ export function ResultsPage() {
     matchLogId != null && !Number.isNaN(matchLogId) ? matchLogId : null
 
   const [matchLog, setMatchLog] = useState<MatchLog | null>(null)
-  // null = 로딩 중. 로딩이 끝나면 (빈 배열 포함) 배열.
-  const [results, setResults] = useState<Notice[] | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  // 공고 상세와 매칭 점수를 합친 표시용 모델(MatchedNotice)을 가져온다 —
+  // MatchDetailPage/BookmarksPage와 동일한 훅으로, 목록/상세 화면 전체가
+  // 같은 모델을 쓰게 통일한다.
+  const { matchedNotices, loading, error } = useMatchedNotices(validLogId)
 
   useEffect(() => {
     if (validLogId == null) {
@@ -48,45 +48,26 @@ export function ResultsPage() {
     }
   }, [validLogId])
 
+  // 결과가 (다시) 로드되면 첫 번째 공고를 기본 선택한다.
   useEffect(() => {
-    if (validLogId == null) {
-      setResults([])
-      return
-    }
-    let cancelled = false
-    setResults(null)
-    setLoadError(null)
-    getMatchResults(validLogId)
-      .then((rows) => {
-        if (cancelled) return
-        const list = rows.map(matchResultToNotice)
-        setResults(list)
-        setSelectedId(list[0]?.id ?? null)
-      })
-      .catch(() => {
-        if (cancelled) return
-        setResults([])
-        setLoadError('매칭 결과를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.')
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [validLogId])
+    setSelectedId(matchedNotices[0]?.id ?? null)
+  }, [matchedNotices])
 
-  const list = results ?? []
+  const list = matchedNotices
   const selected = list.find((notice) => notice.id === selectedId)
 
   const fieldFilters = useMemo(() => {
     const counts = new Map<string, number>()
-    for (const notice of results ?? []) {
-      counts.set(notice.category, (counts.get(notice.category) ?? 0) + 1)
+    for (const notice of list) {
+      const label = notice.category ?? '기타'
+      counts.set(label, (counts.get(label) ?? 0) + 1)
     }
     return [...counts.entries()].map(([label, count], index) => ({
       label,
       count,
       checked: index === 0,
     }))
-  }, [results])
+  }, [list])
 
   // matchLogId 없이 진입(직접 URL 입력 등)하면 보여줄 결과가 없다.
   if (validLogId == null) {
@@ -126,17 +107,19 @@ export function ResultsPage() {
         </div>
       ) : null}
 
-      {results == null ? (
+      {loading ? (
         <div className={styles.stateWrap}>
           <div className={styles.stateText}>매칭 결과를 불러오는 중…</div>
         </div>
       ) : list.length === 0 ? (
         <div className={styles.stateWrap}>
           <div className={styles.stateTitle}>
-            {loadError ? '결과를 불러오지 못했어요' : '이 매칭에는 저장된 결과가 없어요'}
+            {error ? '결과를 불러오지 못했어요' : '이 매칭에는 저장된 결과가 없어요'}
           </div>
           <div className={styles.stateText}>
-            {loadError ?? '공고 데이터가 없던 시점의 실행이거나, 결과 생성에 실패한 실행이에요.'}
+            {error
+              ? '매칭 결과를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.'
+              : '공고 데이터가 없던 시점의 실행이거나, 결과 생성에 실패한 실행이에요.'}
           </div>
         </div>
       ) : (
@@ -198,59 +181,66 @@ export function ResultsPage() {
                 <div className={styles.detailTitle}>{selected.title}</div>
                 <div className={styles.detailOrg}>{selected.org}</div>
 
-                <div className={styles.gaugeBanner}>
-                  <ScoreGauge score={selected.score} size={72} />
-                  <div className={styles.gaugeBannerText}>
-                    적합도{' '}
-                    {selected.scoreLevel === 'high' ? '매우 높음' : '보통'}
-                    <br />
-                    <span>
-                      {selected.score >= 90 ? '상위 3% 추천' : '적합도 순위 반영'}
-                    </span>
+                {selected.score != null ? (
+                  <div className={styles.gaugeBanner}>
+                    <ScoreGauge score={selected.score} size={72} />
+                    <div className={styles.gaugeBannerText}>
+                      적합도{' '}
+                      {selected.scoreLevel === 'high' ? '매우 높음' : '보통'}
+                      <br />
+                      <span>
+                        {selected.score >= 90 ? '상위 3% 추천' : '적합도 순위 반영'}
+                      </span>
+                    </div>
                   </div>
-                </div>
+                ) : null}
 
                 <div className={styles.detailSectionTitle}>왜 추천했나요?</div>
                 <div className={styles.reasons}>
-                  {selected.reasons.map((reason) => (
-                    <div
-                      className={
-                        reason.tone === 'warn'
-                          ? `${styles.reasonItem} ${styles.warn}`
-                          : styles.reasonItem
-                      }
-                      key={reason.detail}
-                    >
-                      {reason.detail}
+                  {selected.strengths.map((reason) => (
+                    <div className={styles.reasonItem} key={reason}>
+                      {reason}
+                    </div>
+                  ))}
+                  {selected.weaknesses.map((reason) => (
+                    <div className={`${styles.reasonItem} ${styles.warn}`} key={reason}>
+                      {reason}
                     </div>
                   ))}
                 </div>
 
-                <div className={styles.detailSectionTitle} style={{ marginTop: 22 }}>
-                  점수 구성
-                </div>
-                <div className={styles.breakdown}>
-                  {selected.scoreBreakdown.map((item) => (
-                    <div key={item.label}>
-                      <div className={styles.breakdownRow}>
-                        <span>{item.label}</span>
-                        <span>
-                          {item.score}/{item.max}
-                        </span>
-                      </div>
-                      <div className={styles.breakdownTrack}>
-                        <div
-                          className={
-                            item.status === 'warn'
-                              ? `${styles.breakdownFill} ${styles.warn}`
-                              : styles.breakdownFill
-                          }
-                          style={{ width: `${(item.score / item.max) * 100}%` }}
-                        />
-                      </div>
+                {selected.scoreBreakdown ? (
+                  <>
+                    <div
+                      className={styles.detailSectionTitle}
+                      style={{ marginTop: 22 }}
+                    >
+                      점수 구성
                     </div>
-                  ))}
-                </div>
+                    <div className={styles.breakdown}>
+                      {selected.scoreBreakdown.map((item) => (
+                        <div key={item.key}>
+                          <div className={styles.breakdownRow}>
+                            <span>{item.label}</span>
+                            <span>
+                              {item.score}/{item.max}
+                            </span>
+                          </div>
+                          <div className={styles.breakdownTrack}>
+                            <div
+                              className={
+                                item.score < item.max / 2
+                                  ? `${styles.breakdownFill} ${styles.warn}`
+                                  : styles.breakdownFill
+                              }
+                              style={{ width: `${(item.score / item.max) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
 
                 <div className={styles.detailActions}>
                   {selected.sourceUrl ? (
