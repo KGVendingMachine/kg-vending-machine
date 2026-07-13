@@ -41,4 +41,6 @@ export interface Notice {
   scoreBreakdown: ScoreBreakdownItem[]
   reasons: ReasonItem[]
   requirements: RequirementCheck[]
+  /** 원문 공고 URL. API 결과에만 있고 목데이터에는 없다. */
+  sourceUrl?: string
 }
