@@ -8,6 +8,8 @@ interface NoticeCardProps {
   onToggleBookmark?: () => void
   /** 토글 요청이 진행 중이면 별표를 잠깐 비활성화한다(중복 클릭 방지). */
   bookmarkBusy?: boolean
+  /** 선택하지 않아도 추천 사유를 항상 표시한다(북마크 목록 등). */
+  showReason?: boolean
 }
 
 const SCORE_LEVEL_CLASS: Record<string, string> = {
@@ -22,6 +24,7 @@ export function NoticeCard({
   onClick,
   onToggleBookmark,
   bookmarkBusy = false,
+  showReason = false,
 }: NoticeCardProps) {
   const bookmarked = notice.bookmarkId != null
 
@@ -98,7 +101,7 @@ export function NoticeCard({
           </button>
         ) : null}
       </div>
-      {selected && notice.matchReasonShort ? (
+      {(selected || showReason) && notice.matchReasonShort ? (
         <div className="mt-3 border-t border-border pt-3 text-xs leading-[1.6] text-muted">
           {notice.matchReasonShort}
         </div>

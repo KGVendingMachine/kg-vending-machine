@@ -123,6 +123,7 @@ export function BookmarksPage() {
                     }}
                     onToggleBookmark={() => handleRemove(bookmark)}
                     bookmarkBusy={busyIds.has(bookmark.id)}
+                    showReason
                   />
                 ))}
               </div>
