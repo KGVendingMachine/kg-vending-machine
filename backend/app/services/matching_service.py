@@ -291,6 +291,14 @@ def _score_notice(
     weakness = _weakness(cautions, item_fit_score, business_fit_score)
     strategy = _strategy_suggestion(normalized_notice, growth_score)
 
+    logger.info(
+        "🧠 AI 정밀 판정 근거 (notice_id=%s): 💪 강점=%s | ⚠️ 주의=%s | 💡 제안=%s",
+        notice.id,
+        strengths,
+        weakness,
+        strategy,
+    )
+
     result_json = {
         "notice_quality": {"status": "passed", "missing_fields": []},
         "score_breakdown": {

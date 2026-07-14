@@ -16,6 +16,33 @@ const APPLICATION_CHECKLIST = [
   '온라인 신청서 제출',
 ]
 
+/** 공고 요약 원문을 문단 목록으로 나눈다. 일부 출처(K-Startup 등)는
+ * summary에 <p>·<br> 같은 HTML 태그를 그대로 담아 내려주므로, HTML로
+ * 보이면 DOMParser로 파싱해 텍스트만 추출한다(innerHTML로 그대로 렌더링하지
+ * 않아 XSS 위험이 없다). 그 외에는 빈 줄 기준으로 문단을 나누고
+ * whitespace-pre-line으로 원문 줄바꿈을 보존한다. */
+function summaryParagraphs(summary: string): string[] {
+  if (/<[a-z][\s\S]*>/i.test(summary)) {
+    return htmlSummaryToParagraphs(summary)
+  }
+  return summary
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+}
+
+function htmlSummaryToParagraphs(html: string): string[] {
+  const body = new DOMParser().parseFromString(html, 'text/html').body
+  body.querySelectorAll('br').forEach((br) => br.replaceWith('\n'))
+
+  const blocks = Array.from(body.querySelectorAll('p, li, div'))
+  const nodes = blocks.length > 0 ? blocks : [body]
+
+  return nodes
+    .map((node) => (node.textContent ?? '').replace(/ /g, ' ').trim())
+    .filter(Boolean)
+}
+
 function targetCompanyLabel(profile: CompanyProfile | null): string | null {
   if (!profile) return null
   const parts = [profile.company_size, profile.region_name]
@@ -169,7 +196,13 @@ export function MatchDetailPage() {
               </span>
             </div>
           </div>
-          <div className="mb-4 text-[13px] leading-[1.6] text-[#374151]">{notice.summary}</div>
+          <div className="flex flex-col gap-3 rounded-md border border-[#eef0f2] bg-surface-subtle px-5 py-4 text-[13px] leading-[1.7] text-[#374151]">
+            {summaryParagraphs(notice.summary).map((paragraph, index) => (
+              <p className="whitespace-pre-line" key={index}>
+                {paragraph}
+              </p>
+            ))}
+          </div>
         </div>
       ) : null}
 
@@ -262,31 +295,23 @@ export function MatchDetailPage() {
           {notice.strengths.length > 0 || notice.weaknesses.length > 0 ? (
             <>
               <div className="mb-1.5 text-[15px] font-extrabold">AI 정밀 판정 근거</div>
-              <div className="mb-[26px] flex flex-col gap-3">
+              <div className="mb-[26px] flex flex-col gap-2 text-[12.5px] leading-[1.6]">
                 {notice.strengths.map((reason) => (
-                  <div
-                    className="rounded-r-md border-l-[3px] border-success bg-success-soft px-3.5 py-3"
-                    key={reason}
-                  >
-                    <div className="mb-[3px] text-[13px] font-bold text-[#15803d]">강점</div>
-                    <div className="text-[12.5px] leading-[1.6] text-[#374151]">{reason}</div>
+                  <div className="border-l-2 border-success pl-2.5" key={reason}>
+                    <span className="font-semibold text-success">[강점]</span>{' '}
+                    <span className="text-[#374151]">{reason}</span>
                   </div>
                 ))}
                 {notice.weaknesses.map((reason) => (
-                  <div
-                    className="rounded-r-md border-l-[3px] border-warning bg-warning-soft px-3.5 py-3"
-                    key={reason}
-                  >
-                    <div className="mb-[3px] text-[13px] font-bold text-[#b45309]">주의</div>
-                    <div className="text-[12.5px] leading-[1.6] text-[#374151]">{reason}</div>
+                  <div className="border-l-2 border-warning pl-2.5" key={reason}>
+                    <span className="font-semibold text-warning">[주의]</span>{' '}
+                    <span className="text-[#374151]">{reason}</span>
                   </div>
                 ))}
                 {notice.strategySuggestion ? (
-                  <div className="rounded-r-md border-l-[3px] border-success bg-success-soft px-3.5 py-3">
-                    <div className="mb-[3px] text-[13px] font-bold text-[#15803d]">제안</div>
-                    <div className="text-[12.5px] leading-[1.6] text-[#374151]">
-                      {notice.strategySuggestion}
-                    </div>
+                  <div className="border-l-2 border-success pl-2.5">
+                    <span className="font-semibold text-success">[제안]</span>{' '}
+                    <span className="text-[#374151]">{notice.strategySuggestion}</span>
                   </div>
                 ) : null}
               </div>
