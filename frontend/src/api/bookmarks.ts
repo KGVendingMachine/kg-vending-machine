@@ -33,9 +33,10 @@ export interface Bookmark {
   created_at: string
 }
 
-/** GET /bookmarks — 내 북마크 목록(최신순). */
+/** GET /bookmarks — 내 북마크 목록(최신순).
+ * 비로그인 상태에서도 앱 마운트 시 호출되므로 401이어도 로그인 페이지로 보내지 않는다. */
 export function listBookmarks(): Promise<Bookmark[]> {
-  return apiFetch<Bookmark[]>('/api/bookmarks')
+  return apiFetch<Bookmark[]>('/api/bookmarks', { redirectOn401: false })
 }
 
 /** 추천 카드에서 담기 — 서버가 공고·사업계획서·점수 맥락을 채운다. */

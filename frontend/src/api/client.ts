@@ -55,6 +55,15 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   return body as T
 }
 
+interface ApiFetchOptions extends RequestInit {
+  /**
+   * refresh까지 실패했을 때 로그인 페이지로 강제 이동할지 여부(기본 true).
+   * 비로그인 상태에서도 도는 백그라운드 조회(북마크 목록 등)는 false로 두어
+   * 방문자를 로그인 페이지로 쫓아내지 않는다.
+   */
+  redirectOn401?: boolean
+}
+
 /**
  * 인증 쿠키를 자동 전송하는 공용 API 호출 래퍼.
  *
@@ -65,8 +74,9 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
  */
 export async function apiFetch<T>(
   path: string,
-  init: RequestInit = {},
+  options: ApiFetchOptions = {},
 ): Promise<T> {
+  const { redirectOn401 = true, ...init } = options
   try {
     return await request<T>(path, init)
   } catch (error) {
@@ -82,7 +92,11 @@ export async function apiFetch<T>(
     try {
       await request<unknown>(REFRESH_PATH, { method: 'POST' })
     } catch {
-      window.location.href = PATHS.LOGIN
+      // 이미 로그인 페이지면 하드 리로드가 무한 새로고침 루프가 되므로
+      // 이동하지 않는다.
+      if (redirectOn401 && window.location.pathname !== PATHS.LOGIN) {
+        window.location.href = PATHS.LOGIN
+      }
       throw error
     }
     return request<T>(path, init)
