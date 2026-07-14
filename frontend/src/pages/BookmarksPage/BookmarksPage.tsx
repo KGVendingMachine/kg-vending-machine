@@ -1,28 +1,38 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { NoticeCard } from '../../components/NoticeCard/NoticeCard'
 import { listBookmarks, deleteBookmark } from '../../api/bookmarks'
-import type { Bookmark } from '../../api/bookmarks'
 import { useFetchOnMount } from '../../hooks/useFetchOnMount'
 import { noticeDetailPath } from '../../routes/paths'
-import { toMatchedNotice } from '../../types/notice'
-import type { MatchedNotice } from '../../types/notice'
-import { useBookmarks } from '../../store/BookmarkContext'
+import { bookmarkToMatchedNotice } from '../../types/notice'
 
 export function BookmarksPage() {
   const navigate = useNavigate()
-  const { bookmarkedIds } = useBookmarks()
-  const { data, loading } = useFetchOnMount<MatchedNotice[]>(async () => {
-    const results = await Promise.all(
-      bookmarkedIds.map((id) =>
-        getNoticeDetail(id)
-          .then((detail) => toMatchedNotice(detail))
-          .catch(() => null),
-      ),
-    )
-    return results.filter((item): item is MatchedNotice => item !== null)
-  }, [bookmarkedIds])
-  const notices = data ?? []
+  const { data, loading } = useFetchOnMount(() => listBookmarks(), [])
+  const [busyIds, setBusyIds] = useState<Set<number>>(new Set())
+  const [removedIds, setRemovedIds] = useState<Set<number>>(new Set())
+
+  const notices = (data ?? [])
+    .filter((bookmark) => !removedIds.has(bookmark.id))
+    .map(bookmarkToMatchedNotice)
+
+  async function handleRemoveBookmark(bookmarkId: number) {
+    if (busyIds.has(bookmarkId)) return
+    setBusyIds((current) => new Set(current).add(bookmarkId))
+    try {
+      await deleteBookmark(bookmarkId)
+      setRemovedIds((current) => new Set(current).add(bookmarkId))
+    } catch {
+      // 실패하면 상태를 그대로 두어 다시 시도할 수 있게 한다.
+    } finally {
+      setBusyIds((current) => {
+        const next = new Set(current)
+        next.delete(bookmarkId)
+        return next
+      })
+    }
+  }
 
   return (
     <div className="flex flex-1 flex-col">
@@ -32,7 +42,7 @@ export function BookmarksPage() {
           북마크한 공고
         </div>
         <div className="mt-1.5 mb-6 text-[13px] text-muted">
-          북마크 <span className="font-bold text-primary">{bookmarks.length}</span>건
+          북마크 <span className="font-bold text-primary">{notices.length}</span>건
         </div>
 
         {loading ? (
@@ -47,6 +57,13 @@ export function BookmarksPage() {
                 notice={notice}
                 selected={false}
                 onClick={() => navigate(noticeDetailPath(notice.id))}
+                onToggleBookmark={
+                  notice.bookmarkId != null
+                    ? () => handleRemoveBookmark(notice.bookmarkId!)
+                    : undefined
+                }
+                bookmarkBusy={notice.bookmarkId != null && busyIds.has(notice.bookmarkId)}
+                showReason
               />
             ))}
           </div>

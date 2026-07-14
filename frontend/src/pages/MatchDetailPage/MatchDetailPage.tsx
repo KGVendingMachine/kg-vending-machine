@@ -7,7 +7,7 @@ import { getMyCompanyProfile } from '../../api/companyProfile'
 import type { CompanyProfile } from '../../api/companyProfile'
 import { useFetchOnMount } from '../../hooks/useFetchOnMount'
 import { useMatchedNotices } from '../../hooks/useMatchedNotices'
-import { PATHS } from '../../routes/paths'
+import { PATHS, resultDetailPath } from '../../routes/paths'
 import { toggleBookmark } from '../../api/bookmarks'
 
 const APPLICATION_CHECKLIST = [
@@ -402,8 +402,17 @@ export function MatchDetailPage() {
                 </div>
                 {otherNotices.map((item) => (
                   <div
-                    className="grid grid-cols-[1fr_56px_64px_60px] border-t border-[#eef0f2]"
+                    className="grid cursor-pointer grid-cols-[1fr_56px_64px_60px] border-t border-[#eef0f2] hover:bg-surface-subtle"
                     key={item.id}
+                    onClick={() => navigate(resultDetailPath(item.id, matchLogId))}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        navigate(resultDetailPath(item.id, matchLogId))
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
                   >
                     <div className="px-3 py-[11px]">{item.title}</div>
                     <div

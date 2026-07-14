@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { NoticeCard } from '../../components/NoticeCard/NoticeCard'
@@ -10,6 +10,7 @@ import { useFetchOnMount } from '../../hooks/useFetchOnMount'
 import { useMatchedNotices } from '../../hooks/useMatchedNotices'
 import { PATHS, resultDetailPath } from '../../routes/paths'
 import { DEADLINE_FILTERS } from '../../constants/resultsFilters'
+import type { MatchedNotice } from '../../types/notice'
 
 export function ResultsPage() {
   const navigate = useNavigate()
@@ -172,6 +173,8 @@ export function ResultsPage() {
                 notice={notice}
                 selected={false}
                 onClick={() => navigate(resultDetailPath(notice.id, validLogId))}
+                onToggleBookmark={() => handleToggleBookmark(notice)}
+                bookmarkBusy={bookmarkBusyIds.has(notice.id)}
               />
             ))}
           </div>

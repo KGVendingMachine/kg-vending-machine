@@ -4,7 +4,6 @@ import type {
   SecondaryFilteringReasonLog,
 } from '../api/matchLogs'
 import type { Bookmark } from '../api/bookmarks'
-import type { MatchResult } from '../api/matchLogs'
 import type { NoticeDetail } from '../api/notices'
 import { formatDeadline } from '../utils/date'
 
@@ -72,6 +71,10 @@ export interface MatchedNotice {
   secondaryFilterExcluded: boolean
   /** secondaryFilterJudged가 true일 때만 값이 있다 — 요건 문장별 판정 근거. */
   secondaryFilterReasons: SecondaryFilteringReasonLog[]
+  /** 별표 토글 시 담을 대상 match_result id. 매칭 컨텍스트가 없으면(북마크 목록) null. */
+  matchResultId: number | null
+  /** 담겨 있으면 그 북마크 id(해제 시 사용), 아니면 null. */
+  bookmarkId: number | null
 }
 
 function splitSentences(value: string | null): string[] {
@@ -195,6 +198,9 @@ export function bookmarkToMatchedNotice(bookmark: Bookmark): MatchedNotice {
     scoreBreakdown: null,
     eligibilityStatus: null,
     strategySuggestion: null,
+    secondaryFilterJudged: false,
+    secondaryFilterExcluded: false,
+    secondaryFilterReasons: [],
     matchResultId: null,
     bookmarkId: bookmark.id,
   }
