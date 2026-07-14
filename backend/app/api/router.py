@@ -5,6 +5,7 @@ from app.api.match_log import router as match_log_router
 from app.api.business_plan_samples import router as business_plan_samples_router
 from app.api.notice import router as notice_router
 from app.api.notice_collection import router as notice_collection_router
+from app.api.notice_embedding import router as notice_embedding_router
 from app.api.notice_normalization import router as notice_normalization_router
 from app.api.notice_samples import router as notice_samples_router
 from app.api.notice_ocr import router as notice_ocr_router
@@ -22,6 +23,7 @@ api_router.include_router(match_log_router)
 api_router.include_router(notice_router)
 api_router.include_router(notice_collection_router)
 api_router.include_router(notice_ocr_router)
+api_router.include_router(notice_embedding_router)
 api_router.include_router(notice_normalization_router)
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(company_profile.router)

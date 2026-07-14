@@ -7,7 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
 from app.models.category import CategoryMapping, CategoryName, KgCategory
-from app.models.notice import Notice, NoticeAttachment, NoticeRegion, NoticeTargetType
+from app.models.notice import (
+    Notice,
+    NoticeAttachment,
+    NoticeChunk,
+    NoticeRegion,
+    NoticeTargetType,
+)
 from app.models.notice_source import NoticeSource
 from app.models.organization import Organization
 from app.models.raw import BizinfoRaw, KstartupRaw
@@ -755,6 +761,38 @@ async def get_notice_ids_pending_normalization(
         .where(Notice.normalization_status.is_(None))
         .order_by(Notice.application_end_date.asc().nulls_last(), Notice.id.desc())
         .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def replace_notice_chunks(
+    session: AsyncSession, notice_id: int, chunks: list[tuple[str, str]]
+) -> list[NoticeChunk]:
+    """공고의 2차 필터링용 청크(chunk_type, chunk_text)를 최신 값으로 교체한다.
+
+    replace_notice_region과 같은 이유로 delete 후 insert한다 — 재임베딩 시(OCR
+    텍스트가 재수집으로 바뀐 경우 등) 예전 청크가 남아있으면 Chroma에 저장된
+    벡터와 Postgres 청크 행의 세대가 서로 어긋난다. ON CONFLICT가 아니라 ORM
+    insert를 쓰는 이유는 flush 후 각 행의 id(Chroma 포인트 id로 그대로 쓸 값)를
+    호출자에게 돌려주기 위함이다.
+    """
+    await session.execute(delete(NoticeChunk).where(NoticeChunk.notice_id == notice_id))
+    if not chunks:
+        return []
+    rows = [
+        NoticeChunk(notice_id=notice_id, chunk_type=chunk_type, chunk_text=chunk_text)
+        for chunk_type, chunk_text in chunks
+    ]
+    session.add_all(rows)
+    await session.flush()
+    return rows
+
+
+async def get_notice_chunks_by_notice_id(
+    session: AsyncSession, notice_id: int
+) -> list[NoticeChunk]:
+    result = await session.execute(
+        select(NoticeChunk).where(NoticeChunk.notice_id == notice_id)
     )
     return list(result.scalars().all())
 

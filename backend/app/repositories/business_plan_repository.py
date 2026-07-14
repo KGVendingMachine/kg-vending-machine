@@ -7,10 +7,10 @@ the normalization flow, which reads raw_text and stores analysis_json.
 
 from datetime import datetime, timezone
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.business_plan import BusinessPlan
+from app.models.business_plan import BusinessPlan, BusinessPlanChunk
 from app.models.company import CompanyProfile
 from app.schemas.business_plan import JobStatus
 
@@ -207,6 +207,44 @@ async def finish_analysis(
         )
     )
     await session.commit()
+
+
+async def replace_business_plan_chunks(
+    session: AsyncSession, business_plan_id: int, chunks: list[tuple[str, str]]
+) -> list[BusinessPlanChunk]:
+    """사업계획서의 2차 필터링용 청크(chunk_type, chunk_text)를 최신 값으로
+    교체한다. notice_repository.replace_notice_chunks와 동일한 이유(재임베딩
+    시 세대 어긋남 방지, flush 후 Chroma 포인트 id로 쓸 id 확보)로 delete 후
+    ORM insert를 쓴다."""
+    await session.execute(
+        delete(BusinessPlanChunk).where(
+            BusinessPlanChunk.business_plan_id == business_plan_id
+        )
+    )
+    if not chunks:
+        return []
+    rows = [
+        BusinessPlanChunk(
+            business_plan_id=business_plan_id,
+            chunk_type=chunk_type,
+            chunk_text=chunk_text,
+        )
+        for chunk_type, chunk_text in chunks
+    ]
+    session.add_all(rows)
+    await session.flush()
+    return rows
+
+
+async def get_business_plan_chunks(
+    session: AsyncSession, business_plan_id: int
+) -> list[BusinessPlanChunk]:
+    result = await session.execute(
+        select(BusinessPlanChunk).where(
+            BusinessPlanChunk.business_plan_id == business_plan_id
+        )
+    )
+    return list(result.scalars().all())
 
 
 async def list_recent(session: AsyncSession, limit: int = 20) -> list[BusinessPlan]:

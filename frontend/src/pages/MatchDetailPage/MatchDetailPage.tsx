@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { ScoreGauge } from '../../components/ScoreGauge/ScoreGauge'
+import { SecondaryFilteringLogPanel } from '../../components/SecondaryFilteringLogPanel/SecondaryFilteringLogPanel'
 import { getMyCompanyProfile } from '../../api/companyProfile'
 import type { CompanyProfile } from '../../api/companyProfile'
 import { useFetchOnMount } from '../../hooks/useFetchOnMount'
@@ -15,6 +16,33 @@ const APPLICATION_CHECKLIST = [
   '설비 도입 견적서 확보',
   '온라인 신청서 제출',
 ]
+
+/** 공고 요약 원문을 문단 목록으로 나눈다. 일부 출처(K-Startup 등)는
+ * summary에 <p>·<br> 같은 HTML 태그를 그대로 담아 내려주므로, HTML로
+ * 보이면 DOMParser로 파싱해 텍스트만 추출한다(innerHTML로 그대로 렌더링하지
+ * 않아 XSS 위험이 없다). 그 외에는 빈 줄 기준으로 문단을 나누고
+ * whitespace-pre-line으로 원문 줄바꿈을 보존한다. */
+function summaryParagraphs(summary: string): string[] {
+  if (/<[a-z][\s\S]*>/i.test(summary)) {
+    return htmlSummaryToParagraphs(summary)
+  }
+  return summary
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+}
+
+function htmlSummaryToParagraphs(html: string): string[] {
+  const body = new DOMParser().parseFromString(html, 'text/html').body
+  body.querySelectorAll('br').forEach((br) => br.replaceWith('\n'))
+
+  const blocks = Array.from(body.querySelectorAll('p, li, div'))
+  const nodes = blocks.length > 0 ? blocks : [body]
+
+  return nodes
+    .map((node) => (node.textContent ?? '').replace(/ /g, ' ').trim())
+    .filter(Boolean)
+}
 
 function targetCompanyLabel(profile: CompanyProfile | null): string | null {
   if (!profile) return null
@@ -115,7 +143,35 @@ export function MatchDetailPage() {
         >
           {bookmarked ? '★ 북마크됨' : '☆ 북마크'}
         </button>
+        {notice.sourceUrl ? (
+          <a
+            className="flex h-8 items-center justify-center rounded border-none bg-primary px-3 text-[13px] font-semibold text-white no-underline"
+            href={notice.sourceUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            원문 공고 ↗
+          </a>
+        ) : (
+          <button
+            type="button"
+            className="h-8 cursor-not-allowed rounded border border-border bg-surface-subtle px-3 text-[13px] font-semibold text-faint"
+            disabled
+          >
+            원문 공고 ↗
+          </button>
+        )}
       </div>
+
+      <SecondaryFilteringLogPanel matchLogId={matchLogId} />
+
+      {notice.secondaryFilterExcluded ? (
+        <div className="border-b border-[#eef0f2] bg-danger-soft px-10 py-3 text-[13px] leading-[1.6] text-danger">
+          ⚠ AI가 공고 원문을 확인한 결과, 제외요건에 해당하는 것으로 판단돼
+          적합도 점수가 낮게 반영됐어요. "AI 정밀 판정 근거"의 공고 원문 정밀
+          판정을 확인해주세요.
+        </div>
+      ) : null}
 
       <div className="flex items-center gap-8 border-b border-[#eef0f2] bg-white px-10 py-7">
         <div className="flex-1">
@@ -166,7 +222,13 @@ export function MatchDetailPage() {
               </span>
             </div>
           </div>
-          <div className="mb-4 text-[13px] leading-[1.6] text-[#374151]">{notice.summary}</div>
+          <div className="flex flex-col gap-3 rounded-md border border-[#eef0f2] bg-surface-subtle px-5 py-4 text-[13px] leading-[1.7] text-[#374151]">
+            {summaryParagraphs(notice.summary).map((paragraph, index) => (
+              <p className="whitespace-pre-line" key={index}>
+                {paragraph}
+              </p>
+            ))}
+          </div>
         </div>
       ) : null}
 
@@ -258,34 +320,64 @@ export function MatchDetailPage() {
         <div className="bg-white px-8 py-7">
           {notice.strengths.length > 0 || notice.weaknesses.length > 0 ? (
             <>
-              <div className="mb-1.5 text-[15px] font-extrabold">추천 근거</div>
-              <div className="mb-[26px] flex flex-col gap-3">
+              <div className="mb-1.5 text-[15px] font-extrabold">AI 정밀 판정 근거</div>
+              <div className="mb-[26px] flex flex-col gap-2 text-[12.5px] leading-[1.6]">
                 {notice.strengths.map((reason) => (
-                  <div
-                    className="rounded-r-md border-l-[3px] border-success bg-success-soft px-3.5 py-3"
-                    key={reason}
-                  >
-                    <div className="mb-[3px] text-[13px] font-bold text-[#15803d]">강점</div>
-                    <div className="text-[12.5px] leading-[1.6] text-[#374151]">{reason}</div>
+                  <div className="border-l-2 border-success pl-2.5" key={reason}>
+                    <span className="font-semibold text-success">[강점]</span>{' '}
+                    <span className="text-[#374151]">{reason}</span>
                   </div>
                 ))}
                 {notice.weaknesses.map((reason) => (
-                  <div
-                    className="rounded-r-md border-l-[3px] border-warning bg-warning-soft px-3.5 py-3"
-                    key={reason}
-                  >
-                    <div className="mb-[3px] text-[13px] font-bold text-[#b45309]">주의</div>
-                    <div className="text-[12.5px] leading-[1.6] text-[#374151]">{reason}</div>
+                  <div className="border-l-2 border-warning pl-2.5" key={reason}>
+                    <span className="font-semibold text-warning">[주의]</span>{' '}
+                    <span className="text-[#374151]">{reason}</span>
                   </div>
                 ))}
                 {notice.strategySuggestion ? (
-                  <div className="rounded-r-md border-l-[3px] border-success bg-success-soft px-3.5 py-3">
-                    <div className="mb-[3px] text-[13px] font-bold text-[#15803d]">제안</div>
-                    <div className="text-[12.5px] leading-[1.6] text-[#374151]">
-                      {notice.strategySuggestion}
-                    </div>
+                  <div className="border-l-2 border-success pl-2.5">
+                    <span className="font-semibold text-success">[제안]</span>{' '}
+                    <span className="text-[#374151]">{notice.strategySuggestion}</span>
                   </div>
                 ) : null}
+              </div>
+            </>
+          ) : null}
+
+          {notice.secondaryFilterJudged && notice.secondaryFilterReasons.length > 0 ? (
+            <>
+              <div className="mb-1.5 text-[15px] font-extrabold">
+                공고 원문 정밀 판정
+              </div>
+              <div className="mb-[26px] flex flex-col gap-2 text-[12.5px] leading-[1.6]">
+                {notice.secondaryFilterReasons.map((reason, index) => (
+                  <div
+                    className={
+                      reason.status === '미충족'
+                        ? 'border-l-2 border-danger pl-2.5'
+                        : reason.status === '충족'
+                          ? 'border-l-2 border-success pl-2.5'
+                          : 'border-l-2 border-faint pl-2.5'
+                    }
+                    key={index}
+                  >
+                    <span
+                      className={
+                        reason.status === '미충족'
+                          ? 'font-semibold text-danger'
+                          : reason.status === '충족'
+                            ? 'font-semibold text-success'
+                            : 'font-semibold text-faint'
+                      }
+                    >
+                      [{reason.status}]
+                    </span>{' '}
+                    <span className="text-[#374151]">{reason.criterion}</span>
+                    {reason.evidence ? (
+                      <span className="text-faint"> — {reason.evidence}</span>
+                    ) : null}
+                  </div>
+                ))}
               </div>
             </>
           ) : null}

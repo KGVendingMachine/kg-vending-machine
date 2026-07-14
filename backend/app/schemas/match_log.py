@@ -34,6 +34,71 @@ class MatchResultNoticeInfo(BaseModel):
     apply_url: str | None
 
 
+class SecondaryFilteringReasonLog(BaseModel):
+    """2차 필터링 LLM 판정에서 요건 문장 하나가 어떻게 판정됐는지
+    (secondary_filtering_judge_service.CriterionJudgment)."""
+
+    criterion: str
+    status: str
+    """"충족" / "미충족" / "정보부족" 중 하나."""
+    evidence: str | None
+    is_exclusion: bool
+    """True면 제외요건("~에 해당하지 않음"으로 재구성된 문장) 판정이다."""
+
+
+class SecondaryFilteringNoticeLog(BaseModel):
+    """2차 필터링에서 공고 하나가 어떻게 처리됐는지."""
+
+    notice_id: int
+    title: str | None
+    embedded: bool
+    """임베딩·유사도 검색에 실제로 쓰였는지. False면 total_score의 2차 필터링
+    구성요소는 중립값(50.0)이다."""
+    similarity_score: float | None = None
+    """임베딩 유사도 점수(35~100) — LLM 판정 대상을 고르는 데만 쓰인 값이라
+    secondary_filter_score와 다를 수 있다. 이 필드가 없던 구버전 match_log는
+    기본값 None으로 채워진다."""
+    llm_judged: bool = False
+    """유사도 상위 K건에 들어 secondary_filtering_judge_service.judge_notice가
+    실제로 판정을 수행했는지. False면 secondary_filter_score는
+    similarity_score와 같다(또는 둘 다 없음)."""
+    excluded: bool = False
+    """제외요건이 확정돼 secondary_filter_score가 낮은 값으로 캡됐는지."""
+    reasons: list[SecondaryFilteringReasonLog] = Field(default_factory=list)
+    """llm_judged가 True일 때만 값이 있다 — 요건 문장별 판정 근거."""
+    secondary_filter_score: float | None
+    """total_score에 실제로 반영된 최종값. llm_judged가 True면 LLM 판정
+    점수, 아니면 similarity_score와 동일(또는 둘 다 임베딩 실패로 없음)."""
+    skip_reason: str | None
+    """embedded가 False일 때만 값이 있다. "no_text" 또는 "embedding_failed"."""
+
+
+class SecondaryFilteringScoreStats(BaseModel):
+    min: float
+    max: float
+    avg: float
+
+
+class SecondaryFilteringLogResponse(BaseModel):
+    """GET /match-logs/{id}/secondary-filtering.
+
+    matching_service._build_secondary_filtering_log가 만들어 match_log.
+    secondary_filtering_log(JSONB)에 저장한 값을 그대로 반환한다.
+    """
+
+    match_log_id: int
+    plan_embedded: bool
+    plan_skip_reason: str | None
+    candidate_count: int
+    embedded_count: int
+    judged_count: int = 0
+    """유사도 상위 K건 중 실제로 LLM 판정까지 수행된 공고 수. 이 필드가
+    없던 구버전 match_log는 기본값 0으로 채워진다."""
+    skipped_count: int
+    score_stats: SecondaryFilteringScoreStats | None
+    notices: list[SecondaryFilteringNoticeLog]
+
+
 class MatchResultResponse(BaseModel):
     id: int
     match_log_id: int

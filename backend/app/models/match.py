@@ -26,6 +26,10 @@ class MatchLog(Base):
     """생성된 검색 질의"""
     query_json: Mapped[dict | None] = mapped_column(JSONB)
     """구조화 질의"""
+    secondary_filtering_log: Mapped[dict | None] = mapped_column(JSONB)
+    """2차 필터링(공고 PDF·사업계획서 원문 임베딩 유사도) 실행 로그 — 후보 수,
+    임베딩 성공/스킵 건수, 유사도 점수 분포, 공고별 세부 내역
+    (docs/matching-pipeline.md 로깅 요구사항, secondary_filtering_service 참고)"""
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

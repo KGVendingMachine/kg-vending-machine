@@ -1,17 +1,27 @@
 """
 services/business_plan_analysis_service.py
 
-사업계획서 분석 오케스트레이션: OCR → raw_text 저장(커밋) → 정규화(analysis_json 저장).
+사업계획서 분석 오케스트레이션: OCR → raw_text 저장(커밋) → 정규화(analysis_json 저장)
+→ 2차 필터링용 임베딩(비차단, docs/matching-pipeline.md 4단계).
 
 OCR 결과(raw_text)를 정규화 전에 먼저 커밋한다. 정규화(LLM)가 실패해도 비싼
 CLOVA OCR 결과는 DB에 남아, 재시도 시 재OCR 없이 정규화만 다시 돌릴 수 있다.
 외부 호출(OCR=CLOVA, 정규화=LLM)은 테스트를 위해 함수로 주입받는다.
+
+임베딩은 별도 AnalysisStep을 추가하지 않는다 — 프론트(AnalysisProgressPage)가
+"extracting"/"normalizing" 두 값만 아는 고정 진행률 UI라, 새 단계를 추가하면
+프론트 계약이 깨진다. 대신 정규화 완료 뒤 조용히 한 번 시도하고, 실패해도
+분석 자체는 실패시키지 않는다 — 임베딩은 매칭 시점(secondary_filtering_service)
+에도 온디맨드로 재시도되므로 여기서는 "미리 데워두는" 최적화일 뿐이다.
 """
+
+import logging
 
 from collections.abc import Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.embedding_client import AiEmbeddingError
 from app.repositories.business_plan_repository import (
     BusinessPlanNotFoundError,
     get_by_id,
@@ -19,10 +29,13 @@ from app.repositories.business_plan_repository import (
 )
 from app.schemas.business_plan import NormalizedBusinessPlanSchema
 from app.schemas.business_plan_analysis import AnalysisStep
+from app.services.business_plan_embedding_service import ensure_business_plan_embedded
 from app.services.business_plan_service import (
     NormalizationOutcome,
     normalize_business_plan,
 )
+
+logger = logging.getLogger(__name__)
 
 ExtractFn = Callable[[str], Awaitable[tuple[str, str]]]
 NormalizeFn = Callable[[str], Awaitable[NormalizedBusinessPlanSchema]]
@@ -79,9 +92,31 @@ async def run_analysis(
 
     if on_step is not None:
         await on_step(AnalysisStep.NORMALIZING)
-    return await normalize_business_plan(
+    outcome = await normalize_business_plan(
         session,
         business_plan_id=business_plan_id,
         normalize_fn=normalize_fn,
         extracted_text=text,
     )
+
+    try:
+        await ensure_business_plan_embedded(session, business_plan_id)
+        await session.commit()
+    except AiEmbeddingError:
+        # 임베딩은 여기서 실패해도 분석 자체를 실패시키지 않는다 — 매칭 시점에
+        # secondary_filtering_service가 다시 온디맨드로 시도한다.
+        logger.warning(
+            "사업계획서 임베딩 실패 (business_plan_id=%s) — 매칭 시점에 다시"
+            " 시도된다. 분석 자체는 정상 완료로 처리한다.",
+            business_plan_id,
+        )
+        await session.rollback()
+    except Exception:
+        logger.exception(
+            "사업계획서 임베딩 중 예상 못한 오류 (business_plan_id=%s) — 분석"
+            " 자체는 정상 완료로 처리한다.",
+            business_plan_id,
+        )
+        await session.rollback()
+
+    return outcome
