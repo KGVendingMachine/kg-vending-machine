@@ -28,6 +28,25 @@ from app.services.business_plan_service import NoSourceTextError
 pytestmark = pytest.mark.anyio
 
 
+@pytest.fixture(autouse=True)
+def stub_business_plan_embedding(monkeypatch):
+    """Keep analysis tests independent from the optional embedding backend.
+
+    Embedding failures are deliberately swallowed by ``run_analysis``, but the
+    resulting session rollback expires ORM instances.  Whether that happened
+    previously depended on the CI environment and could make a later
+    synchronous ``plan.id`` access raise ``MissingGreenlet``.
+    """
+
+    async def _ensure_embedded(session, business_plan_id):
+        return None
+
+    monkeypatch.setattr(
+        "app.services.business_plan_analysis_service.ensure_business_plan_embedded",
+        _ensure_embedded,
+    )
+
+
 async def _create_plan(
     db_session, profile: CompanyProfile, **overrides
 ) -> BusinessPlan:
