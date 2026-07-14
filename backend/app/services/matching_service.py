@@ -91,6 +91,65 @@ def _overlap_score(left: set[str], right: set[str], *, default: float = 50.0) ->
     return min(100.0, 35.0 + (overlap / base) * 65.0)
 
 
+def _industry_candidate_tokens(plan: NormalizedBusinessPlanSchema) -> set[str]:
+    values: list[Any] = [plan.company.industry]
+    for candidate in plan.company.industry_candidates:
+        values.extend(
+            [
+                candidate.label,
+                candidate.reason,
+                candidate.source_keywords,
+            ]
+        )
+    return _tokens(*values)
+
+
+def _field_match_result(
+    plan: NormalizedBusinessPlanSchema,
+    normalized_notice: NormalizedNoticeSchema,
+) -> tuple[float, dict[str, Any]]:
+    candidate_tokens = _industry_candidate_tokens(plan)
+    notice_tokens = _tokens(
+        normalized_notice.basic.category,
+        normalized_notice.support.support_type,
+        normalized_notice.support.support_content,
+        normalized_notice.eligibility.target_industries,
+        normalized_notice.matching.keywords,
+        normalized_notice.matching.matching_signals,
+    )
+    score = _overlap_score(candidate_tokens, notice_tokens)
+    matched_fields = sorted(candidate_tokens & notice_tokens)[:20]
+    has_candidates = bool(plan.company.industry_candidates)
+
+    if matched_fields:
+        status = "matched"
+        reason = (
+            "사업 분야 후보가 공고의 분야, 지원 내용 또는 매칭 키워드와 일치합니다."
+        )
+    elif has_candidates:
+        status = "needs_review"
+        reason = "사업 분야 후보와 공고의 분야 신호가 명확히 일치하지 않아 추가 검토가 필요합니다."
+    else:
+        status = "fallback"
+        reason = "구조화된 사업 분야 후보가 없어 기업 업종과 사업계획서 본문 정보를 기준으로 검토했습니다."
+
+    return score, {
+        "status": status,
+        "score": round(score, 2),
+        "matched_fields": matched_fields,
+        "industry_candidates": [
+            {
+                "label": candidate.label,
+                "confidence": candidate.confidence,
+                "reason": candidate.reason,
+                "source_keywords": candidate.source_keywords,
+            }
+            for candidate in plan.company.industry_candidates
+        ],
+        "reason": reason,
+    }
+
+
 def _contains_any(text: str | None, candidates: list[str]) -> bool:
     if not text:
         return False
@@ -144,37 +203,39 @@ def _eligibility_score(
     target_regions = notice.eligibility.target_regions
     if not target_regions or set(target_regions) & _ALL_REGIONS:
         score += 15
-        reasons.append("region open")
+        reasons.append("지원 지역 제한이 없거나 전국 대상입니다.")
     elif profile.region_name and _contains_any(profile.region_name, target_regions):
         score += 20
-        reasons.append("region matched")
+        reasons.append("기업 소재지가 공고의 지원 지역과 일치합니다.")
     else:
         score -= 15
-        cautions.append("region needs review")
+        cautions.append(
+            "기업 소재지가 공고의 지원 지역 조건과 맞는지 확인이 필요합니다."
+        )
 
     target_sizes = notice.eligibility.target_company_size
     if not target_sizes:
         score += 5
     elif profile.company_size and _contains_any(profile.company_size, target_sizes):
         score += 15
-        reasons.append("company size matched")
+        reasons.append("기업 규모가 공고의 지원 대상과 일치합니다.")
     elif any("기업" in size for size in target_sizes):
         score += 8
-        reasons.append("company target broadly matched")
+        reasons.append("공고의 기업 규모 조건이 비교적 넓게 해석될 수 있습니다.")
     else:
         score -= 10
-        cautions.append("company size needs review")
+        cautions.append("기업 규모가 공고의 지원 대상 조건과 맞는지 확인이 필요합니다.")
 
     target_stages = notice.eligibility.target_business_stage
     if not target_stages:
         score += 5
     elif profile.company_stage and _contains_any(profile.company_stage, target_stages):
         score += 10
-        reasons.append("business stage matched")
+        reasons.append("기업 성장 단계가 공고의 지원 대상과 일치합니다.")
 
     if notice.eligibility.excluded_targets:
         cautions.extend(
-            f"excluded target: {target}"
+            f"제외 대상 확인 필요: {target}"
             for target in notice.eligibility.excluded_targets[:2]
         )
 
@@ -230,7 +291,9 @@ def _score_notice(
     eligibility_score, eligibility_status, cautions = _eligibility_score(
         profile, normalized_notice
     )
-    item_fit_score = _overlap_score(plan_item_tokens, notice_item_tokens)
+    field_match_score, field_match = _field_match_result(plan, normalized_notice)
+    base_item_fit_score = _overlap_score(plan_item_tokens, notice_item_tokens)
+    item_fit_score = (base_item_fit_score * 0.70) + (field_match_score * 0.30)
     business_fit_score = _overlap_score(plan_item_tokens, notice_matching_tokens)
     growth_score = _overlap_score(plan_growth_tokens, notice_matching_tokens)
     bonus_score = _overlap_score(
@@ -260,15 +323,29 @@ def _score_notice(
 
     result_json = {
         "notice_quality": {"status": "passed", "missing_fields": []},
+        "field_match": field_match,
         "score_breakdown": {
             "eligibility": round(eligibility_score, 2),
             "item_fit": round(item_fit_score, 2),
+            "item_fit_base": round(base_item_fit_score, 2),
+            "field_match": round(field_match_score, 2),
             "business_fit": round(business_fit_score, 2),
             "growth": round(growth_score, 2),
             "bonus": round(bonus_score, 2),
         },
         "matched_keywords": sorted(plan_item_tokens & notice_item_tokens)[:20],
+        "match_reasons": strengths,
+        "eligibility_check": {
+            "status": eligibility_status,
+            "score": round(eligibility_score, 2),
+            "cautions": cautions,
+            "target_regions": normalized_notice.eligibility.target_regions,
+            "target_company_size": normalized_notice.eligibility.target_company_size,
+            "target_business_stage": normalized_notice.eligibility.target_business_stage,
+            "target_industries": normalized_notice.eligibility.target_industries,
+        },
         "cautions": cautions + normalized_notice.matching.caution_points[:3],
+        "suggested_actions": [strategy] if strategy else [],
     }
 
     return MatchResult(
@@ -307,13 +384,13 @@ def _strengths(
 ) -> list[str]:
     strengths: list[str] = []
     if item_fit_score >= 65:
-        strengths.append("business item matches notice keywords")
+        strengths.append("사업 아이템이 공고의 핵심 키워드와 잘 맞습니다.")
     if business_fit_score >= 65:
-        strengths.append("business plan matches notice signals")
+        strengths.append("사업계획서 내용이 공고의 선호 조건과 잘 맞습니다.")
     if growth_score >= 65:
-        strengths.append("growth strategy aligns with support purpose")
+        strengths.append("성장 전략이 지원사업의 목적과 잘 연결됩니다.")
     if not strengths:
-        strengths.append("basic eligibility can be reviewed")
+        strengths.append("기본 지원 요건을 기준으로 추가 검토가 필요합니다.")
     return strengths
 
 
@@ -323,9 +400,9 @@ def _weakness(
     weakness: list[str] = []
     weakness.extend(cautions[:3])
     if item_fit_score < 50:
-        weakness.append("item fit evidence is weak")
+        weakness.append("사업 아이템과 공고 분야의 직접적인 연결 근거가 부족합니다.")
     if business_fit_score < 50:
-        weakness.append("business-plan fit evidence is weak")
+        weakness.append("사업계획서 내용과 공고 선호 조건의 연결 근거가 부족합니다.")
     return "; ".join(weakness) if weakness else None
 
 
@@ -333,12 +410,10 @@ def _strategy_suggestion(
     notice: NormalizedNoticeSchema, growth_score: float
 ) -> str | None:
     if growth_score >= 65:
-        return "Emphasize the scale-up plan and expected business outcome."
+        return "신청서에서 성장 전략과 기대 성과를 구체적으로 강조하는 것이 좋습니다."
     if notice.evaluation.criteria:
-        return (
-            f"Address evaluation criteria: {', '.join(notice.evaluation.criteria[:3])}."
-        )
-    return "Add clearer evidence for eligibility and expected support outcomes."
+        return f"평가 기준({', '.join(notice.evaluation.criteria[:3])})에 맞춰 사업 내용을 보강하는 것이 좋습니다."
+    return "지원 자격과 기대 성과를 뒷받침할 수 있는 근거를 더 명확히 제시하는 것이 좋습니다."
 
 
 async def run_matching(

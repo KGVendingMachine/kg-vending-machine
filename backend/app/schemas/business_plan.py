@@ -35,6 +35,19 @@ def _none_to_empty_list(value: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
+class IndustryCandidate(BaseModel):
+    """Business/support field candidate used for matching."""
+
+    label: str
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    reason: str | None = None
+    source_keywords: list[str] = Field(default_factory=list)
+
+    _normalize_lists = field_validator("source_keywords", mode="before")(
+        _none_to_empty_list
+    )
+
+
 class CompanyInfo(BaseModel):
     """기업 개요"""
 
@@ -42,9 +55,13 @@ class CompanyInfo(BaseModel):
     ceo_name: str | None = None
     founded_year: int | None = None
     industry: str | None = None
+    industry_candidates: list[IndustryCandidate] = Field(default_factory=list)
     business_registration_status: str | None = None
     """예비창업자 / 사업자등록 여부 등"""
     extra: dict[str, Any] = Field(default_factory=dict)
+    _normalize_lists = field_validator("industry_candidates", mode="before")(
+        _none_to_empty_list
+    )
     _normalize_extra = field_validator("extra", mode="before")(_none_to_empty_dict)
 
 
