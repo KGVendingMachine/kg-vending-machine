@@ -1,3 +1,4 @@
+/** 공고 카테고리 목록 */
 export const NOTICE_CATEGORIES = [
   '자금',
   'R&D·기술',

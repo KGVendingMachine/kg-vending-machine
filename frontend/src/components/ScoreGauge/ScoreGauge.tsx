@@ -1,5 +1,3 @@
-import styles from './ScoreGauge.module.css'
-
 interface ScoreGaugeProps {
   score: number
   size?: number
@@ -19,8 +17,16 @@ export function ScoreGauge({ score, size = 120 }: ScoreGaugeProps) {
   const color = scoreColor(score)
 
   return (
-    <div className={styles.gauge} style={{ width: size, height: size }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+    <div
+      className="relative inline-block"
+      style={{ width: size, height: size }}
+    >
+      <svg
+        width={size}
+        height={size}
+        viewBox={`0 0 ${size} ${size}`}
+        className="-rotate-90"
+      >
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -41,14 +47,14 @@ export function ScoreGauge({ score, size = 120 }: ScoreGaugeProps) {
           strokeDashoffset={offset}
         />
       </svg>
-      <div className={styles.value}>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
         <span
-          className={styles.score}
+          className="font-extrabold leading-none"
           style={{ color, fontSize: size * 0.28 }}
         >
           {score}
         </span>
-        <span className={styles.max}>/ 100</span>
+        <span className="mt-0.5 text-[11px] text-faint">/ 100</span>
       </div>
     </div>
   )
