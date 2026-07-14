@@ -3,10 +3,11 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_plan import BusinessPlan
@@ -30,7 +31,16 @@ _QUALITY_REQUIRED_FIELDS: tuple[str, ...] = (
 )
 
 _TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
+_AMOUNT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(억원|억|천만원|백만원|만원|원)")
 _ALL_REGIONS = {"전국", "ALL", "all", "전체", "전 지역", "nationwide"}
+_KRW_UNITS = {
+    "억원": 100_000_000,
+    "억": 100_000_000,
+    "천만원": 10_000_000,
+    "백만원": 1_000_000,
+    "만원": 10_000,
+    "원": 1,
+}
 
 
 class MatchingNotReadyError(Exception):
@@ -46,6 +56,32 @@ class MatchingNotReadyError(Exception):
 class ScoredNotice:
     notice: Notice
     result: MatchResult
+
+
+@dataclass(frozen=True)
+class FilterDecision:
+    stage: str
+    status: str
+    reasons: tuple[str, ...] = ()
+
+    @property
+    def dropped(self) -> bool:
+        return self.status == "drop"
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "stage": self.stage,
+            "status": self.status,
+            "reasons": list(self.reasons),
+        }
+
+
+@dataclass(frozen=True)
+class PipelineCandidate:
+    notice: Notice
+    normalized_notice: NormalizedNoticeSchema
+    first_stage: FilterDecision
+    second_stage: FilterDecision
 
 
 def _now_naive() -> datetime:
@@ -89,6 +125,20 @@ def _overlap_score(left: set[str], right: set[str], *, default: float = 50.0) ->
     if base == 0:
         return default
     return min(100.0, 35.0 + (overlap / base) * 65.0)
+
+
+def _extract_krw_amounts(text: str | None) -> list[int]:
+    if not text:
+        return []
+    amounts: list[int] = []
+    for value, unit in _AMOUNT_RE.findall(text.replace(",", "")):
+        amounts.append(int(float(value) * _KRW_UNITS[unit]))
+    return amounts
+
+
+def _max_krw_amount(text: str | None) -> int | None:
+    amounts = _extract_krw_amounts(text)
+    return max(amounts) if amounts else None
 
 
 def _industry_candidate_tokens(plan: NormalizedBusinessPlanSchema) -> set[str]:
@@ -193,6 +243,254 @@ def _parse_notice(notice: Notice) -> NormalizedNoticeSchema | None:
     return NormalizedNoticeSchema.model_validate(notice.normalized_json)
 
 
+def _notice_field_tokens(normalized_notice: NormalizedNoticeSchema) -> set[str]:
+    return _tokens(
+        normalized_notice.basic.category,
+        normalized_notice.eligibility.target_industries,
+        normalized_notice.matching.keywords,
+        normalized_notice.matching.matching_signals,
+    )
+
+
+def _is_all_region(value: str) -> bool:
+    return value.strip() in _ALL_REGIONS
+
+
+def _region_matches(profile_region: str | None, target_regions: list[str]) -> bool:
+    if not target_regions or any(_is_all_region(region) for region in target_regions):
+        return True
+    if not profile_region:
+        return False
+    return _contains_any(profile_region, target_regions)
+
+
+def _first_stage_filter(
+    *,
+    plan: NormalizedBusinessPlanSchema,
+    profile: CompanyProfile,
+    notice: Notice,
+    normalized_notice: NormalizedNoticeSchema,
+    today: date | None = None,
+) -> FilterDecision:
+    reasons: list[str] = []
+    pass_reasons: list[str] = []
+    review_reasons: list[str] = []
+    today = today or date.today()
+
+    if notice.application_end_date and notice.application_end_date < today:
+        reasons.append("신청 마감일이 지난 공고입니다.")
+    elif notice.application_end_date:
+        pass_reasons.append("신청 마감일이 지나지 않은 공고입니다.")
+    else:
+        review_reasons.append("신청 마감일 정보가 없어 제외하지 않았습니다.")
+
+    target_regions = normalized_notice.eligibility.target_regions
+    if not target_regions or any(_is_all_region(region) for region in target_regions):
+        pass_reasons.append("공고의 지원 지역이 전국 대상이거나 지역 제한이 없습니다.")
+    else:
+        if profile.region_name:
+            if not _region_matches(profile.region_name, target_regions):
+                reasons.append("기업 소재지가 공고의 지원 지역과 명확히 다릅니다.")
+            else:
+                pass_reasons.append("기업 소재지가 공고의 지원 지역 조건과 일치합니다.")
+        else:
+            review_reasons.append(
+                "기업 소재지 정보가 없어 지역 조건은 검토 대상으로 남깁니다."
+            )
+
+    industry_tokens = _industry_candidate_tokens(plan)
+    notice_field_tokens = _notice_field_tokens(normalized_notice)
+    has_structured_notice_industries = bool(
+        normalized_notice.eligibility.target_industries
+    )
+    has_structured_plan_industries = bool(plan.company.industry_candidates)
+    if (
+        has_structured_plan_industries
+        and has_structured_notice_industries
+        and industry_tokens
+        and notice_field_tokens
+        and not (industry_tokens & notice_field_tokens)
+    ):
+        reasons.append(
+            "사업 분야 후보가 공고의 대상 업종/분야와 명확히 일치하지 않습니다."
+        )
+    elif industry_tokens & notice_field_tokens:
+        matched_fields = ", ".join(sorted(industry_tokens & notice_field_tokens)[:5])
+        pass_reasons.append(
+            f"사업 분야 후보와 공고 분야 키워드가 일치합니다: {matched_fields}"
+        )
+    elif not industry_tokens or not notice_field_tokens:
+        review_reasons.append(
+            "분야 비교에 필요한 구조화 정보가 부족해 제외하지 않았습니다."
+        )
+
+    required_status = normalized_notice.eligibility.required_status
+    if required_status and profile.business_type:
+        if not _contains_any(profile.business_type, required_status):
+            reasons.append("기업 형태가 공고의 필수 지원대상과 명확히 다릅니다.")
+        else:
+            pass_reasons.append("기업 형태가 공고의 필수 지원대상 조건과 일치합니다.")
+    elif required_status:
+        review_reasons.append(
+            "기업 형태 정보가 없어 필수 지원대상은 검토 대상으로 남깁니다."
+        )
+    else:
+        pass_reasons.append("공고에 별도 기업 형태 제한이 없습니다.")
+
+    if reasons:
+        return FilterDecision("first_stage", "drop", tuple(reasons))
+    if review_reasons:
+        return FilterDecision(
+            "first_stage",
+            "review",
+            tuple(pass_reasons + review_reasons),
+        )
+    return FilterDecision("first_stage", "pass", tuple(pass_reasons))
+
+
+def _second_stage_filter(
+    *,
+    plan: NormalizedBusinessPlanSchema,
+    profile: CompanyProfile,
+    notice: Notice,
+    normalized_notice: NormalizedNoticeSchema,
+) -> FilterDecision:
+    reasons: list[str] = []
+    pass_reasons: list[str] = []
+    review_reasons: list[str] = []
+
+    target_sizes = normalized_notice.eligibility.target_company_size
+    if target_sizes and profile.company_size:
+        if not _contains_any(profile.company_size, target_sizes) and not any(
+            "기업" in size for size in target_sizes
+        ):
+            reasons.append("기업 규모가 공고의 정량 지원 조건과 명확히 다릅니다.")
+        else:
+            pass_reasons.append("기업 규모가 공고의 지원 대상 조건과 일치합니다.")
+    elif target_sizes:
+        review_reasons.append(
+            "기업 규모 정보가 없어 정량 조건은 검토 대상으로 남깁니다."
+        )
+    else:
+        pass_reasons.append("공고에 별도 기업 규모 제한이 없습니다.")
+
+    age_min = normalized_notice.eligibility.business_age_min
+    age_max = (
+        normalized_notice.eligibility.business_age_max
+        if normalized_notice.eligibility.business_age_max is not None
+        else notice.target_business_years_max
+    )
+    if profile.business_years is not None:
+        if age_min is not None and profile.business_years < age_min:
+            reasons.append("기업 업력이 공고의 최소 업력 조건보다 짧습니다.")
+        if age_max is not None and profile.business_years > age_max:
+            reasons.append("기업 업력이 공고의 최대 업력 조건을 초과합니다.")
+        if not reasons and (age_min is not None or age_max is not None):
+            pass_reasons.append("기업 업력이 공고의 업력 조건 범위에 포함됩니다.")
+    elif age_min is not None or age_max is not None:
+        review_reasons.append(
+            "기업 업력 정보가 없어 업력 조건은 검토 대상으로 남깁니다."
+        )
+    else:
+        pass_reasons.append("공고에 별도 업력 제한이 없습니다.")
+
+    support_amount = normalized_notice.support.support_amount
+    if support_amount:
+        support_amount_max = _max_krw_amount(support_amount)
+        requested_amount = plan.funding.amount_requested
+        if support_amount_max is None:
+            review_reasons.append(
+                "지원금액 조건은 원문 표현이 다양해 현재는 검토 정보로만 남깁니다."
+            )
+        elif requested_amount is not None and requested_amount > support_amount_max:
+            review_reasons.append(
+                "사업계획서 요청 금액이 공고 지원 한도보다 클 수 있어 확인이 필요합니다."
+            )
+        elif requested_amount is None:
+            review_reasons.append(
+                "사업계획서 요청 금액 정보가 없어 지원금액 조건은 검토 대상으로 남깁니다."
+            )
+        else:
+            pass_reasons.append("사업계획서 요청 금액이 공고 지원 한도 이내입니다.")
+    else:
+        review_reasons.append(
+            "공고 지원금액 정보가 없어 금액 조건은 검토 대상으로 남깁니다."
+        )
+
+    if reasons:
+        return FilterDecision("second_stage", "drop", tuple(reasons))
+    if review_reasons:
+        return FilterDecision(
+            "second_stage",
+            "review",
+            tuple(pass_reasons + review_reasons),
+        )
+    return FilterDecision("second_stage", "pass", tuple(pass_reasons))
+
+
+def _count_decisions(decisions: list[FilterDecision]) -> dict[str, int]:
+    counts = {"pass": 0, "review": 0, "drop": 0}
+    for decision in decisions:
+        if decision.status in counts:
+            counts[decision.status] += 1
+    return counts
+
+
+def _summarize_reasons(decisions: list[FilterDecision]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for decision in decisions:
+        for reason in decision.reasons:
+            counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def _build_pipeline_summary(
+    *,
+    input_count: int,
+    quality_failed: dict[int, list[str]],
+    parse_failed_ids: list[int],
+    first_stage_decisions: list[FilterDecision],
+    second_stage_decisions: list[FilterDecision],
+    scored: list[ScoredNotice],
+    selected: list[MatchResult],
+) -> dict[str, Any]:
+    quality_passed = input_count - len(quality_failed) - len(parse_failed_ids)
+    return {
+        "input_count": input_count,
+        "quality_filter": {
+            "passed_count": quality_passed,
+            "dropped_count": len(quality_failed) + len(parse_failed_ids),
+            "missing_field_counts": _quality_missing_field_counts(quality_failed),
+            "parse_failed_notice_ids": parse_failed_ids,
+        },
+        "first_stage_filter": {
+            **_count_decisions(first_stage_decisions),
+            "reason_counts": _summarize_reasons(first_stage_decisions),
+        },
+        "second_stage_filter": {
+            **_count_decisions(second_stage_decisions),
+            "reason_counts": _summarize_reasons(second_stage_decisions),
+        },
+        "scoring": {
+            "scored_count": len(scored),
+            "selected_count": len(selected),
+            "selected_notice_ids": [result.notice_id for result in selected],
+        },
+    }
+
+
+def _quality_missing_field_counts(
+    quality_failed: dict[int, list[str]],
+) -> dict[str, int]:
+    missing_field_counts: dict[str, int] = {}
+    for errors in quality_failed.values():
+        for field_path in errors:
+            missing_field_counts[field_path] = (
+                missing_field_counts.get(field_path, 0) + 1
+            )
+    return missing_field_counts
+
+
 def _eligibility_score(
     profile: CompanyProfile, notice: NormalizedNoticeSchema
 ) -> tuple[float, str, list[str]]:
@@ -255,6 +553,8 @@ def _score_notice(
     profile: CompanyProfile,
     notice: Notice,
     normalized_notice: NormalizedNoticeSchema,
+    first_stage: FilterDecision | None = None,
+    second_stage: FilterDecision | None = None,
 ) -> MatchResult:
     plan_item_tokens = _tokens(
         plan.company.industry,
@@ -322,6 +622,10 @@ def _score_notice(
     strategy = _strategy_suggestion(normalized_notice, growth_score)
 
     result_json = {
+        "pipeline_filters": {
+            "first_stage": first_stage.to_json() if first_stage else None,
+            "second_stage": second_stage.to_json() if second_stage else None,
+        },
         "notice_quality": {"status": "passed", "missing_fields": []},
         "field_match": field_match,
         "score_breakdown": {
@@ -443,43 +747,105 @@ async def run_matching(
             "매칭할 수 있는 공고가 없습니다. 공고 정규화가 완료된 뒤 다시 시도해주세요."
         )
 
-    # docs/matching-pipeline.md "로깅 요구사항" — 1차 필터링(품질 필터 +
-    # 자격요건 필터) 단계는 별도 엔드포인트 없이 이 루프 안에 통합돼 있어,
-    # 어느 기준에서 몇 건이 걸러졌는지는 로그로만 추적할 수 있다.
     quality_failed: dict[int, list[str]] = {}
     parse_failed_ids: list[int] = []
-    eligibility_counts: dict[str, int] = {
-        "eligible": 0,
-        "needs_review": 0,
-        "likely_ineligible": 0,
-    }
+    first_stage_decisions: list[FilterDecision] = []
+    second_stage_decisions: list[FilterDecision] = []
 
-    scored: list[ScoredNotice] = []
+    parsed_candidates: list[tuple[Notice, NormalizedNoticeSchema]] = []
     for notice in candidates:
         quality_errors = _quality_errors(notice.normalized_json or {})
         if quality_errors:
             quality_failed[notice.id] = quality_errors
             continue
 
-        normalized_notice = _parse_notice(notice)
+        try:
+            normalized_notice = _parse_notice(notice)
+        except ValidationError:
+            parse_failed_ids.append(notice.id)
+            continue
         if normalized_notice is None:
             parse_failed_ids.append(notice.id)
             continue
+        parsed_candidates.append((notice, normalized_notice))
 
-        result = _score_notice(
+    first_stage_candidates: list[tuple[Notice, NormalizedNoticeSchema, FilterDecision]]
+    first_stage_candidates = []
+    for notice, normalized_notice in parsed_candidates:
+        decision = _first_stage_filter(
             plan=normalized_plan,
             profile=profile,
             notice=notice,
             normalized_notice=normalized_notice,
         )
+        first_stage_decisions.append(decision)
+        if not decision.dropped:
+            first_stage_candidates.append((notice, normalized_notice, decision))
+
+    pipeline_candidates: list[PipelineCandidate] = []
+    for notice, normalized_notice, first_stage in first_stage_candidates:
+        second_stage = _second_stage_filter(
+            plan=normalized_plan,
+            profile=profile,
+            notice=notice,
+            normalized_notice=normalized_notice,
+        )
+        second_stage_decisions.append(second_stage)
+        if not second_stage.dropped:
+            pipeline_candidates.append(
+                PipelineCandidate(
+                    notice=notice,
+                    normalized_notice=normalized_notice,
+                    first_stage=first_stage,
+                    second_stage=second_stage,
+                )
+            )
+
+    if not pipeline_candidates:
+        log.query_json = {
+            "business_plan": plan.analysis_json,
+            "pipeline": _build_pipeline_summary(
+                input_count=len(candidates),
+                quality_failed=quality_failed,
+                parse_failed_ids=parse_failed_ids,
+                first_stage_decisions=first_stage_decisions,
+                second_stage_decisions=second_stage_decisions,
+                scored=[],
+                selected=[],
+            ),
+        }
+        logger.warning(
+            "매칭 불가 (match_log_id=%s): 후보 %d건 전부 필터링 단계에서 제외",
+            log.id,
+            len(candidates),
+        )
+        raise MatchingNotReadyError(
+            "매칭 기준을 충족하는 공고가 없습니다. 필터링 조건과 공고 정규화 품질을 확인해주세요."
+        )
+
+    scored: list[ScoredNotice] = []
+    eligibility_counts: dict[str, int] = {
+        "eligible": 0,
+        "needs_review": 0,
+        "likely_ineligible": 0,
+    }
+    for candidate in pipeline_candidates:
+        result = _score_notice(
+            plan=normalized_plan,
+            profile=profile,
+            notice=candidate.notice,
+            normalized_notice=candidate.normalized_notice,
+            first_stage=candidate.first_stage,
+            second_stage=candidate.second_stage,
+        )
         result.recommendation_run_id = log.id
         if result.eligibility_status in eligibility_counts:
             eligibility_counts[result.eligibility_status] += 1
-        scored.append(ScoredNotice(notice=notice, result=result))
+        scored.append(ScoredNotice(notice=candidate.notice, result=result))
         logger.debug(
             "공고 %s 점수: total=%s (자격=%s/아이템=%s/사업화=%s/성장=%s/가점=%s,"
             " 자격상태=%s, 일치키워드=%s)",
-            notice.id,
+            candidate.notice.id,
             result.total_score,
             result.eligibility_score,
             result.item_fit_score,
@@ -490,63 +856,66 @@ async def run_matching(
             (result.result_json or {}).get("matched_keywords"),
         )
 
-    if not scored:
-        logger.warning(
-            "매칭 불가 (match_log_id=%s): 후보 %d건 전부 품질 기준 미달 또는 파싱 실패",
-            log.id,
-            len(candidates),
-        )
-        raise MatchingNotReadyError(
-            "매칭 기준을 충족하는 공고가 없습니다. 공고 정규화 품질을 확인해주세요."
-        )
-
     scored.sort(key=lambda item: item.result.total_score or Decimal("0"), reverse=True)
     selected = [item.result for item in scored[:max_results]]
+    pipeline_summary = _build_pipeline_summary(
+        input_count=len(candidates),
+        quality_failed=quality_failed,
+        parse_failed_ids=parse_failed_ids,
+        first_stage_decisions=first_stage_decisions,
+        second_stage_decisions=second_stage_decisions,
+        scored=scored,
+        selected=selected,
+    )
+    log.query_json = {
+        "business_plan": plan.analysis_json,
+        "pipeline": pipeline_summary,
+    }
 
     logger.info(
-        "1차 필터링 [match_log_id=%s] 품질 필터: 입력 %d건 중 통과 %d건, 제외 %d건",
+        "품질 필터 [match_log_id=%s]: 입력 %d건 중 통과 %d건, 제외 %d건",
         log.id,
         len(candidates),
-        len(candidates) - len(quality_failed),
-        len(quality_failed),
+        pipeline_summary["quality_filter"]["passed_count"],
+        pipeline_summary["quality_filter"]["dropped_count"],
     )
     if quality_failed:
-        missing_field_counts: dict[str, int] = {}
-        for errors in quality_failed.values():
-            for field_path in errors:
-                missing_field_counts[field_path] = (
-                    missing_field_counts.get(field_path, 0) + 1
-                )
         logger.info(
-            "1차 필터링 [match_log_id=%s] 품질 필터 제외 사유별 건수: %s",
+            "품질 필터 [match_log_id=%s] 제외 사유별 건수: %s",
             log.id,
-            missing_field_counts,
+            pipeline_summary["quality_filter"]["missing_field_counts"],
         )
     if parse_failed_ids:
         logger.info(
-            "1차 필터링 [match_log_id=%s] 정규화 스키마 파싱 실패로 추가 제외: "
+            "품질 필터 [match_log_id=%s] 정규화 스키마 파싱 실패로 추가 제외: "
             "%d건 (notice_id=%s)",
             log.id,
             len(parse_failed_ids),
             parse_failed_ids,
         )
     logger.info(
-        "1차 필터링 [match_log_id=%s] 자격요건 필터 분포 (통과 %d건 중): "
-        "eligible=%d, needs_review=%d, likely_ineligible=%d"
-        " (likely_ineligible은 제외 대신 총점 49점 캡)",
+        "1차 필터링 [match_log_id=%s]: pass=%d, review=%d, drop=%d, 사유=%s",
         log.id,
-        len(scored),
+        pipeline_summary["first_stage_filter"]["pass"],
+        pipeline_summary["first_stage_filter"]["review"],
+        pipeline_summary["first_stage_filter"]["drop"],
+        pipeline_summary["first_stage_filter"]["reason_counts"],
+    )
+    logger.info(
+        "2차 필터링 [match_log_id=%s]: pass=%d, review=%d, drop=%d, 사유=%s",
+        log.id,
+        pipeline_summary["second_stage_filter"]["pass"],
+        pipeline_summary["second_stage_filter"]["review"],
+        pipeline_summary["second_stage_filter"]["drop"],
+        pipeline_summary["second_stage_filter"]["reason_counts"],
+    )
+    logger.info(
+        "스코어링 [match_log_id=%s] 자격요건 분포: eligible=%d, "
+        "needs_review=%d, likely_ineligible=%d (likely_ineligible은 총점 49점 캡)",
+        log.id,
         eligibility_counts["eligible"],
         eligibility_counts["needs_review"],
         eligibility_counts["likely_ineligible"],
-    )
-    logger.info(
-        "1차 필터링 [match_log_id=%s] 완료: 필터 통과 %d건 중 상위 %d건 선정, "
-        "notice_id=%s",
-        log.id,
-        len(scored),
-        len(selected),
-        [item.notice_id for item in selected],
     )
 
     await match_log_repository.replace_results(session, log.id, selected)
