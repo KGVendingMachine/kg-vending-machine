@@ -64,7 +64,7 @@ export function UploadPage() {
 
   // 조회 실패가 업로드 흐름을 막을 이유는 없다 — 빈 드롭존으로 폴백.
   const { data: existingPlan, loading: checking } =
-    useFetchOnMount<BusinessPlanSummary>(() => getMyBusinessPlan(), [])
+    useFetchOnMount<BusinessPlanSummary | null>(() => getMyBusinessPlan(), [])
 
   const showExistingCard = !checking && existingPlan != null && !replacing && !file
 

@@ -5,8 +5,10 @@ import { NoticeCard } from '../../components/NoticeCard/NoticeCard'
 import { ScoreGauge } from '../../components/ScoreGauge/ScoreGauge'
 import { getMatchLog, formatMatchLogDate } from '../../api/matchLogs'
 import type { MatchLog } from '../../api/matchLogs'
+import { toggleBookmark } from '../../api/bookmarks'
 import { useFetchOnMount } from '../../hooks/useFetchOnMount'
 import { useMatchedNotices } from '../../hooks/useMatchedNotices'
+import type { MatchedNotice } from '../../types/notice'
 import { PATHS } from '../../routes/paths'
 import { DEADLINE_FILTERS } from '../../constants/resultsFilters'
 
@@ -25,7 +27,31 @@ export function ResultsPage() {
   // 공고 상세와 매칭 점수를 합친 표시용 모델(MatchedNotice)을 가져온다 —
   // MatchDetailPage/BookmarksPage와 동일한 훅으로, 목록/상세 화면 전체가
   // 같은 모델을 쓰게 통일한다.
-  const { matchedNotices, loading, error } = useMatchedNotices(validLogId)
+  const { matchedNotices, loading, error, applyBookmark } =
+    useMatchedNotices(validLogId)
+  const [bookmarkBusyIds, setBookmarkBusyIds] = useState<Set<number>>(new Set())
+
+  async function handleToggleBookmark(notice: MatchedNotice) {
+    if (bookmarkBusyIds.has(notice.id)) return
+    setBookmarkBusyIds((current) => new Set(current).add(notice.id))
+    try {
+      const nextBookmarkId = await toggleBookmark({
+        bookmarkId: notice.bookmarkId,
+        matchResultId: notice.matchResultId,
+        noticeId: notice.id,
+      })
+      applyBookmark(notice.id, nextBookmarkId)
+    } catch {
+      // 실패하면 상태를 그대로 두어 사용자가 다시 시도할 수 있게 한다.
+    } finally {
+      setBookmarkBusyIds((current) => {
+        const next = new Set(current)
+        next.delete(notice.id)
+        return next
+      })
+    }
+  }
+
   // 실행 정보 배너는 부가 정보라 실패해도 결과 화면은 그대로 보여준다.
   const { data: matchLog } = useFetchOnMount<MatchLog>(
     () => (validLogId == null ? null : getMatchLog(validLogId)),
@@ -152,6 +178,8 @@ export function ResultsPage() {
                 notice={notice}
                 selected={notice.id === selectedId}
                 onClick={() => setSelectedId(notice.id)}
+                onToggleBookmark={() => handleToggleBookmark(notice)}
+                bookmarkBusy={bookmarkBusyIds.has(notice.id)}
               />
             ))}
           </div>

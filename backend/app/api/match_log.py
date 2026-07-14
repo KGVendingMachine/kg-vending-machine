@@ -63,6 +63,8 @@ def _result_to_response(
         weakness=result.weakness,
         strategy_suggestion=result.strategy_suggestion,
         result_json=result.result_json,
+        is_bookmarked=item.bookmark_id is not None,
+        bookmark_id=item.bookmark_id,
         created_at=result.created_at,
     )
 
@@ -184,5 +186,11 @@ async def list_match_results(
             detail="Match log not found.",
         )
 
-    results = await match_log_repository.list_results_by_log(session, match_log_id)
+    log, _ = row
+    results = await match_log_repository.list_results_by_log(
+        session,
+        match_log_id,
+        user_id=current_user.id,
+        business_plan_id=log.business_plan_id,
+    )
     return [_result_to_response(item) for item in results]

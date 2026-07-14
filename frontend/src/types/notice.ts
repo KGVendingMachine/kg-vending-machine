@@ -1,3 +1,4 @@
+import type { Bookmark } from '../api/bookmarks'
 import type { MatchResult } from '../api/matchLogs'
 import type { NoticeDetail } from '../api/notices'
 import { formatDeadline } from '../utils/date'
@@ -55,6 +56,10 @@ export interface MatchedNotice {
   scoreBreakdown: ScoreBreakdownItem[] | null
   eligibilityStatus: string | null
   strategySuggestion: string | null
+  /** 이 카드가 어느 추천 결과에서 왔는지(추천 컨텍스트에서 담을 때 사용). 없으면 null. */
+  matchResultId: number | null
+  /** 담겨 있으면 그 북마크 id(별표 채움·해제에 사용). 아니면 null. */
+  bookmarkId: number | null
 }
 
 function splitSentences(value: string | null): string[] {
@@ -121,5 +126,43 @@ export function toMatchedNotice(notice: NoticeDetail, result?: MatchResult): Mat
     scoreBreakdown: toScoreBreakdown(result),
     eligibilityStatus: result?.eligibility_status ?? null,
     strategySuggestion: result?.strategy_suggestion ?? null,
+    matchResultId: result?.id ?? null,
+    bookmarkId: result?.bookmark_id ?? null,
+  }
+}
+
+/**
+ * 북마크 목록의 한 건을 카드 표시용 모델로 바꾼다. 점수·추천 이유는 담을
+ * 당시(frozen) 스냅샷(bookmark.recommendation)에서 온다. 북마크 응답에는
+ * match_result_id 가 없어 matchResultId 는 null(목록에서 토글은 해제만 필요).
+ */
+export function bookmarkToMatchedNotice(bookmark: Bookmark): MatchedNotice {
+  const { notice, recommendation } = bookmark
+  const deadline = formatDeadline(notice.application_end_date)
+  const strengths = splitSentences(recommendation?.summary_reason ?? null)
+
+  return {
+    id: notice.id,
+    category: notice.category_name,
+    org: notice.organization_name ?? '',
+    title: notice.title ?? '(제목 없음)',
+    amountLabel: notice.amount_label,
+    deadlineLabel: deadline.label,
+    dueDateLabel: deadline.dueDateLabel,
+    isUrgent: deadline.isUrgent,
+    sourceUrl: notice.source_url,
+    applyUrl: notice.apply_url,
+    summary: null,
+    score: recommendation?.total_score ?? null,
+    scoreLevel: toScoreLevel(recommendation?.recommendation_level ?? null),
+    matchReasonShort: strengths[0] ?? null,
+    strengths,
+    weaknesses: [],
+    cautions: [],
+    scoreBreakdown: null,
+    eligibilityStatus: null,
+    strategySuggestion: null,
+    matchResultId: null,
+    bookmarkId: bookmark.id,
   }
 }

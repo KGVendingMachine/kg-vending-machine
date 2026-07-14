@@ -147,7 +147,7 @@ async def _make_full_account(db_session, user: User) -> dict:
 
     result = MatchResult(recommendation_run_id=log.id, notice_id=notice.id)
     report = MatchReport(match_run_id=log.id, content="리포트")
-    bookmark = NoticeBookmark(user_id=user.id, notice_id=notice.id)
+    bookmark = NoticeBookmark(user_id=user.id, notice_id=notice.id, source="browse")
     db_session.add_all([result, report, bookmark])
     await db_session.flush()
 
