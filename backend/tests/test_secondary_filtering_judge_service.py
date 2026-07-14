@@ -1,0 +1,167 @@
+"""
+tests/test_secondary_filtering_judge_service.py
+
+app/services/secondary_filtering_judge_service.py 테스트.
+docs/secondary-filtering-llm-judge-guide.md 설계의 핵심(70/30 가중 집계,
+제외요건 확정 시 캡, criteria 문장 생성)을 순수 함수 단위로 검증하고,
+judge_notice의 LLM 호출은 monkeypatch로 대체한다(tests/test_ai_normalizer.py와
+동일하게 실제 OpenAI API는 호출하지 않음).
+"""
+
+import pytest
+
+from app.models.company import CompanyProfile
+from app.schemas.business_plan import NormalizedBusinessPlanSchema
+from app.schemas.notice_normalization import NormalizedNoticeSchema
+from app.services import secondary_filtering_judge_service as judge_service
+from app.services.secondary_filtering_judge_service import (
+    NEUTRAL_SCORE,
+    CriterionJudgment,
+    _build_criteria,
+    aggregate_secondary_score,
+    judge_notice,
+)
+
+pytestmark = pytest.mark.anyio
+
+
+def _notice(**eligibility_overrides) -> NormalizedNoticeSchema:
+    return NormalizedNoticeSchema.model_validate(
+        {
+            "eligibility": {
+                "target_regions": ["서울", "경기"],
+                "target_company_size": ["소기업"],
+                **eligibility_overrides,
+            },
+            "evaluation": {"disqualification_reasons": ["세금 체납"]},
+        }
+    )
+
+
+def _plan() -> NormalizedBusinessPlanSchema:
+    return NormalizedBusinessPlanSchema.model_validate(
+        {"solution": {"summary": "AI 비전 검사 솔루션"}}
+    )
+
+
+def test_build_criteria_only_includes_present_eligibility_fields():
+    notice = NormalizedNoticeSchema.model_validate(
+        {"eligibility": {"target_regions": ["서울"]}}
+    )
+
+    items = _build_criteria(notice)
+
+    ids = [item[0] for item in items]
+    assert "elig:region" in ids
+    assert "elig:size" not in ids  # target_company_size가 비어 있음
+    assert all(not is_excl for _, _, is_excl in items)
+
+
+def test_build_criteria_reframes_exclusion_positively():
+    notice = _notice()
+
+    items = _build_criteria(notice)
+    exclusion_items = [item for item in items if item[2]]
+
+    assert len(exclusion_items) == 1
+    assert exclusion_items[0][1] == "세금 체납에 해당하지 않음"
+
+
+def test_aggregate_secondary_score_returns_neutral_when_no_judgments():
+    result = aggregate_secondary_score([])
+
+    assert result.score == NEUTRAL_SCORE
+    assert result.excluded is False
+
+
+def test_aggregate_secondary_score_weights_eligibility_more_than_exclusion():
+    # 자격요건 전부 미충족(도메인상 부적격) + 제외요건 전부 충족(제외 대상
+    # 아님)인 경우, 70/30 가중이 없으면 잘못 높게 나온다(score_aggregate.py
+    # 모듈 docstring에 적힌 실측 버그와 동일한 시나리오).
+    judgments = [
+        CriterionJudgment(
+            criterion="자격1", status="미충족", evidence=None, is_exclusion=False
+        ),
+        CriterionJudgment(
+            criterion="자격2", status="미충족", evidence=None, is_exclusion=False
+        ),
+    ] + [
+        CriterionJudgment(
+            criterion=f"제외{i}", status="충족", evidence=None, is_exclusion=True
+        )
+        for i in range(9)
+    ]
+
+    result = aggregate_secondary_score(judgments)
+
+    # eligibility_avg=0.0*0.7 + exclusion_avg=1.0*0.3 = 30.0
+    assert result.score == pytest.approx(30.0)
+    assert result.excluded is False
+
+
+def test_aggregate_secondary_score_caps_when_exclusion_confirmed():
+    judgments = [
+        CriterionJudgment(
+            criterion="자격1", status="충족", evidence=None, is_exclusion=False
+        ),
+        CriterionJudgment(
+            criterion="제외1에 해당하지 않음",
+            status="미충족",
+            evidence="제외 대상 확인됨",
+            is_exclusion=True,
+        ),
+    ]
+
+    result = aggregate_secondary_score(judgments)
+
+    assert result.excluded is True
+    assert result.score <= judge_service._EXCLUDED_SCORE_CAP
+
+
+async def test_judge_notice_returns_none_when_no_criteria_available():
+    notice = NormalizedNoticeSchema.model_validate({})
+    profile = CompanyProfile(company_size="소기업", region_name="서울")
+
+    result = await judge_notice(
+        profile=profile, plan=_plan(), notice=notice, evidence=[]
+    )
+
+    assert result is None
+
+
+async def test_judge_notice_uses_llm_judgments(monkeypatch):
+    async def _fake_judge_criteria(**kwargs):
+        return {
+            "elig:region": ("충족", "서울 소재 확인"),
+            "elig:size": ("충족", "소기업 확인"),
+            "excl:reason:0": ("충족", "체납 없음"),
+        }
+
+    monkeypatch.setattr(judge_service, "judge_criteria", _fake_judge_criteria)
+
+    profile = CompanyProfile(company_size="소기업", region_name="서울")
+    result = await judge_notice(
+        profile=profile, plan=_plan(), notice=_notice(), evidence=[]
+    )
+
+    assert result is not None
+    assert result.excluded is False
+    assert result.score == pytest.approx(100.0)
+
+
+async def test_judge_notice_falls_back_to_information_lacking_on_ai_error(monkeypatch):
+    async def _raise(**kwargs):
+        raise judge_service.AiJudgeError("boom")
+
+    monkeypatch.setattr(judge_service, "judge_criteria", _raise)
+
+    profile = CompanyProfile(company_size="소기업", region_name="서울")
+    result = await judge_notice(
+        profile=profile, plan=_plan(), notice=_notice(), evidence=[]
+    )
+
+    assert result is not None
+    assert all(judgment.status == "정보부족" for judgment in result.judgments)
+    # 모든 판정이 정보부족(가중치 0.5)이면 자격/제외 그룹 평균이 둘 다 0.5라
+    # 70/30 가중을 적용해도 결과는 그대로 50.0 = NEUTRAL_SCORE다.
+    assert result.score == pytest.approx(NEUTRAL_SCORE)

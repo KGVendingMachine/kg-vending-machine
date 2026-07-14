@@ -27,8 +27,23 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_TIMEOUT_SECONDS: float = 30.0
     OPENAI_MAX_RETRIES: int = 3
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    OPENAI_EMBEDDING_TIMEOUT_SECONDS: float = 30.0
+    OPENAI_EMBEDDING_MAX_RETRIES: int = 3
+    SECONDARY_FILTERING_JUDGE_CONCURRENCY_LIMIT: int = 10
+    """2차 필터링 LLM 판정(secondary_filtering_judge_service.judge_notice) 동시
+    호출 수 제한. notice_normalization_service._NOTICE_LLM_CONCURRENCY_LIMIT과
+    같은 이유(계정 전체 동시 호출 한도가 실측된 적 없음, 매칭 요청과 정규화
+    배치가 겹칠 때 레이트리밋/타임아웃 위험)로 동일한 기본값을 쓴다."""
     BUSINESS_PLAN_SAMPLE_JSON_PATH: str = ""
     NOTICE_SAMPLE_JSON_PATH: str = ""
+
+    # 2차 필터링(docs/matching-pipeline.md 4단계) 벡터 DB - AI 담당
+    # xuswns/chromadb-embedded-deployment.md 참고: 별도 서버 없이 프로세스 안에서
+    # 로컬 디스크에 바로 저장하는 embedded persistent client 방식.
+    CHROMA_PERSIST_DIR: str = "data/chroma"
+    CHROMA_NOTICE_COLLECTION: str = "notice_attachments"
+    CHROMA_BUSINESS_PLAN_COLLECTION: str = "business_plan_chunks"
 
     BIZINFO_API_KEY: str = ""
     BIZINFO_API_URL: str = "https://www.bizinfo.go.kr/uss/rss/bizinfoApi.do"

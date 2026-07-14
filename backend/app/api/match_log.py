@@ -14,6 +14,7 @@ from app.schemas.match_log import (
     MatchLogResponse,
     MatchResultNoticeInfo,
     MatchResultResponse,
+    SecondaryFilteringLogResponse,
 )
 from app.services.matching_service import MatchingNotReadyError, run_matching
 
@@ -186,3 +187,37 @@ async def list_match_results(
 
     results = await match_log_repository.list_results_by_log(session, match_log_id)
     return [_result_to_response(item) for item in results]
+
+
+@router.get(
+    "/{match_log_id}/secondary-filtering",
+    response_model=SecondaryFilteringLogResponse,
+    summary="Get the secondary-filtering (embedding similarity) log for one run",
+    description=(
+        "docs/matching-pipeline.md 4단계(2차 필터링) 실행 로그를 조회한다 — "
+        "1차 필터링 통과 후보 중 몇 건이 실제로 임베딩·유사도 검색에 쓰였는지, "
+        "공고별 유사도 점수와 스킵 사유(no_text/embedding_failed)를 담는다."
+    ),
+)
+async def get_secondary_filtering_log(
+    match_log_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    row = await match_log_repository.get_owned_by_user(
+        session, match_log_id, current_user.id
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Match log not found.",
+        )
+    log, _ = row
+    if log.secondary_filtering_log is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="이 매칭 실행에는 2차 필터링 로그가 없습니다.",
+        )
+    return SecondaryFilteringLogResponse(
+        match_log_id=log.id, **log.secondary_filtering_log
+    )
