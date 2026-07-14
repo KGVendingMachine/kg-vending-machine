@@ -1,12 +1,15 @@
+import { useNavigate } from 'react-router-dom'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { NoticeCard } from '../../components/NoticeCard/NoticeCard'
 import { getNoticeDetail } from '../../api/notices'
 import { useFetchOnMount } from '../../hooks/useFetchOnMount'
+import { noticeDetailPath } from '../../routes/paths'
 import { toMatchedNotice } from '../../types/notice'
 import type { MatchedNotice } from '../../types/notice'
 import { useBookmarks } from '../../store/BookmarkContext'
 
 export function BookmarksPage() {
+  const navigate = useNavigate()
   const { bookmarkedIds } = useBookmarks()
   const { data, loading } = useFetchOnMount<MatchedNotice[]>(async () => {
     const results = await Promise.all(
@@ -42,11 +45,7 @@ export function BookmarksPage() {
                 key={notice.id}
                 notice={notice}
                 selected={false}
-                onClick={() => {
-                  if (notice.sourceUrl) {
-                    window.open(notice.sourceUrl, '_blank', 'noreferrer')
-                  }
-                }}
+                onClick={() => navigate(noticeDetailPath(notice.id))}
               />
             ))}
           </div>

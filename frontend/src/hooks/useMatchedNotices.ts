@@ -1,4 +1,4 @@
-import { listMatchResults } from '../api/matchLogs'
+import { getSecondaryFilteringLog, listMatchResults } from '../api/matchLogs'
 import { getNoticeDetail } from '../api/notices'
 import { toMatchedNotice } from '../types/notice'
 import type { MatchedNotice } from '../types/notice'
@@ -25,14 +25,24 @@ export function useMatchedNotices(matchLogId: number | null): UseMatchedNoticesR
 }
 
 async function load(matchLogId: number): Promise<MatchedNotice[]> {
-  const results = await listMatchResults(matchLogId)
+  // 2차 필터링 로그(LLM 판정 근거)는 이 기능 도입 이전 실행에는 없을 수
+  // 있어(getSecondaryFilteringLog가 null 반환) 부가 정보로만 취급한다 —
+  // 못 가져와도 매칭 결과 자체(점수·공고 상세)는 그대로 보여준다.
+  const [results, secondaryLog] = await Promise.all([
+    listMatchResults(matchLogId),
+    getSecondaryFilteringLog(matchLogId).catch(() => null),
+  ])
+  const secondaryByNoticeId = new Map(
+    (secondaryLog?.notices ?? []).map((notice) => [notice.notice_id, notice]),
+  )
   const details = await Promise.all(
     results.map((result) => getNoticeDetail(result.notice_id).catch(() => null)),
   )
   return results
     .map((result, index) => {
       const detail = details[index]
-      return detail ? toMatchedNotice(detail, result) : null
+      if (!detail) return null
+      return toMatchedNotice(detail, result, secondaryByNoticeId.get(result.notice_id))
     })
     .filter((item): item is MatchedNotice => item !== null)
 }

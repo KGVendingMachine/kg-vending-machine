@@ -1,6 +1,7 @@
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { ScoreGauge } from '../../components/ScoreGauge/ScoreGauge'
+import { SecondaryFilteringLogPanel } from '../../components/SecondaryFilteringLogPanel/SecondaryFilteringLogPanel'
 import { getMyCompanyProfile } from '../../api/companyProfile'
 import type { CompanyProfile } from '../../api/companyProfile'
 import { useFetchOnMount } from '../../hooks/useFetchOnMount'
@@ -89,7 +90,35 @@ export function MatchDetailPage() {
         >
           {bookmarked ? '★ 북마크됨' : '☆ 북마크'}
         </button>
+        {notice.sourceUrl ? (
+          <a
+            className="flex h-8 items-center justify-center rounded border-none bg-primary px-3 text-[13px] font-semibold text-white no-underline"
+            href={notice.sourceUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
+            원문 공고 ↗
+          </a>
+        ) : (
+          <button
+            type="button"
+            className="h-8 cursor-not-allowed rounded border border-border bg-surface-subtle px-3 text-[13px] font-semibold text-faint"
+            disabled
+          >
+            원문 공고 ↗
+          </button>
+        )}
       </div>
+
+      <SecondaryFilteringLogPanel matchLogId={matchLogId} />
+
+      {notice.secondaryFilterExcluded ? (
+        <div className="border-b border-[#eef0f2] bg-danger-soft px-10 py-3 text-[13px] leading-[1.6] text-danger">
+          ⚠ AI가 공고 원문을 확인한 결과, 제외요건에 해당하는 것으로 판단돼
+          적합도 점수가 낮게 반영됐어요. "AI 정밀 판정 근거"의 공고 원문 정밀
+          판정을 확인해주세요.
+        </div>
+      ) : null}
 
       <div className="flex items-center gap-8 border-b border-[#eef0f2] bg-white px-10 py-7">
         <div className="flex-1">
@@ -232,7 +261,7 @@ export function MatchDetailPage() {
         <div className="bg-white px-8 py-7">
           {notice.strengths.length > 0 || notice.weaknesses.length > 0 ? (
             <>
-              <div className="mb-1.5 text-[15px] font-extrabold">추천 근거</div>
+              <div className="mb-1.5 text-[15px] font-extrabold">AI 정밀 판정 근거</div>
               <div className="mb-[26px] flex flex-col gap-3">
                 {notice.strengths.map((reason) => (
                   <div
@@ -260,6 +289,44 @@ export function MatchDetailPage() {
                     </div>
                   </div>
                 ) : null}
+              </div>
+            </>
+          ) : null}
+
+          {notice.secondaryFilterJudged && notice.secondaryFilterReasons.length > 0 ? (
+            <>
+              <div className="mb-1.5 text-[15px] font-extrabold">
+                공고 원문 정밀 판정
+              </div>
+              <div className="mb-[26px] flex flex-col gap-2 text-[12.5px] leading-[1.6]">
+                {notice.secondaryFilterReasons.map((reason, index) => (
+                  <div
+                    className={
+                      reason.status === '미충족'
+                        ? 'border-l-2 border-danger pl-2.5'
+                        : reason.status === '충족'
+                          ? 'border-l-2 border-success pl-2.5'
+                          : 'border-l-2 border-faint pl-2.5'
+                    }
+                    key={index}
+                  >
+                    <span
+                      className={
+                        reason.status === '미충족'
+                          ? 'font-semibold text-danger'
+                          : reason.status === '충족'
+                            ? 'font-semibold text-success'
+                            : 'font-semibold text-faint'
+                      }
+                    >
+                      [{reason.status}]
+                    </span>{' '}
+                    <span className="text-[#374151]">{reason.criterion}</span>
+                    {reason.evidence ? (
+                      <span className="text-faint"> — {reason.evidence}</span>
+                    ) : null}
+                  </div>
+                ))}
               </div>
             </>
           ) : null}

@@ -42,6 +42,14 @@ export function NoticeCard({ notice, selected, onClick }: NoticeCardProps) {
                 {notice.category}
               </span>
             ) : null}
+            {notice.secondaryFilterExcluded ? (
+              <span
+                className="rounded-[3px] bg-danger-soft px-2 py-[3px] text-[11px] font-bold text-danger"
+                title="AI가 공고 원문에서 제외요건 해당을 확인했어요"
+              >
+                제외요건 확인 필요
+              </span>
+            ) : null}
             <span
               className={
                 notice.isUrgent
