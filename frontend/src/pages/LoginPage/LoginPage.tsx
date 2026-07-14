@@ -1,7 +1,6 @@
 import { useSearchParams } from 'react-router-dom'
+import { API_BASE_URL } from '../../api/client'
 import { KAKAO_AUTH_ERROR_MESSAGES } from '../../constants/authErrors'
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
 /**
  * 백엔드가 카카오 인가 요청을 직접 시작하도록 넘긴다. 백엔드가 로그인·

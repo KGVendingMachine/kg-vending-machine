@@ -1,6 +1,13 @@
 import { PATHS } from '../routes/paths'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+// API 호출의 베이스 URL. 프로덕션(Vercel)에서는 빈 문자열('')로 두어 요청이
+// 같은 오리진(Vercel 도메인)으로 나가게 하고, vercel.json의 rewrite가 이를
+// 백엔드로 프록시한다 → 브라우저는 HTTPS 오리진만 보므로 mixed content가 없다.
+// 로컬 개발에서만 localhost:8000 백엔드를 직접 가리킨다. VITE_API_BASE_URL을
+// 명시하면 항상 그 값을 쓴다(빈 문자열도 유효한 값으로 취급).
+export const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ??
+  (import.meta.env.DEV ? 'http://localhost:8000' : '')
 
 const REFRESH_PATH = '/api/auth/refresh'
 
