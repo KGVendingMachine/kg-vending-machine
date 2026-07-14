@@ -1,12 +1,9 @@
 """
 schemas/business_plan.py
 
-NRM-001: 사업계획서 표준 정규화 API 스키마
-POST /business-plans/{business_plan_id}/normalizations   -> 정규화 작업 시작 (202 Accepted)
-GET  /business-plans/{business_plan_id}/normalizations/{job_id} -> 작업 상태/결과 조회
+사업계획서 정규화 결과 스키마. 비동기 작업(OCR+정규화+임베딩) 자체는
+api/business_plan_analysis.py + schemas/business_plan_analysis.py가 다룬다.
 
-
-- 처리 방식: LLM 호출은 시간이 걸리므로 동기 응답 대신 비동기(202 + 상태 조회) 패턴 적용.
 - 카테고리 체계: PSST(문제인식/실현가능성/성장전략/팀구성) 프레임워크 기반
   company / problem / solution / market / funding / team 6개 축으로 통일.
   회사별 특이 항목은 각 카테고리의 extra에 자유롭게 저장 (스키마리스 확장).
@@ -202,41 +199,3 @@ class BusinessPlanSummaryResponse(BaseModel):
     file_type: str | None = None
     uploaded_at: datetime
     analysis_status: JobStatus | None = None
-
-
-class NormalizeRequest(BaseModel):
-    """
-    운영 환경 기본 흐름: body 없이 호출 -> 서버가 business_plan.raw_text를
-    DB에서 조회해서 정규화 대상으로 사용.
-
-    extracted_text는 [테스트 전용] 필드. 아직 실제 사업계획서 데이터를
-    받지 못해 DB에 raw_text가 없는 현재 상황에서, 임시 텍스트로 정규화
-    로직을 검증해보기 위해 남겨둠. 실 데이터 확보 후에는 이 필드를
-    아예 제거하거나 관리자/디버그 전용 플래그로만 열어두는 것을 권장.
-    """
-
-    extracted_text: str | None = Field(
-        default=None,
-        description="[TEST ONLY] 실 데이터 확보 전, 임시 텍스트로 정규화를 테스트할 때만 사용",
-    )
-
-
-class NormalizeJobAccepted(BaseModel):
-    """POST /business-plans/{business_plan_id}/normalizations 응답 (202 Accepted)"""
-
-    business_plan_id: int
-    job_id: str
-    status: JobStatus = JobStatus.PENDING
-
-
-class NormalizeStatusResponse(BaseModel):
-    """GET /business-plans/{business_plan_id}/normalizations/{job_id} 응답"""
-
-    business_plan_id: int
-    job_id: str
-    status: JobStatus
-    normalized_json: NormalizedBusinessPlanSchema | None = None
-    validation_result: ValidationResult | None = None
-    analyzed_at: datetime | None = None
-    error_message: str | None = None
-    """status == failed 일 때 실패 사유 (예: LLM 재시도 초과, 스키마 검증 실패)"""
