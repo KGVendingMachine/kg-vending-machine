@@ -1,6 +1,4 @@
-import { apiFetch, ApiError } from './client'
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+import { apiFetch, ApiError, API_BASE_URL } from './client'
 
 /** 사업계획서 파일 업로드 결과. 생성된 business_plan row의 id를 돌려받는다. */
 export interface BusinessPlanUploadResult {
