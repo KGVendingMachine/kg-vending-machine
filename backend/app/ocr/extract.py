@@ -1,5 +1,6 @@
 import asyncio
 import io
+import logging
 from pathlib import Path
 
 import pdfplumber
@@ -12,6 +13,8 @@ from app.ocr.hwp_loader import HWPLoader
 from app.ocr.hwp_loader import extract_embedded_images as extract_hwp_images
 from app.ocr.hwpx_loader import HWPXLoader
 from app.ocr.hwpx_loader import extract_embedded_images as extract_hwpx_images
+
+logger = logging.getLogger(__name__)
 
 # business_plan.file_type에 그대로 저장할 값
 _FILE_TYPE_BY_SUFFIX = {
@@ -138,7 +141,15 @@ async def extract_text(file_path: str) -> tuple[str, str]:
     # 공고 OCR 배치 트리거 테스트 중) — 이 함수 결과를 그대로 DB text
     # 컬럼에 저장하는 모든 호출자(공고 OCR, 사업계획서 분석)에 영향을
     # 주므로 반환 직전에 한 곳에서 제거한다.
-    return text.replace("\x00", ""), file_type
+    text = text.replace("\x00", "")
+    logger.info(
+        "OCR 추출 완료 (file_path=%s, file_type=%s, 길이=%d자), 앞 50자: %s",
+        file_path,
+        file_type,
+        len(text),
+        text[:50],
+    )
+    return text, file_type
 
 
 def _load_hwp_text(file_path: str) -> str:

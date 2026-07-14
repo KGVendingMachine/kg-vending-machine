@@ -6,6 +6,7 @@ export const PATHS = {
   ANALYSIS: '/analysis',
   RESULTS: '/results',
   RESULT_DETAIL: '/results/:noticeId',
+  NOTICE_DETAIL: '/notices/:noticeId',
   BOOKMARKS: '/bookmarks',
   MYPAGE: '/mypage',
 } as const
@@ -26,4 +27,12 @@ export function resultsPath(matchLogId?: number): string {
   return matchLogId != null
     ? `${PATHS.RESULTS}?matchLogId=${matchLogId}`
     : PATHS.RESULTS
+}
+
+/**
+ * 매칭 컨텍스트 없는 공고 단독 상세 페이지 경로 (북마크 목록 등에서 사용).
+ * 점수·추천 근거가 필요하면 resultDetailPath를 대신 쓴다.
+ */
+export function noticeDetailPath(noticeId: number): string {
+  return `/notices/${noticeId}`
 }
