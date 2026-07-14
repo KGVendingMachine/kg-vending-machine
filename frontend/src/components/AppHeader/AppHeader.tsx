@@ -15,7 +15,7 @@ export function AppHeader() {
   const displayName = user?.nickname ?? user?.name ?? null
 
   return (
-    <header className="flex h-14 flex-shrink-0 items-center gap-7 border-b border-border bg-white px-6">
+    <header className="no-print flex h-14 flex-shrink-0 items-center gap-7 border-b border-border bg-white px-6">
       <span className="text-base font-extrabold">지원핏</span>
       <NavLink to={PATHS.UPLOAD} className={tabClassName}>
         새 분석

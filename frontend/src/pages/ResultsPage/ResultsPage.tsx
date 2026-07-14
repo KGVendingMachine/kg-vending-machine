@@ -2,15 +2,23 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { NoticeCard } from '../../components/NoticeCard/NoticeCard'
+import { ComparisonReport } from '../../components/ComparisonReport/ComparisonReport'
 import { ScoreGauge } from '../../components/ScoreGauge/ScoreGauge'
 import { getMatchLog, formatMatchLogDate } from '../../api/matchLogs'
 import type { MatchLog } from '../../api/matchLogs'
 import { toggleBookmark } from '../../api/bookmarks'
+import { getMyCompanyProfile } from '../../api/companyProfile'
+import type { CompanyProfile } from '../../api/companyProfile'
 import { useFetchOnMount } from '../../hooks/useFetchOnMount'
 import { useMatchedNotices } from '../../hooks/useMatchedNotices'
 import type { MatchedNotice } from '../../types/notice'
 import { PATHS } from '../../routes/paths'
 import { DEADLINE_FILTERS } from '../../constants/resultsFilters'
+import {
+  reportFileTitle,
+  printWithFilename,
+  PRINT_DESTINATION_HINT,
+} from '../../utils/reportFilename'
 
 export function ResultsPage() {
   const navigate = useNavigate()
@@ -57,6 +65,18 @@ export function ResultsPage() {
     () => (validLogId == null ? null : getMatchLog(validLogId)),
     [validLogId],
   )
+  // 비교 리포트 머리말의 "대상 기업" 표기에만 쓰인다. 실패해도 리포트는
+  // 사업계획서 제목만으로 그대로 생성된다.
+  const { data: profile } = useFetchOnMount<CompanyProfile | null>(
+    () => getMyCompanyProfile(),
+    [],
+  )
+
+  // 상위 3건 비교 리포트를 브라우저 인쇄(→ "PDF로 저장")로 내려받는다.
+  // 인쇄 시에는 화면(.no-print)이 숨겨지고 리포트(.print-only)만 출력된다.
+  const handleDownloadReport = () => {
+    printWithFilename(reportFileTitle('추천공고_비교리포트'))
+  }
 
   // 결과가 (다시) 로드되면 첫 번째 공고를 기본 선택한다.
   useEffect(() => {
@@ -105,6 +125,7 @@ export function ResultsPage() {
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
+      <div className="no-print flex flex-1 flex-col min-h-0">
       <AppHeader />
       {matchLog ? (
         <div className="flex items-center gap-2.5 border-b border-[#eef0f2] bg-primary-soft px-6 py-2.5 text-[13px]">
@@ -169,7 +190,21 @@ export function ResultsPage() {
               <div className="text-[15px] font-bold">
                 맞춤 공고 <span className="text-primary">{list.length}</span>건
               </div>
-              <div className="text-[13px] text-muted">적합도순 ▾</div>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  className="h-8 cursor-pointer rounded border border-border-strong bg-white px-3 text-[13px] font-semibold text-muted"
+                  onClick={handleDownloadReport}
+                  title={PRINT_DESTINATION_HINT}
+                >
+                  ⬇ 상위 3건 비교 리포트
+                </button>
+                <span className="text-[13px] text-muted">적합도순 ▾</span>
+              </div>
+            </div>
+
+            <div className="mb-4 -mt-1.5 text-[11px] leading-[1.5] text-faint">
+              ⓘ {PRINT_DESTINATION_HINT}
             </div>
 
             {list.map((notice) => (
@@ -280,6 +315,9 @@ export function ResultsPage() {
           </div>
         </div>
       )}
+      </div>
+
+      <ComparisonReport notices={list} matchLog={matchLog} profile={profile} />
     </div>
   )
 }

@@ -52,4 +52,49 @@
   button {
     font: inherit;
   }
+
+  /* 인쇄 전용 블록(비교 리포트 등)은 화면에서는 숨긴다. */
+  .print-only {
+    display: none;
+  }
+}
+
+/* 인쇄(브라우저 "PDF로 저장") 시 화면을 그대로 담기 위한 규칙.
+   .no-print 이 붙은 네비게이션/버튼류는 숨기고, 배경색·점수 막대 등이
+   그대로 인쇄되도록 색상 보정을 강제한다. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  /* 화면에선 숨겨둔 인쇄 전용 리포트를 인쇄 시에만 노출한다. */
+  .print-only {
+    display: block !important;
+  }
+
+  :root,
+  body,
+  #root {
+    height: auto !important;
+    min-height: 0 !important;
+    background: #ffffff !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* 화면 레이아웃의 flex/overflow 제약이 인쇄 시 내용을 잘라내지 않게 푼다. */
+  .print-content,
+  .print-content * {
+    overflow: visible !important;
+  }
+
+  /* 강점/주의/점수 카드 등 박스가 페이지 경계에서 쪼개지지 않도록. */
+  .print-content .rounded-r-md,
+  .print-content .rounded-md {
+    break-inside: avoid;
+  }
+
+  @page {
+    margin: 12mm;
+  }
 }
