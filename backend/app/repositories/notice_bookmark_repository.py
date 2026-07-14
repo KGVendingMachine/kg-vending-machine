@@ -152,9 +152,7 @@ async def get_row_by_id(
     return _to_row(row) if row is not None else None
 
 
-async def list_by_user(
-    session: AsyncSession, user_id: int
-) -> list[BookmarkListRow]:
+async def list_by_user(session: AsyncSession, user_id: int) -> list[BookmarkListRow]:
     """유저의 북마크를 최신순으로, 카드 표시에 필요한 값과 함께 반환한다."""
     result = await session.execute(
         _rows_query()

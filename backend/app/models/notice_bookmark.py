@@ -37,9 +37,7 @@ class NoticeBookmark(Base):
         ForeignKey("notice.id", ondelete="CASCADE"), nullable=False
     )
     """공고아이디. 원본 공고가 지워지면 그 북마크도 의미가 없어지므로 CASCADE."""
-    business_plan_id: Mapped[int | None] = mapped_column(
-        ForeignKey("business_plan.id")
-    )
+    business_plan_id: Mapped[int | None] = mapped_column(ForeignKey("business_plan.id"))
     """추천 기반이 된 사업계획서. 담을 당시 맥락의 불변 스냅샷이자 최신성(stale)
     판정 기준. 브라우징으로 담았으면 NULL. 계획서가 지워져도 값을 유지해야
     하므로 SET NULL 을 걸지 않는다."""

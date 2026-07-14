@@ -40,7 +40,9 @@ async def _current_plan_id(session: AsyncSession, user_id: int) -> int | None:
     return latest.id if latest else None
 
 
-def _to_response(row: BookmarkListRow, *, current_plan_id: int | None) -> BookmarkResponse:
+def _to_response(
+    row: BookmarkListRow, *, current_plan_id: int | None
+) -> BookmarkResponse:
     bm = row.bookmark
     is_stale = (
         bm.business_plan_id is not None
