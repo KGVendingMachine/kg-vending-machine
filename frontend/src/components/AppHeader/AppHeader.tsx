@@ -23,6 +23,9 @@ export function AppHeader() {
       <NavLink to={PATHS.RESULTS} className={tabClassName}>
         추천 결과
       </NavLink>
+      <NavLink to={PATHS.BOOKMARKS} className={tabClassName}>
+        북마크
+      </NavLink>
       <NavLink
         to={PATHS.MYPAGE}
         className="ml-auto flex cursor-pointer items-center gap-2.5 no-underline"

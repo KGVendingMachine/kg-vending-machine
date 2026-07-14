@@ -85,6 +85,10 @@ export interface MatchResult {
   weakness: string | null
   strategy_suggestion: string | null
   result_json: MatchResultJson | null
+  /** 이 공고가 (현재 유저·이 실행의 사업계획서 기준) 담겨 있는지. 별표 채움 표시용. */
+  is_bookmarked: boolean
+  /** 담겨 있으면 그 북마크 id(별표 해제 DELETE 에 사용). 아니면 null. */
+  bookmark_id: number | null
   created_at: string
 }
 

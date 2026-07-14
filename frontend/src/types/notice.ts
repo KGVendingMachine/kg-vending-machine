@@ -3,6 +3,8 @@ import type {
   SecondaryFilteringNoticeLog,
   SecondaryFilteringReasonLog,
 } from '../api/matchLogs'
+import type { Bookmark } from '../api/bookmarks'
+import type { MatchResult } from '../api/matchLogs'
 import type { NoticeDetail } from '../api/notices'
 import { formatDeadline } from '../utils/date'
 
@@ -157,5 +159,43 @@ export function toMatchedNotice(
     secondaryFilterJudged: judged,
     secondaryFilterExcluded: secondaryFiltering?.excluded ?? false,
     secondaryFilterReasons: judged ? (secondaryFiltering?.reasons ?? []) : [],
+    matchResultId: result?.id ?? null,
+    bookmarkId: result?.bookmark_id ?? null,
+  }
+}
+
+/**
+ * 북마크 목록의 한 건을 카드 표시용 모델로 바꾼다. 점수·추천 이유는 담을
+ * 당시(frozen) 스냅샷(bookmark.recommendation)에서 온다. 북마크 응답에는
+ * match_result_id 가 없어 matchResultId 는 null(목록에서 토글은 해제만 필요).
+ */
+export function bookmarkToMatchedNotice(bookmark: Bookmark): MatchedNotice {
+  const { notice, recommendation } = bookmark
+  const deadline = formatDeadline(notice.application_end_date)
+  const strengths = splitSentences(recommendation?.summary_reason ?? null)
+
+  return {
+    id: notice.id,
+    category: notice.category_name,
+    org: notice.organization_name ?? '',
+    title: notice.title ?? '(제목 없음)',
+    amountLabel: notice.amount_label,
+    deadlineLabel: deadline.label,
+    dueDateLabel: deadline.dueDateLabel,
+    isUrgent: deadline.isUrgent,
+    sourceUrl: notice.source_url,
+    applyUrl: notice.apply_url,
+    summary: null,
+    score: recommendation?.total_score ?? null,
+    scoreLevel: toScoreLevel(recommendation?.recommendation_level ?? null),
+    matchReasonShort: strengths[0] ?? null,
+    strengths,
+    weaknesses: [],
+    cautions: [],
+    scoreBreakdown: null,
+    eligibilityStatus: null,
+    strategySuggestion: null,
+    matchResultId: null,
+    bookmarkId: bookmark.id,
   }
 }

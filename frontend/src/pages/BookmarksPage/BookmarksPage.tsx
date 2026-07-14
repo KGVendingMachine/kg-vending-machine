@@ -1,7 +1,8 @@
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { NoticeCard } from '../../components/NoticeCard/NoticeCard'
-import { getNoticeDetail } from '../../api/notices'
+import { listBookmarks, deleteBookmark } from '../../api/bookmarks'
+import type { Bookmark } from '../../api/bookmarks'
 import { useFetchOnMount } from '../../hooks/useFetchOnMount'
 import { noticeDetailPath } from '../../routes/paths'
 import { toMatchedNotice } from '../../types/notice'
@@ -31,7 +32,7 @@ export function BookmarksPage() {
           북마크한 공고
         </div>
         <div className="mt-1.5 mb-6 text-[13px] text-muted">
-          북마크 <span className="font-bold text-primary">{notices.length}</span>건
+          북마크 <span className="font-bold text-primary">{bookmarks.length}</span>건
         </div>
 
         {loading ? (

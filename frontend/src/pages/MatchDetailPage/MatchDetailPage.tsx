@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { ScoreGauge } from '../../components/ScoreGauge/ScoreGauge'
@@ -7,7 +8,7 @@ import type { CompanyProfile } from '../../api/companyProfile'
 import { useFetchOnMount } from '../../hooks/useFetchOnMount'
 import { useMatchedNotices } from '../../hooks/useMatchedNotices'
 import { PATHS } from '../../routes/paths'
-import { useBookmarks } from '../../store/BookmarkContext'
+import { toggleBookmark } from '../../api/bookmarks'
 
 const APPLICATION_CHECKLIST = [
   '사업자등록증·중소기업 확인서 준비',
@@ -61,12 +62,19 @@ export function MatchDetailPage() {
   const matchLogId = matchLogIdParam ? Number(matchLogIdParam) : null
 
   const navigate = useNavigate()
-  const { isBookmarked, toggleBookmark } = useBookmarks()
   const { matchedNotices, loading } = useMatchedNotices(matchLogId)
-  const { data: profile } = useFetchOnMount<CompanyProfile>(
+  const { data: profile } = useFetchOnMount<CompanyProfile | null>(
     () => getMyCompanyProfile(),
     [],
   )
+  // 별표 상태는 결과에서 온 bookmarkId를 로컬로 들고 토글마다 갱신한다.
+  const [bookmarkId, setBookmarkId] = useState<number | null>(null)
+  const [bookmarkBusy, setBookmarkBusy] = useState(false)
+
+  useEffect(() => {
+    const found = matchedNotices.find((item) => item.id === noticeId)
+    setBookmarkId(found?.bookmarkId ?? null)
+  }, [matchedNotices, noticeId])
 
   if (noticeId == null || Number.isNaN(noticeId) || matchLogId == null) {
     return <Navigate to={PATHS.RESULTS} replace />
@@ -89,8 +97,25 @@ export function MatchDetailPage() {
   }
 
   const otherNotices = matchedNotices.filter((item) => item.id !== notice.id)
-  const bookmarked = isBookmarked(notice.id)
+  const bookmarked = bookmarkId != null
   const targetLabel = targetCompanyLabel(profile)
+
+  async function handleToggleBookmark() {
+    if (bookmarkBusy || !notice) return
+    setBookmarkBusy(true)
+    try {
+      const nextBookmarkId = await toggleBookmark({
+        bookmarkId,
+        matchResultId: notice.matchResultId,
+        noticeId: notice.id,
+      })
+      setBookmarkId(nextBookmarkId)
+    } catch {
+      // 실패하면 상태를 그대로 두어 다시 시도할 수 있게 한다.
+    } finally {
+      setBookmarkBusy(false)
+    }
+  }
 
   return (
     <div className="flex flex-1 flex-col">
@@ -113,7 +138,8 @@ export function MatchDetailPage() {
               : 'ml-auto h-8 cursor-pointer rounded border border-border-strong bg-white px-3 text-[13px] font-semibold text-muted'
           }
           aria-label={bookmarked ? '북마크 해제' : '북마크 추가'}
-          onClick={() => toggleBookmark(notice.id)}
+          disabled={bookmarkBusy}
+          onClick={handleToggleBookmark}
         >
           {bookmarked ? '★ 북마크됨' : '☆ 북마크'}
         </button>
