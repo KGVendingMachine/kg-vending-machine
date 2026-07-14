@@ -1,14 +1,7 @@
 import { useSearchParams } from 'react-router-dom'
-import styles from './LoginPage.module.css'
+import { KAKAO_AUTH_ERROR_MESSAGES } from '../../constants/authErrors'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
-
-const ERROR_MESSAGES: Record<string, string> = {
-  kakao_auth_failed: '카카오 인증에 실패했습니다. 다시 시도해주세요.',
-  inactive_account: '비활성화된 계정입니다. 고객센터에 문의해주세요.',
-  invalid_state: '로그인 요청이 만료되었습니다. 다시 시도해주세요.',
-  no_code: '카카오 로그인이 취소되었습니다.',
-}
 
 /**
  * 백엔드가 카카오 인가 요청을 직접 시작하도록 넘긴다. 백엔드가 로그인·
@@ -23,39 +16,47 @@ export function LoginPage() {
   const [searchParams] = useSearchParams()
   const errorCode = searchParams.get('error')
   const errorMessage = errorCode
-    ? ERROR_MESSAGES[errorCode] ?? '로그인에 실패했습니다. 다시 시도해주세요.'
+    ? KAKAO_AUTH_ERROR_MESSAGES[errorCode] ?? '로그인에 실패했습니다. 다시 시도해주세요.'
     : null
 
   return (
-    <div className={styles.page}>
-      <div className={styles.card}>
-        <div className={styles.mark}>K</div>
-        <div className={styles.title}>KGVendingMachine</div>
-        <div className={styles.tagline}>
+    <div className="flex flex-1 items-center justify-center p-6">
+      <div className="flex w-[460px] max-w-full flex-col items-center rounded-lg border border-border bg-white px-11 py-14 text-center shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
+        <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-lg border-2 border-ink text-[22px] font-extrabold">
+          K
+        </div>
+        <div className="text-2xl font-extrabold tracking-[-0.5px]">
+          KGVendingMachine
+        </div>
+        <div className="mt-2.5 text-[15px] leading-normal text-muted">
           사업계획서 한 장이면
           <br />
           맞는 정부지원사업을 찾아드려요
         </div>
 
-        {errorMessage && <div className={styles.error}>{errorMessage}</div>}
+        {errorMessage && (
+          <div className="mt-5 w-full rounded-md bg-[#fdecec] px-4 py-3 text-[13px] leading-normal text-[#c0392b]">
+            {errorMessage}
+          </div>
+        )}
 
-        <div className={styles.divider} />
+        <div className="my-9 h-px w-full bg-[#eef0f2]" />
 
         <button
           type="button"
-          className={styles.kakaoButton}
+          className="flex h-[52px] w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-kakao text-base font-bold text-kakao-ink"
           onClick={redirectToBackendKakaoLogin}
         >
-          <span className={styles.kakaoDot} />
+          <span className="inline-block h-5 w-5 rounded bg-kakao-ink opacity-85" />
           카카오로 시작하기
         </button>
-        <div className={styles.notice}>
+        <div className="mt-4 text-xs leading-[1.6] text-faint">
           카카오 계정으로만 가입·로그인합니다.
           <br />
           최초 로그인 시 자동으로 회원가입돼요.
         </div>
 
-        <div className={styles.footnote}>
+        <div className="mt-auto pt-8 text-[11px] text-[#b0b5bb]">
           로그인 시 <u>이용약관</u> 및 <u>개인정보처리방침</u>에 동의합니다
         </div>
       </div>

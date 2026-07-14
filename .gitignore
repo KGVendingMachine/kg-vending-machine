@@ -147,6 +147,10 @@ activemq-data/
 # SageMath parsed files
 *.sage.py
 
+# 개인 로컬 개발용 Docker 설정 - 팀 공용 docker-compose.yml(추후 별도 작업
+# 예정, architecture.md 참고) 이름은 그대로 비워두고, 개인용만 별도 이름으로 무시한다.
+docker-compose.local.yml
+
 # Environments
 .env
 .envrc

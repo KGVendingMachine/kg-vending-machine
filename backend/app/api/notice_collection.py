@@ -1,7 +1,7 @@
 """
 api/notice_collection.py
 
-공고 수집(기업마당/K-Startup) 트리거 라우터.
+공고 수집(기업마당/K-Startup/과학기술정보통신부) 트리거 라우터.
 POST /internal/notices/collect              -> 수집 작업 시작 (202 Accepted)
 GET  /internal/notices/collect/{job_id}      -> 작업 상태/결과 조회
 
@@ -12,13 +12,13 @@ GET  /internal/notices/collect/{job_id}      -> 작업 상태/결과 조회
 /internal prefix: 외부 사용자가 아니라 운영자가 트리거하는 내부 작업이라
 docs/matching-pipeline.md 관례(관리자=/admin, 내부 모듈=/internal)를 따름.
 
-스케줄러 연동 가이드 (실제 cron/APScheduler 배포는 별도 과제, 이슈 #49):
-이 라우터의 API 자체는 스케줄러 없이도 완결돼 있어, 나중에 스케줄러가
-붙을 때 아래 두 엔드포인트를 호출 순서만 지켜서 주기적으로 호출하면 된다.
-- POST /internal/notices/collect: 기업마당 → K-Startup 순서가 코드
-  내부(_run_collection_job)에 고정돼 있어 호출자가 순서를 신경 쓸 필요
-  없다. 이미 실행 중이면 409를 반환하므로(_has_active_job), 스케줄러는
-  409를 "건너뛰고 다음 주기에 재시도"로 처리하면 된다.
+스케줄러 연동: 매일 새벽 3시(Asia/Seoul) 자동 실행되도록 app/scheduler.py에
+연결돼 있다(이슈 #102, main.py lifespan에서 시작). 이 라우터의 API 자체는
+스케줄러 없이도 완결돼 있어, 수동으로 트리거해도(Swagger 등) 동일하게 동작한다.
+- POST /internal/notices/collect: 기업마당 → K-Startup → 과학기술정보통신부
+  순서가 코드 내부(_run_collection_job)에 고정돼 있어 호출자가 순서를
+  신경 쓸 필요 없다. 이미 실행 중이면 409를 반환하므로(_has_active_job),
+  스케줄러는 409를 "건너뛰고 다음 주기에 재시도"로 처리한다.
 - POST /internal/notices/refresh-status: 순수하게 저장된 날짜만으로
   재계산·조건부 갱신만 하는 멱등 작업이라 별도 동시성 가드가 없어도
   언제, 몇 번을 호출해도 안전하다.
@@ -53,6 +53,7 @@ from app.services.notice_collection_service import (
     backfill_notice_region_codes,
     collect_all_bizinfo_notices,
     collect_all_kstartup_notices,
+    collect_all_msit_notices,
     recollect_bizinfo_notice,
     refresh_notice_statuses,
 )
@@ -71,11 +72,14 @@ def _to_source_result(result: CollectionResult) -> SourceCollectionResult:
 
 
 async def _run_collection_job(session: AsyncSession, job_id: str) -> None:
-    """기업마당 → K-Startup 순서로 전체 수집을 실행하고 _JOBS 상태를 갱신한다.
+    """기업마당 → K-Startup → 과학기술정보통신부 순서로 전체 수집을 실행하고
+    _JOBS 상태를 갱신한다.
 
     반드시 기업마당을 먼저 수집해야 한다 — K-Startup을 먼저 하면 "기업마당
     우선" 중복 제거 로직이 방금 크롤링한 K-Startup 첨부파일까지 지울 수
-    있다 (docs/matching-pipeline.md 운영 규칙 참고).
+    있다 (docs/matching-pipeline.md 운영 규칙 참고). 과학기술정보통신부는
+    이 중복 제거 로직과 무관한 별도 소스(R&D 카테고리 고정)라 순서
+    제약은 없지만, 진행 표시를 위해 세 번째 단계로 둔다.
     """
     _JOBS[job_id] = CollectionJobStatusResponse(
         job_id=job_id,
@@ -111,9 +115,29 @@ async def _run_collection_job(session: AsyncSession, job_id: str) -> None:
 
     _JOBS[job_id] = CollectionJobStatusResponse(
         job_id=job_id,
+        status=CollectionJobStatus.RUNNING,
+        current_phase="과학기술정보통신부 수집 중",
+        bizinfo_result=_to_source_result(bizinfo_result),
+        kstartup_result=_to_source_result(kstartup_result),
+    )
+    try:
+        msit_result = await collect_all_msit_notices(session)
+    except Exception as exc:
+        _JOBS[job_id] = CollectionJobStatusResponse(
+            job_id=job_id,
+            status=CollectionJobStatus.FAILED,
+            bizinfo_result=_to_source_result(bizinfo_result),
+            kstartup_result=_to_source_result(kstartup_result),
+            error_message=f"과학기술정보통신부 수집 실패: {exc}",
+        )
+        return
+
+    _JOBS[job_id] = CollectionJobStatusResponse(
+        job_id=job_id,
         status=CollectionJobStatus.COMPLETED,
         bizinfo_result=_to_source_result(bizinfo_result),
         kstartup_result=_to_source_result(kstartup_result),
+        msit_result=_to_source_result(msit_result),
     )
 
 
@@ -150,7 +174,10 @@ def _has_active_job() -> bool:
     response_model=CollectionJobAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     summary="공고 수집 시작",
-    description="기업마당 → K-Startup 순서로 공고 전체 수집을 백그라운드에서 시작한다.",
+    description=(
+        "기업마당 → K-Startup → 과학기술정보통신부 순서로 공고 전체 수집을 "
+        "백그라운드에서 시작한다."
+    ),
 )
 async def start_collection(background_tasks: BackgroundTasks):
     # 이미 도는 작업이 있는데 또 시작하면 K-Startup 첨부파일 크롤링까지

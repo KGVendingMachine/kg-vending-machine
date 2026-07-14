@@ -1,7 +1,6 @@
 import { Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PATHS } from '../../routes/paths'
-import styles from './LandingPage.module.css'
 
 const NAV_LINKS = ['서비스 소개', '이용 방법', '지원 형식', '자주 묻는 질문']
 
@@ -47,95 +46,107 @@ export function LandingPage() {
   const goToUpload = () => navigate(PATHS.COMPANY_PROFILE)
 
   return (
-    <div className={styles.page}>
-      <nav className={styles.nav}>
-        <div className={styles.logo}>
-          <span className={styles.logoMark}>K</span>
-          <span className={styles.logoText}>KGVendingMachine</span>
+    <div className="flex-1 bg-white text-[#15181c]">
+      <nav className="flex h-16 items-center gap-8 border-b border-[#ececf0] px-10">
+        <div className="flex items-center gap-[9px]">
+          <span className="flex h-[30px] w-[30px] items-center justify-center rounded-md bg-[#15181c] text-sm font-extrabold text-white">
+            K
+          </span>
+          <span className="text-lg font-extrabold tracking-[-0.4px]">
+            KGVendingMachine
+          </span>
         </div>
-        <div className={styles.navLinks}>
+        <div className="flex gap-[26px] text-sm font-medium text-[#5b6168]">
           {NAV_LINKS.map((link) => (
             <span key={link}>{link}</span>
           ))}
         </div>
-        <div className={styles.navRight}>
+        <div className="ml-auto flex items-center gap-3">
           <button
             type="button"
-            className={styles.kakaoButtonSmall}
+            className="flex h-[38px] cursor-pointer items-center gap-[7px] rounded-md bg-kakao px-4 text-sm font-bold text-kakao-ink"
             onClick={() => navigate(PATHS.LOGIN)}
           >
-            <span className={styles.kakaoDotSmall} />
+            <span className="h-4 w-4 rounded bg-kakao-ink opacity-85" />
             카카오로 시작
           </button>
         </div>
       </nav>
 
-      <section className={styles.hero}>
-        <div className={styles.heroInner}>
+      <section className="border-b border-[#ececf0] bg-[linear-gradient(180deg,#fafbfc,#fff)]">
+        <div className="mx-auto grid max-w-7xl grid-cols-[1.1fr_0.9fr] items-center gap-14 px-[60px] pt-20 pb-[88px]">
           <div>
-            <div className={styles.badge}>
-              <span className={styles.badgeDot} />
+            <div className="mb-[22px] inline-flex h-[30px] items-center gap-2 rounded-full bg-primary-soft px-3 text-[13px] font-semibold text-primary">
+              <span className="h-1.5 w-1.5 rounded-full bg-primary" />
               매일 갱신되는 정부지원 공고 2,400+건
             </div>
-            <div className={styles.headline}>
+            <div className="mb-[18px] text-[44px] leading-[1.18] font-extrabold tracking-[-1.2px]">
               사업계획서 한 장으로
               <br />
-              맞는 <em>정부지원사업</em>을
+              맞는 <em className="text-primary not-italic">정부지원사업</em>을
               <br />
               찾아드립니다
             </div>
-            <div className={styles.heroDesc}>
+            <div className="mb-[30px] max-w-[440px] text-[17px] leading-[1.65] text-[#5b6168]">
               PDF·HWP·PPT 어떤 형식이든 올리면 AI가 내용을 분석해 자격이 맞는
               공고를 적합도 순으로 추천해요. 흩어진 공고를 직접 찾아 헤맬
               필요가 없습니다.
             </div>
-            <div className={styles.stats}>
+            <div className="flex items-center gap-[26px]">
               {STATS.map((stat, index) => (
                 <Fragment key={stat.label}>
-                  {index > 0 ? <div className={styles.statDivider} /> : null}
+                  {index > 0 ? (
+                    <div className="h-[34px] w-px bg-[#e4e7eb]" />
+                  ) : null}
                   <div>
-                    <div className={styles.statValue}>{stat.value}</div>
-                    <div className={styles.statLabel}>{stat.label}</div>
+                    <div className="text-[25px] font-extrabold">
+                      {stat.value}
+                    </div>
+                    <div className="text-[13px] text-[#868d95]">
+                      {stat.label}
+                    </div>
                   </div>
                 </Fragment>
               ))}
             </div>
           </div>
 
-          <div className={styles.loginCard}>
-            <div className={styles.loginCardTitle}>3초 만에 시작하기</div>
-            <div className={styles.loginCardDesc}>
+          <div className="rounded-xl border border-[#e6e9ed] bg-white p-[34px] shadow-[0_8px_30px_rgba(20,30,50,0.06)]">
+            <div className="text-xl font-extrabold tracking-[-0.4px]">
+              3초 만에 시작하기
+            </div>
+            <div className="mt-2 text-sm leading-[1.55] text-[#5b6168]">
               카카오 계정으로 로그인하면 바로 분석을 시작할 수 있어요. 별도
               가입 절차가 없습니다.
             </div>
             <button
               type="button"
-              className={styles.kakaoButtonLarge}
+              className="mt-6 flex h-[54px] w-full cursor-pointer items-center justify-center gap-[9px] rounded-lg bg-kakao text-base font-bold text-kakao-ink"
               onClick={() => navigate(PATHS.LOGIN)}
             >
-              <span className={styles.kakaoDotLarge} />
+              <span className="h-5 w-5 rounded-[5px] bg-kakao-ink opacity-85" />
               카카오로 3초 만에 시작하기
             </button>
-            <div className={styles.orDivider}>
-              <div className={styles.line} />
-              <span>간편하고 안전하게</span>
-              <div className={styles.line} />
+            <div className="my-5 flex items-center gap-3">
+              <div className="h-px flex-1 bg-[#ececf0]" />
+              <span className="text-xs text-[#aab0b7]">간편하고 안전하게</span>
+              <div className="h-px flex-1 bg-[#ececf0]" />
             </div>
-            <div className={styles.checklist}>
-              <div className={styles.checklistItem}>
-                <span className={styles.checklistCheck}>✓</span> 카카오 OAuth
-                인증 — 비밀번호를 따로 만들 필요 없음
+            <div className="flex flex-col gap-[11px]">
+              <div className="flex items-start gap-2.5 text-[13px] leading-[1.5] text-[#454b52]">
+                <span className="font-extrabold text-success">✓</span> 카카오
+                OAuth 인증 — 비밀번호를 따로 만들 필요 없음
               </div>
-              <div className={styles.checklistItem}>
-                <span className={styles.checklistCheck}>✓</span> 업로드한
+              <div className="flex items-start gap-2.5 text-[13px] leading-[1.5] text-[#454b52]">
+                <span className="font-extrabold text-success">✓</span> 업로드한
                 사업계획서는 분석 용도로만 사용
               </div>
-              <div className={styles.checklistItem}>
-                <span className={styles.checklistCheck}>✓</span> 언제든 연결
-                해제 및 데이터 삭제 가능
+              <div className="flex items-start gap-2.5 text-[13px] leading-[1.5] text-[#454b52]">
+                <span className="font-extrabold text-success">✓</span> 언제든
+                연결 해제 및 데이터 삭제 가능
               </div>
             </div>
-            <div className={styles.loginFootnote}>
+            <div className="mt-5 text-center text-[11px] leading-[1.6] text-[#aab0b7]">
               시작 시 <u>이용약관</u> 및 <u>개인정보처리방침</u>에 동의하게
               됩니다
             </div>
@@ -143,91 +154,111 @@ export function LandingPage() {
         </div>
       </section>
 
-      <div className={styles.logoStrip}>
-        <span className={styles.logoStripLabel}>공공 데이터 연동</span>
+      <div className="flex flex-wrap items-center gap-9 border-b border-[#ececf0] px-[60px] py-7">
+        <span className="text-[13px] font-semibold text-[#aab0b7]">
+          공공 데이터 연동
+        </span>
         {LOGO_STRIP.map((name) => (
-          <span className={styles.logoStripItem} key={name}>
+          <span className="text-base font-bold text-[#c2c7cd]" key={name}>
             {name}
           </span>
         ))}
       </div>
 
-      <section className={`${styles.section} ${styles.sectionSubtle}`}>
-        <div className={styles.sectionCenter}>
-          <div className={styles.eyebrow}>HOW IT WORKS</div>
-          <div className={styles.sectionTitleCenter}>
+      <section className="border-b border-[#ececf0] bg-[#fafbfc] px-[60px] py-[76px]">
+        <div className="text-center">
+          <div className="text-[13px] font-bold tracking-[0.5px] text-primary">
+            HOW IT WORKS
+          </div>
+          <div className="mt-2.5 mb-12 text-center text-[32px] font-extrabold tracking-[-0.8px]">
             올리면 끝, 4단계로 추천까지
           </div>
         </div>
-        <div className={styles.steps}>
+        <div className="mx-auto grid max-w-7xl grid-cols-4 gap-[18px]">
           {STEPS.map((step, index) => (
-            <div className={styles.stepCard} key={step.title}>
+            <div
+              className="rounded-[10px] border border-[#e6e9ed] bg-white p-6"
+              key={step.title}
+            >
               <div
                 className={
                   step.highlighted
-                    ? `${styles.stepNumber} ${styles.highlighted}`
-                    : styles.stepNumber
+                    ? 'mb-4 flex h-[38px] w-[38px] items-center justify-center rounded-lg bg-primary font-extrabold text-white'
+                    : 'mb-4 flex h-[38px] w-[38px] items-center justify-center rounded-lg bg-[#15181c] font-extrabold text-white'
                 }
               >
                 {index + 1}
               </div>
-              <div className={styles.stepTitle}>{step.title}</div>
-              <div className={styles.stepDesc}>{step.desc}</div>
+              <div className="mb-2 text-[17px] font-extrabold">
+                {step.title}
+              </div>
+              <div className="text-[13.5px] leading-[1.6] text-[#5b6168]">
+                {step.desc}
+              </div>
             </div>
           ))}
         </div>
       </section>
 
-      <section className={styles.section}>
-        <div className={styles.feature}>
+      <section className="border-b border-[#ececf0] px-[60px] py-[76px]">
+        <div className="mx-auto grid max-w-7xl grid-cols-2 items-center gap-14">
           <div>
-            <div className={styles.eyebrow}>근거 있는 추천</div>
-            <div className={styles.featureTitle}>
+            <div className="text-[13px] font-bold tracking-[0.5px] text-primary">
+              근거 있는 추천
+            </div>
+            <div className="mt-3 mb-4 text-[29px] leading-[1.3] font-extrabold tracking-[-0.7px]">
               왜 추천했는지
               <br />
               근거까지 보여드려요
             </div>
-            <div className={styles.featureDesc}>
+            <div className="mb-5 text-[15.5px] leading-[1.7] text-[#5b6168]">
               단순 키워드 매칭이 아닙니다. 공고의 자격요건과 내 계획서 내용을
               한 줄씩 대조해, 점수의 근거가 되는 문장을 함께 제시합니다.
             </div>
-            <div className={styles.featureList}>
-              <div className={styles.featureListItem}>
-                <span>·</span> 분야·자격·사업정합 항목별 점수 분해
+            <div className="flex flex-col gap-[11px]">
+              <div className="flex gap-2.5 text-sm text-[#454b52]">
+                <span className="font-extrabold text-primary">·</span> 분야·자격·사업정합
+                항목별 점수 분해
               </div>
-              <div className={styles.featureListItem}>
-                <span>·</span> 출처(공고문 페이지·계획서 문단) 표기
+              <div className="flex gap-2.5 text-sm text-[#454b52]">
+                <span className="font-extrabold text-primary">·</span> 출처(공고문
+                페이지·계획서 문단) 표기
               </div>
-              <div className={styles.featureListItem}>
-                <span>·</span> 자부담·결격 등 주의사항 사전 안내
+              <div className="flex gap-2.5 text-sm text-[#454b52]">
+                <span className="font-extrabold text-primary">·</span> 자부담·결격
+                등 주의사항 사전 안내
               </div>
             </div>
           </div>
-          <div className={styles.mockCard}>
-            <div className={styles.mockCardInner}>
-              <div className={styles.mockCardRow}>
+          <div className="rounded-xl border border-[#e6e9ed] bg-[#fafbfc] p-6">
+            <div className="rounded-lg border border-[#e6e9ed] bg-white p-[18px]">
+              <div className="flex items-start justify-between">
                 <div>
-                  <span className={styles.mockBadge}>제조 · D-6</span>
-                  <div className={styles.mockTitle}>
+                  <span className="rounded bg-primary-soft px-2 py-[3px] text-[11px] font-bold text-primary">
+                    제조 · D-6
+                  </span>
+                  <div className="mt-2.5 text-base font-extrabold">
                     2025 스마트공장 구축 지원사업
                   </div>
-                  <div className={styles.mockOrg}>
+                  <div className="mt-[3px] text-[12.5px] text-[#868d95]">
                     중소벤처기업부 · 최대 1.2억원
                   </div>
                 </div>
-                <div className={styles.mockScore}>
-                  <div className={styles.mockScoreValue}>94</div>
-                  <div className={styles.mockScoreLabel}>적합도</div>
+                <div className="text-center">
+                  <div className="text-3xl font-extrabold text-success">
+                    94
+                  </div>
+                  <div className="text-[10px] text-[#aab0b7]">적합도</div>
                 </div>
               </div>
-              <div className={styles.mockReasons}>
-                <div className={styles.mockReason}>
+              <div className="mt-3.5 flex flex-col gap-2">
+                <div className="border-l-2 border-success pl-[9px] text-xs leading-[1.5] text-[#454b52]">
                   제조·소기업 자격요건 모두 충족
                 </div>
-                <div className={styles.mockReason}>
+                <div className="border-l-2 border-success pl-[9px] text-xs leading-[1.5] text-[#454b52]">
                   '설비 자동화' 목표가 사업 취지와 일치
                 </div>
-                <div className={`${styles.mockReason} ${styles.warn}`}>
+                <div className="border-l-2 border-warning pl-[9px] text-xs leading-[1.5] text-[#454b52]">
                   자부담 30% 매칭 필요 — 자금계획 확인
                 </div>
               </div>
@@ -236,22 +267,24 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className={`${styles.section} ${styles.sectionSubtle}`}>
-        <div className={styles.feature}>
-          <div className={styles.chatMock}>
-            <div className={styles.chatUserRow}>
-              <div className={styles.chatUserBubble}>
+      <section className="border-b border-[#ececf0] bg-[#fafbfc] px-[60px] py-[76px]">
+        <div className="mx-auto grid max-w-7xl grid-cols-2 items-center gap-14">
+          <div className="rounded-xl border border-[#e6e9ed] bg-white p-[22px]">
+            <div className="mb-4 flex justify-end">
+              <div className="max-w-[80%] rounded-lg bg-primary px-3.5 py-[11px] text-[13.5px] leading-[1.5] text-white">
                 스마트공장 사업, 자부담 없이 신청 가능해?
               </div>
             </div>
-            <div className={styles.chatAiRow}>
-              <div className={styles.chatAvatar} />
-              <div className={styles.chatAiBubble}>
+            <div className="flex gap-2.5">
+              <div className="h-[30px] w-[30px] flex-shrink-0 rounded-full bg-primary" />
+              <div className="rounded-lg bg-[#f4f6f8] px-[15px] py-[13px] text-[13.5px] leading-[1.65]">
                 아니요, 해당 사업은 <b>자부담 30%</b>가 필요해요. 1.2억 기준
                 약 3,600만원의 자기부담이 발생합니다.
-                <div className={styles.chatSources}>
-                  <span className={styles.chatSourceTag}>📄 공고문 p.4</span>
-                  <span className={styles.chatSourceTag}>
+                <div className="mt-2.5 flex flex-wrap gap-1.5">
+                  <span className="rounded border border-[#e6e9ed] bg-white px-[7px] py-0.5 text-[10.5px] text-[#5b6168]">
+                    📄 공고문 p.4
+                  </span>
+                  <span className="rounded border border-[#e6e9ed] bg-white px-[7px] py-0.5 text-[10.5px] text-[#5b6168]">
                     📄 계획서 자금계획
                   </span>
                 </div>
@@ -259,72 +292,94 @@ export function LandingPage() {
             </div>
           </div>
           <div>
-            <div className={styles.eyebrow}>대화형 도우미</div>
-            <div className={styles.featureTitle}>
+            <div className="text-[13px] font-bold tracking-[0.5px] text-primary">
+              대화형 도우미
+            </div>
+            <div className="mt-3 mb-4 text-[29px] leading-[1.3] font-extrabold tracking-[-0.7px]">
               궁금한 건 채팅으로
               <br />
               바로 물어보세요
             </div>
-            <div className={styles.featureDesc}>
+            <div className="mb-5 text-[15.5px] leading-[1.7] text-[#5b6168]">
               추천 결과·공고 DB·내 계획서를 근거로 답하는 AI 챗봇이 자격·마감·
               필요서류 등 무엇이든 답해드립니다. 근거가 없는 내용은 추측하지
               않아요.
             </div>
-            <div className={styles.featureList}>
-              <div className={styles.featureListItem}>
-                <span>·</span> 항상 출처를 함께 제시
+            <div className="flex flex-col gap-[11px]">
+              <div className="flex gap-2.5 text-sm text-[#454b52]">
+                <span className="font-extrabold text-primary">·</span> 항상
+                출처를 함께 제시
               </div>
-              <div className={styles.featureListItem}>
-                <span>·</span> 공고 비교·우선순위 추천
+              <div className="flex gap-2.5 text-sm text-[#454b52]">
+                <span className="font-extrabold text-primary">·</span> 공고
+                비교·우선순위 추천
               </div>
-              <div className={styles.featureListItem}>
-                <span>·</span> 추천 결과를 보고서로 내보내기
+              <div className="flex gap-2.5 text-sm text-[#454b52]">
+                <span className="font-extrabold text-primary">·</span> 추천
+                결과를 보고서로 내보내기
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      <section className={`${styles.section} ${styles.sectionCenter}`}>
-        <div className={styles.eyebrow}>한국 환경에 맞춤</div>
-        <div className={styles.sectionTitleCenter} style={{ marginBottom: 10 }}>
+      <section className="border-b border-[#ececf0] px-[60px] py-[76px] text-center">
+        <div className="text-[13px] font-bold tracking-[0.5px] text-primary">
+          한국 환경에 맞춤
+        </div>
+        <div
+          className="mt-2.5 mb-12 text-center text-[32px] font-extrabold tracking-[-0.8px]"
+          style={{ marginBottom: 10 }}
+        >
           HWP까지 완벽 대응하는 문서 처리
         </div>
-        <div className={styles.sectionDesc}>
+        <div className="mx-auto mb-10 max-w-[560px] text-[15px] leading-[1.6] text-[#5b6168]">
           스캔본은 OCR로, 텍스트 적은 PPT는 이미지까지 읽어 분석합니다. 한글
           (HWP) 사업계획서도 그대로 올리면 됩니다.
         </div>
-        <div className={styles.formats}>
+        <div className="mx-auto grid max-w-7xl grid-cols-6 gap-3.5">
           {FORMATS.map((format) => (
-            <div className={styles.formatCard} key={format.name}>
-              <div className={styles.formatName}>{format.name}</div>
-              <div className={styles.formatDesc}>{format.desc}</div>
+            <div
+              className="rounded-[10px] border border-[#e6e9ed] px-2.5 py-[22px]"
+              key={format.name}
+            >
+              <div className="text-[15px] font-extrabold">{format.name}</div>
+              <div className="mt-1 text-[11px] text-[#868d95]">
+                {format.desc}
+              </div>
             </div>
           ))}
         </div>
       </section>
 
-      <section className={styles.finalCta}>
-        <div className={styles.finalCtaTitle}>
+      <section className="bg-[#15181c] px-[60px] py-20 text-center">
+        <div className="mb-3.5 text-4xl leading-[1.25] font-extrabold tracking-[-1px] text-white">
           놓치고 있던 지원사업,
           <br />
           지금 1분이면 확인합니다
         </div>
-        <div className={styles.finalCtaDesc}>
+        <div className="mb-8 text-base text-[#9aa1a9]">
           카카오 로그인하고 사업계획서만 올리면 됩니다. 비용은 들지 않아요.
         </div>
-        <button type="button" className={styles.kakaoButtonLarge} style={{ width: 'auto', padding: '0 32px', margin: '0 auto' }} onClick={goToUpload}>
-          <span className={styles.kakaoDotLarge} />
+        <button
+          type="button"
+          className="mt-6 flex h-[54px] w-full cursor-pointer items-center justify-center gap-[9px] rounded-lg bg-kakao text-base font-bold text-kakao-ink"
+          style={{ width: 'auto', padding: '0 32px', margin: '0 auto' }}
+          onClick={goToUpload}
+        >
+          <span className="h-5 w-5 rounded-[5px] bg-kakao-ink opacity-85" />
           카카오로 시작하기
         </button>
       </section>
 
-      <footer className={styles.footer}>
-        <span className={styles.footerLogo}>KGVendingMachine</span>
-        <span className={styles.footerLinks}>
+      <footer className="flex flex-wrap items-center gap-5 border-t border-[#2a2e34] bg-[#15181c] px-[60px] py-8">
+        <span className="text-[15px] font-extrabold text-white">
+          KGVendingMachine
+        </span>
+        <span className="text-[12.5px] text-[#6b7178]">
           이용약관 · 개인정보처리방침 · 고객문의
         </span>
-        <span className={styles.footerCopyright}>
+        <span className="ml-auto text-[12.5px] text-[#6b7178]">
           © 2026 KGVendingMachine. 공공데이터 기반 정부지원사업 매칭 서비스
         </span>
       </footer>

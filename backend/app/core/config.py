@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     KSTARTUP_REQUEST_TIMEOUT_SECONDS: int = 15
     KSTARTUP_MAX_RETRIES: int = 3
 
+    MSIT_API_KEY: str = ""
+    MSIT_API_URL: str = (
+        "https://apis.data.go.kr/1721000/msitannouncementinfo/businessAnnouncMentList"
+    )
+    # 문서상 http로 나와있지만 실제로는 https가 아니면 400(Request Blocked)이
+    # 반환되는 것을 실측으로 확인함(2026-07-13).
+    MSIT_PAGE_SIZE: int = 100
+    MSIT_REQUEST_TIMEOUT_SECONDS: int = 15
+    MSIT_MAX_RETRIES: int = 3
+
     CLOVA_OCR_INVOKE_URL: str = ""
     CLOVA_OCR_SECRET_KEY: str = ""
     CLOVA_OCR_TIMEOUT_SECONDS: int = 30

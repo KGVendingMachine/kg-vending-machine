@@ -42,6 +42,7 @@ class CollectionJobStatusResponse(BaseModel):
     """진행 중인 단계 (예: "기업마당 수집 중", "K-Startup 수집 중")"""
     bizinfo_result: SourceCollectionResult | None = None
     kstartup_result: SourceCollectionResult | None = None
+    msit_result: SourceCollectionResult | None = None
     error_message: str | None = None
 
 

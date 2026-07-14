@@ -6,12 +6,11 @@ import { ScoreGauge } from '../../components/ScoreGauge/ScoreGauge'
 import { getMatchLog, formatMatchLogDate } from '../../api/matchLogs'
 import type { MatchLog } from '../../api/matchLogs'
 import { toggleBookmark } from '../../api/bookmarks'
+import { useFetchOnMount } from '../../hooks/useFetchOnMount'
 import { useMatchedNotices } from '../../hooks/useMatchedNotices'
 import type { MatchedNotice } from '../../types/notice'
 import { PATHS } from '../../routes/paths'
-import styles from './ResultsPage.module.css'
-
-const DEADLINE_FILTERS = ['7일 이내', '30일 이내', '상시 모집']
+import { DEADLINE_FILTERS } from '../../constants/resultsFilters'
 
 export function ResultsPage() {
   const navigate = useNavigate()
@@ -24,7 +23,6 @@ export function ResultsPage() {
   const validLogId =
     matchLogId != null && !Number.isNaN(matchLogId) ? matchLogId : null
 
-  const [matchLog, setMatchLog] = useState<MatchLog | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   // 공고 상세와 매칭 점수를 합친 표시용 모델(MatchedNotice)을 가져온다 —
   // MatchDetailPage/BookmarksPage와 동일한 훅으로, 목록/상세 화면 전체가
@@ -54,24 +52,11 @@ export function ResultsPage() {
     }
   }
 
-  useEffect(() => {
-    if (validLogId == null) {
-      setMatchLog(null)
-      return
-    }
-    let cancelled = false
-    getMatchLog(validLogId)
-      .then((log) => {
-        if (!cancelled) setMatchLog(log)
-      })
-      .catch(() => {
-        // 실행 정보 배너는 부가 정보라 실패해도 결과 화면은 그대로 보여준다.
-        if (!cancelled) setMatchLog(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [validLogId])
+  // 실행 정보 배너는 부가 정보라 실패해도 결과 화면은 그대로 보여준다.
+  const { data: matchLog } = useFetchOnMount<MatchLog>(
+    () => (validLogId == null ? null : getMatchLog(validLogId)),
+    [validLogId],
+  )
 
   // 결과가 (다시) 로드되면 첫 번째 공고를 기본 선택한다.
   useEffect(() => {
@@ -97,18 +82,18 @@ export function ResultsPage() {
   // matchLogId 없이 진입(직접 URL 입력 등)하면 보여줄 결과가 없다.
   if (validLogId == null) {
     return (
-      <div className={styles.page}>
+      <div className="flex flex-1 flex-col min-h-0">
         <AppHeader />
-        <div className={styles.stateWrap}>
-          <div className={styles.stateTitle}>표시할 매칭 결과가 없어요</div>
-          <div className={styles.stateText}>
+        <div className="flex flex-1 flex-col items-center justify-center gap-2.5 px-6 py-[60px] text-center">
+          <div className="text-lg font-extrabold">표시할 매칭 결과가 없어요</div>
+          <div className="text-sm leading-[1.6] text-muted">
             사업계획서를 분석하고 공고 매칭을 실행하면 결과를 볼 수 있어요.
             <br />
             분석 페이지의 매칭 기록에서 지난 결과를 다시 열 수도 있어요.
           </div>
           <button
             type="button"
-            className={styles.stateButton}
+            className="mt-3 h-11 cursor-pointer rounded border-none bg-primary px-6 text-sm font-bold text-white"
             onClick={() => navigate(PATHS.UPLOAD)}
           >
             사업계획서 분석하러 가기 →
@@ -119,48 +104,48 @@ export function ResultsPage() {
   }
 
   return (
-    <div className={styles.page}>
+    <div className="flex flex-1 flex-col min-h-0">
       <AppHeader />
       {matchLog ? (
-        <div className={styles.runBanner}>
-          <span className={styles.runBannerTitle}>
+        <div className="flex items-center gap-2.5 border-b border-[#eef0f2] bg-primary-soft px-6 py-2.5 text-[13px]">
+          <span className="font-extrabold">
             {matchLog.business_plan_title ?? '사업계획서'}
           </span>
-          <span className={styles.runBannerDate}>
+          <span className="text-muted">
             {formatMatchLogDate(matchLog.created_at)} 매칭 결과
           </span>
         </div>
       ) : null}
 
       {loading ? (
-        <div className={styles.stateWrap}>
-          <div className={styles.stateText}>매칭 결과를 불러오는 중…</div>
+        <div className="flex flex-1 flex-col items-center justify-center gap-2.5 px-6 py-[60px] text-center">
+          <div className="text-sm leading-[1.6] text-muted">매칭 결과를 불러오는 중…</div>
         </div>
       ) : list.length === 0 ? (
-        <div className={styles.stateWrap}>
-          <div className={styles.stateTitle}>
+        <div className="flex flex-1 flex-col items-center justify-center gap-2.5 px-6 py-[60px] text-center">
+          <div className="text-lg font-extrabold">
             {error ? '결과를 불러오지 못했어요' : '이 매칭에는 저장된 결과가 없어요'}
           </div>
-          <div className={styles.stateText}>
+          <div className="text-sm leading-[1.6] text-muted">
             {error
               ? '매칭 결과를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.'
               : '공고 데이터가 없던 시점의 실행이거나, 결과 생성에 실패한 실행이에요.'}
           </div>
         </div>
       ) : (
-        <div className={styles.layout}>
-          <aside className={styles.sidebar}>
-            <div className={styles.sidebarTitle}>필터</div>
+        <div className="grid flex-1 min-h-0 grid-cols-[230px_1fr_380px]">
+          <aside className="overflow-auto border-r border-[#eef0f2] px-5 py-6">
+            <div className="mb-[18px] text-[13px] font-extrabold">필터</div>
 
-            <div className={styles.filterGroupTitle}>분야</div>
-            <div className={styles.filterOptions}>
+            <div className="mb-2.5 text-xs font-bold text-muted">분야</div>
+            <div className="mb-[22px] flex flex-col gap-[9px] text-[13px]">
               {fieldFilters.map((filter) => (
-                <label className={styles.filterLabel} key={filter.label}>
+                <label className="flex items-center gap-2" key={filter.label}>
                   <span
                     className={
                       filter.checked
-                        ? `${styles.checkbox} ${styles.checked}`
-                        : styles.checkbox
+                        ? 'h-[15px] w-[15px] shrink-0 rounded-[3px] border border-primary bg-primary'
+                        : 'h-[15px] w-[15px] shrink-0 rounded-[3px] border border-[#c8cdd3]'
                     }
                   />
                   {filter.label} ({filter.count})
@@ -168,23 +153,23 @@ export function ResultsPage() {
               ))}
             </div>
 
-            <div className={styles.filterGroupTitle}>마감</div>
-            <div className={styles.filterOptions}>
+            <div className="mb-2.5 text-xs font-bold text-muted">마감</div>
+            <div className="mb-[22px] flex flex-col gap-[9px] text-[13px]">
               {DEADLINE_FILTERS.map((label) => (
-                <label className={styles.filterLabel} key={label}>
-                  <span className={styles.checkbox} />
+                <label className="flex items-center gap-2" key={label}>
+                  <span className="h-[15px] w-[15px] shrink-0 rounded-[3px] border border-[#c8cdd3]" />
                   {label}
                 </label>
               ))}
             </div>
           </aside>
 
-          <div className={styles.list}>
-            <div className={styles.listHeader}>
-              <div className={styles.listCount}>
-                맞춤 공고 <span>{list.length}</span>건
+          <div className="overflow-auto bg-surface-subtle px-6 py-[22px]">
+            <div className="mb-4 flex items-center justify-between">
+              <div className="text-[15px] font-bold">
+                맞춤 공고 <span className="text-primary">{list.length}</span>건
               </div>
-              <div className={styles.sortLabel}>적합도순 ▾</div>
+              <div className="text-[13px] text-muted">적합도순 ▾</div>
             </div>
 
             {list.map((notice) => (
@@ -199,38 +184,38 @@ export function ResultsPage() {
             ))}
           </div>
 
-          <div className={styles.detail}>
+          <div className="overflow-auto border-l border-[#eef0f2] p-6">
             {selected ? (
               <>
-                <span className={styles.detailBadge}>
+                <span className="inline-block rounded-[3px] bg-primary-soft px-2 py-[3px] text-[11px] font-bold text-primary">
                   {selected.category} · {selected.deadlineLabel}
                 </span>
-                <div className={styles.detailTitle}>{selected.title}</div>
-                <div className={styles.detailOrg}>{selected.org}</div>
+                <div className="mt-3 text-lg font-extrabold leading-[1.4]">{selected.title}</div>
+                <div className="mt-1 text-[13px] text-muted">{selected.org}</div>
 
                 {selected.score != null ? (
-                  <div className={styles.gaugeBanner}>
+                  <div className="my-5 flex items-center gap-3 rounded-md bg-success-soft p-4">
                     <ScoreGauge score={selected.score} size={72} />
-                    <div className={styles.gaugeBannerText}>
+                    <div className="text-[13px] leading-[1.5] text-[#15803d]">
                       적합도{' '}
                       {selected.scoreLevel === 'high' ? '매우 높음' : '보통'}
                       <br />
-                      <span>
+                      <span className="text-muted">
                         {selected.score >= 90 ? '상위 3% 추천' : '적합도 순위 반영'}
                       </span>
                     </div>
                   </div>
                 ) : null}
 
-                <div className={styles.detailSectionTitle}>왜 추천했나요?</div>
-                <div className={styles.reasons}>
+                <div className="mb-2.5 text-[13px] font-extrabold">왜 추천했나요?</div>
+                <div className="flex flex-col gap-2.5 text-[13px] leading-[1.6] text-[#374151]">
                   {selected.strengths.map((reason) => (
-                    <div className={styles.reasonItem} key={reason}>
+                    <div className="border-l-2 border-success pl-2.5" key={reason}>
                       {reason}
                     </div>
                   ))}
                   {selected.weaknesses.map((reason) => (
-                    <div className={`${styles.reasonItem} ${styles.warn}`} key={reason}>
+                    <div className="border-l-2 border-warning pl-2.5" key={reason}>
                       {reason}
                     </div>
                   ))}
@@ -238,27 +223,24 @@ export function ResultsPage() {
 
                 {selected.scoreBreakdown ? (
                   <>
-                    <div
-                      className={styles.detailSectionTitle}
-                      style={{ marginTop: 22 }}
-                    >
+                    <div className="mb-2.5 mt-[22px] text-[13px] font-extrabold">
                       점수 구성
                     </div>
-                    <div className={styles.breakdown}>
+                    <div className="mt-[22px] flex flex-col gap-2.5">
                       {selected.scoreBreakdown.map((item) => (
                         <div key={item.key}>
-                          <div className={styles.breakdownRow}>
+                          <div className="mb-1 flex justify-between text-xs">
                             <span>{item.label}</span>
                             <span>
                               {item.score}/{item.max}
                             </span>
                           </div>
-                          <div className={styles.breakdownTrack}>
+                          <div className="h-[5px] rounded-[3px] bg-border">
                             <div
                               className={
                                 item.score < item.max / 2
-                                  ? `${styles.breakdownFill} ${styles.warn}`
-                                  : styles.breakdownFill
+                                  ? 'h-full rounded-[3px] bg-warning'
+                                  : 'h-full rounded-[3px] bg-success'
                               }
                               style={{ width: `${(item.score / item.max) * 100}%` }}
                             />
@@ -269,10 +251,10 @@ export function ResultsPage() {
                   </>
                 ) : null}
 
-                <div className={styles.detailActions}>
+                <div className="mt-6 flex flex-col gap-2">
                   {selected.sourceUrl ? (
                     <a
-                      className={styles.linkAction}
+                      className="flex h-11 items-center justify-center rounded border border-border-strong bg-white text-sm font-semibold text-ink no-underline"
                       href={selected.sourceUrl}
                       target="_blank"
                       rel="noreferrer"
@@ -280,7 +262,11 @@ export function ResultsPage() {
                       원문 공고 보기 ↗
                     </a>
                   ) : (
-                    <button type="button" className={styles.disabledAction} disabled>
+                    <button
+                      type="button"
+                      className="h-11 cursor-not-allowed rounded border border-border bg-surface-subtle text-sm font-semibold text-faint"
+                      disabled
+                    >
                       원문 공고 보기 ↗
                     </button>
                   )}
@@ -289,7 +275,7 @@ export function ResultsPage() {
                 </div>
               </>
             ) : (
-              <div className={styles.emptyDetail}>공고를 선택해주세요</div>
+              <div className="mt-[60px] text-center text-[13px] text-faint">공고를 선택해주세요</div>
             )}
           </div>
         </div>

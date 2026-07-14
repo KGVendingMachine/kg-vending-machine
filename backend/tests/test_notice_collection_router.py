@@ -106,15 +106,21 @@ async def test_run_collection_job_always_collects_bizinfo_before_kstartup(
         call_order.append("kstartup")
         return CollectionResult(saved_count=2)
 
+    async def fake_msit(session):
+        call_order.append("msit")
+        return CollectionResult(saved_count=3)
+
     monkeypatch.setattr(notice_collection, "collect_all_bizinfo_notices", fake_bizinfo)
     monkeypatch.setattr(
         notice_collection, "collect_all_kstartup_notices", fake_kstartup
     )
+    monkeypatch.setattr(notice_collection, "collect_all_msit_notices", fake_msit)
 
     await _run_collection_job(session=object(), job_id="job-order")
 
-    assert call_order == ["bizinfo", "kstartup"]
+    assert call_order == ["bizinfo", "kstartup", "msit"]
     assert _JOBS["job-order"].status == CollectionJobStatus.COMPLETED
+    assert _JOBS["job-order"].msit_result.saved_count == 3
 
 
 # ---------------------------------------------------------------------------
