@@ -229,7 +229,7 @@ async def test_normalize_notice_raises_no_source_text_error(db_session):
         await normalize_notice(db_session, notice_id)
 
     notice = await db_session.get(Notice, notice_id)
-    assert notice.normalization_status == "failed"
+    assert notice.normalization_status == "skipped"
     assert "정규화에 쓸 원문이 없습니다" in notice.normalization_error
     assert notice.normalized_json is None
 
