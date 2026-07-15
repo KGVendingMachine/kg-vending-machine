@@ -1,6 +1,5 @@
 import { Fragment, useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { PATHS, resultsPath } from '../../routes/paths'
 import {
   getBusinessPlanAnalysisStatus,
@@ -321,7 +320,6 @@ export function AnalysisProgressPage() {
 
   return (
     <div className="flex flex-1 flex-col">
-      <AppHeader />
       <div className="mx-auto box-border w-full max-w-[1000px] px-15 py-12">
         <div className="text-[22px] font-extrabold tracking-[-0.5px]">
           {analyzed

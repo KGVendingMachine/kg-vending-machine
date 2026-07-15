@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { NoticeCard } from '../../components/NoticeCard/NoticeCard'
 import { listBookmarks, deleteBookmark } from '../../api/bookmarks'
 import { useFetchOnMount } from '../../hooks/useFetchOnMount'
@@ -36,7 +35,6 @@ export function BookmarksPage() {
 
   return (
     <div className="flex flex-1 flex-col">
-      <AppHeader />
       <div className="mx-auto w-full max-w-[760px] px-10 py-7">
         <div className="text-[22px] font-extrabold tracking-[-0.5px]">
           북마크한 공고
@@ -56,7 +54,9 @@ export function BookmarksPage() {
                 key={notice.id}
                 notice={notice}
                 selected={false}
-                onClick={() => navigate(noticeDetailPath(notice.id))}
+                onClick={() =>
+                  navigate(noticeDetailPath(notice.id), { state: { notice } })
+                }
                 onToggleBookmark={
                   notice.bookmarkId != null
                     ? () => handleRemoveBookmark(notice.bookmarkId!)

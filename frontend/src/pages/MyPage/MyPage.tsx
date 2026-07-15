@@ -6,7 +6,6 @@ import {
   getMyCompanyProfile,
   type CompanyProfile,
 } from '../../api/companyProfile'
-import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { useFetchOnMount } from '../../hooks/useFetchOnMount'
 import { PATHS } from '../../routes/paths'
 
@@ -79,7 +78,6 @@ export function MyPage() {
 
   return (
     <div className="flex flex-1 flex-col">
-      <AppHeader />
       <div className="mx-auto box-border w-full max-w-[480px] p-10">
         <div className="mb-7 flex items-center gap-3.5">
           <span className="h-12 w-12 flex-shrink-0 rounded-full bg-[#e9edf2]" />
