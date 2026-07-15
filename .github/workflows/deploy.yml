@@ -28,5 +28,13 @@ jobs:
             git fetch origin develop
             git reset --hard origin/develop
             docker compose -f docker-compose.prod.yml build
-            docker compose -f docker-compose.prod.yml up -d
+            # 운영 DB 먼저 실행
+            docker compose -f docker-compose.prod.yml up -d --wait postgres
+
+            # 운영 DB에 Alembic 적용
+            docker compose -f docker-compose.prod.yml run --rm backend \
+              uv run --no-sync alembic upgrade head
+              
+            # 마이그레이션 성공 후 새 백엔드 실행
+            docker compose -f docker-compose.prod.yml up -d backend
             docker image prune -f
