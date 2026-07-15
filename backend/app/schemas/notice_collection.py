@@ -101,4 +101,7 @@ class CollectionStatsResponse(BaseModel):
     ocr_pending_count: int
     """OCR 대상 포맷(PDF/HWP/HWPX) 첨부파일은 있지만 아직 하나도 OCR되지 않은 공고 수"""
     by_normalization_status: dict[str, int]
-    """정규화 상태별 공고 수 (not_started/completed/failed)"""
+    """정규화 상태별 공고 수 (not_started/completed/failed/skipped).
+    skipped는 OCR 텍스트·summary_text가 둘 다 없어 애초에 LLM을 호출하지
+    않은 경우 — 원문이 생기기 전까지 재시도해도 해결되지 않으므로 "고쳐야
+    할 실패"인 failed와 구분한다."""

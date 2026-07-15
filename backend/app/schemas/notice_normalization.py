@@ -35,6 +35,16 @@ class NoticeApplicationInfo(BaseModel):
     submission_channel: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
+    # LLM이 값이 없을 때 null 대신 빈 리스트를 돌려주는 경우가 실측으로 확인됨
+    # (2026-07-14, 정규화 실패 61건 중 대다수가 이 필드 하나 때문이었음).
+    # NoticeContactInfo의 scalar 필드들과 같은 이유로 리스트를 문자열로
+    # 흡수한다 — 스키마를 엄격하게 만드는 대신 LLM 출력의 사소한 형식
+    # 흔들림을 받는 쪽에서 관대하게 처리한다.
+    _normalize_submission_channel = field_validator(
+        "submission_channel",
+        mode="before",
+    )(_list_to_joined_string)
+
 
 class NoticeSupportInfo(BaseModel):
     summary: str | None = None

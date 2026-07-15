@@ -216,12 +216,18 @@ async def normalize_notice(
         text_candidates.append((None, None, notice.summary_text))
 
     if not text_candidates:
+        # "failed"가 아니라 "skipped"로 구분한다 — LLM 호출이 아예 없었고(비용
+        # 발생 없음), 재시도해도 원문이 생기지 않는 이상 해결되지 않는
+        # 상태라 "고쳐야 할 실패"와 구분해야 한다(2026-07-14, 실측: 마감된
+        # K-Startup 옛날 공고에 몰려있고 재시도로 해결 안 됨을 확인함).
+        # 매칭 후보 조회(list_normalized_notice_candidates)는 completed만
+        # 보므로 어느 쪽이든 매칭에는 영향 없다.
         error_message = "정규화에 쓸 원문이 없습니다(OCR 텍스트도 summary_text도 없음)."
         await update_notice_normalization(
             session,
             notice_id,
             normalized_json=None,
-            normalization_status="failed",
+            normalization_status="skipped",
             normalization_error=error_message,
             normalized_at=datetime.now(timezone.utc).replace(tzinfo=None),
         )
