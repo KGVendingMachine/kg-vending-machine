@@ -15,9 +15,6 @@ from app.api.notice_collection import (
     _JOBS,
     _execute_collection_job,
     _run_collection_job,
-    backfill_bizinfo_region,
-    backfill_category,
-    backfill_region_codes,
     get_collection_stats_endpoint,
     get_collection_status,
     recollect_notice,
@@ -147,51 +144,12 @@ async def test_get_collection_status_404_when_unknown():
 
 
 # ---------------------------------------------------------------------------
-# backfill_category
-# ---------------------------------------------------------------------------
-
-
-async def test_backfill_category_returns_checked_and_updated_counts(db_session):
-    result = await backfill_category(session=db_session)
-
-    assert result.checked >= 0
-    assert result.updated >= 0
-    assert result.updated <= result.checked
-
-
-# ---------------------------------------------------------------------------
 # refresh_status
 # ---------------------------------------------------------------------------
 
 
 async def test_refresh_status_returns_checked_and_updated_counts(db_session):
     result = await refresh_status(session=db_session)
-
-    assert result.checked >= 0
-    assert result.updated >= 0
-    assert result.updated <= result.checked
-
-
-# ---------------------------------------------------------------------------
-# backfill_bizinfo_region
-# ---------------------------------------------------------------------------
-
-
-async def test_backfill_bizinfo_region_returns_checked_and_updated_counts(db_session):
-    result = await backfill_bizinfo_region(session=db_session)
-
-    assert result.checked >= 0
-    assert result.updated >= 0
-    assert result.updated <= result.checked
-
-
-# ---------------------------------------------------------------------------
-# backfill_region_codes
-# ---------------------------------------------------------------------------
-
-
-async def test_backfill_region_codes_returns_checked_and_updated_counts(db_session):
-    result = await backfill_region_codes(session=db_session)
 
     assert result.checked >= 0
     assert result.updated >= 0
