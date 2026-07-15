@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Integer, cast, delete, func, select, update
+from sqlalchemy import Integer, cast, delete, func, or_, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -812,16 +812,45 @@ async def get_notice_attachment(
 async def get_notice_ids_pending_normalization(
     session: AsyncSession, limit: int
 ) -> list[int]:
-    """아직 정규화를 시도한 적 없는(normalization_status가 NULL인) 공고
-    id를 마감일이 임박한 순으로 최대 limit개 가져온다 (스케줄러 배치용).
+    """completed가 아닌 공고 id를 새 공고(NULL) 우선으로 가져온다 (스케줄러 배치용).
 
-    get_collection_stats의 by_normalization_status 집계와 같은 기준
-    (NULL = "not_started")이지만, 여긴 건수가 아니라 실제 id 목록이
-    필요해 별도 함수로 둔다.
+    실패/스킵도 재시도 대상에 포함한다 — 원문이 나중에 채워지면 성공할 수 있어서다.
     """
     result = await session.execute(
         select(Notice.id)
-        .where(Notice.normalization_status.is_(None))
+        .where(
+            or_(
+                Notice.normalization_status.is_(None),
+                Notice.normalization_status.in_(("failed", "skipped")),
+            )
+        )
+        .order_by(
+            Notice.normalization_status.is_(None).desc(),
+            Notice.application_end_date.asc().nulls_last(),
+            Notice.id.desc(),
+        )
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def get_notice_ids_pending_attachment_ocr(
+    session: AsyncSession, limit: int, exclude_source_names: set[str]
+) -> list[int]:
+    """OCR 대상 포맷 첨부파일은 있는데 parsed_text가 없는 공고 id를 가져온다 (사전 OCR 배치용).
+
+    exclude_source_names로 특정 출처(예: 과학기술정보통신부)를 대상에서 뺄 수 있다.
+    """
+    result = await session.execute(
+        select(Notice.id)
+        .join(NoticeSource, NoticeSource.id == Notice.source_id)
+        .join(NoticeAttachment, NoticeAttachment.notice_id == Notice.id)
+        .where(
+            NoticeAttachment.file_type.in_(("PDF", "HWP", "HWPX")),
+            NoticeSource.source_name.notin_(exclude_source_names),
+        )
+        .group_by(Notice.id)
+        .having(func.count(NoticeAttachment.parsed_text) == 0)
         .order_by(Notice.application_end_date.asc().nulls_last(), Notice.id.desc())
         .limit(limit)
     )

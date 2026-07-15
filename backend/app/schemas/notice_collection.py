@@ -46,15 +46,6 @@ class CollectionJobStatusResponse(BaseModel):
     error_message: str | None = None
 
 
-class CategoryBackfillResult(BaseModel):
-    """POST /internal/notices/backfill-category 응답"""
-
-    checked: int
-    """category_id가 비어있어 검사한 공고 수"""
-    updated: int
-    """실제로 category_id를 채운 공고 수"""
-
-
 class StatusRefreshResult(BaseModel):
     """POST /internal/notices/refresh-status 응답"""
 
@@ -64,22 +55,13 @@ class StatusRefreshResult(BaseModel):
     """실제로 status가 바뀐 공고 수 (주로 마감일 경과로 인한 마감 처리)"""
 
 
-class BizinfoRegionBackfillResult(BaseModel):
-    """POST /internal/notices/backfill-bizinfo-region 응답"""
+class BusinessYearsBackfillResult(BaseModel):
+    """POST /internal/notices/backfill-business-years 응답"""
 
     checked: int
-    """검사한 기업마당 공고 수"""
+    """검사한 K-Startup 공고 수"""
     updated: int
-    """실제로 전국(region_code=ALL)이 추가된 공고 수"""
-
-
-class RegionCodeBackfillResult(BaseModel):
-    """POST /internal/notices/backfill-region-codes 응답"""
-
-    checked: int
-    """검사한 공고 수 (기업마당+K-Startup)"""
-    updated: int
-    """실제로 지역 코드가 재계산돼 바뀐 공고 수"""
+    """업력 구조화 컬럼을 갱신한 공고 수"""
 
 
 class NoticeRecollectionResult(BaseModel):

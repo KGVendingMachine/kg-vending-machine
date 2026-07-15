@@ -4,7 +4,7 @@ import type {
   SecondaryFilteringReasonLog,
 } from '../api/matchLogs'
 import type { Bookmark } from '../api/bookmarks'
-import type { NoticeDetail } from '../api/notices'
+import type { NoticeAttachmentInfo, NoticeDetail } from '../api/notices'
 import { formatDeadline } from '../utils/date'
 
 export type ScoreLevel = 'high' | 'medium' | 'low'
@@ -75,6 +75,19 @@ export interface MatchedNotice {
   matchResultId: number | null
   /** 담겨 있으면 그 북마크 id(해제 시 사용), 아니면 null. */
   bookmarkId: number | null
+  /** 모집상태 원문(예: "접수중"). 북마크 스냅샷에는 있고, 매칭 결과 컨텍스트에는 없다. */
+  status: string | null
+  /** 신청 시작일. 공고 상세(NoticeDetail)에만 있고 북마크 스냅샷에는 없다. */
+  applicationStartDate: string | null
+  /** 신청 종료일 원문(YYYY-MM-DD). deadlineLabel 계산에 쓰인 것과 같은 값. */
+  applicationEndDate: string | null
+  /** 첨부파일. 공고 상세(NoticeDetail)에만 있고 북마크 스냅샷에는 없다. */
+  attachments: NoticeAttachmentInfo[]
+  /** 이 추천이 어떤 사업계획서 기준인지. 매칭 실행 컨텍스트(결과 페이지 등)는
+   * 화면 상단 배너에 이미 표시되므로 null — 북마크 목록처럼 여러 실행이
+   * 섞여 보이는 화면에서만 채운다. 브라우징으로 담은 북마크(사업계획서
+   * 맥락 없음)도 null. */
+  businessPlanTitle: string | null
 }
 
 function splitSentences(value: string | null): string[] {
@@ -164,6 +177,11 @@ export function toMatchedNotice(
     secondaryFilterReasons: judged ? (secondaryFiltering?.reasons ?? []) : [],
     matchResultId: result?.id ?? null,
     bookmarkId: result?.bookmark_id ?? null,
+    status: notice.status,
+    applicationStartDate: notice.application_start_date,
+    applicationEndDate: notice.application_end_date,
+    attachments: notice.attachments,
+    businessPlanTitle: null,
   }
 }
 
@@ -203,5 +221,10 @@ export function bookmarkToMatchedNotice(bookmark: Bookmark): MatchedNotice {
     secondaryFilterReasons: [],
     matchResultId: null,
     bookmarkId: bookmark.id,
+    status: notice.status,
+    applicationStartDate: null,
+    applicationEndDate: notice.application_end_date,
+    attachments: [],
+    businessPlanTitle: bookmark.business_plan_title,
   }
 }

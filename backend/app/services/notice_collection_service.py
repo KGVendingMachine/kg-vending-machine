@@ -62,19 +62,8 @@ class UnsupportedRecollectionSourceError(NoticeRecollectionError):
     """단건 재수집을 지원하지 않는 출처에 대해 시도했을 때 발생."""
 
 
-# 코드는 행정표준코드(법정동코드 앞 2자리) 기준. 강원/전북은 예전에
-# 여기 51/52로 잘못 들어가 있었다 — 실제로는 특별자치도 전환(강원
-# 2023-06, 전북 2024-01) 이후에도 기존 코드(42/45)를 그대로 쓴다.
-# 2026-07-10 발견해서 정정함(실제 DB에도 저장돼있던 잘못된 값이라
-# backfill_region_codes로 기존 데이터도 같이 보정).
-#
-# "전남광주"/"전남광주통합특별시": 2026-07-01 전라남도·광주광역시가
-# 통폐합해 출범한 신설 광역자치단체(대한민국 최초 시도 통합, 특별법
-# 근거). 예전엔 이 태그를 원본 데이터 오류로 보고 "전남"으로 정정하는
-# 별칭 처리를 했었는데, 실제로는 오류가 아니라 새 행정구역명이었다.
-# TODO: 코드값 "90"은 임시값 — 행정표준코드관리시스템(code.go.kr)에서
-# 공식 배정된 실제 코드로 확인 후 교체 필요. 기존 전남(46)/광주(29)는
-# 7/1 이전 수집된 공고(구 행정구역 기준)를 위해 그대로 남겨둔다.
+# 코드는 행정표준코드 기준(2026-07-10 강원/전북 오류 정정 완료).
+# TODO: "전남광주(통합특별시)"의 코드 "90"은 임시값 — code.go.kr 공식 코드로 교체 필요.
 REGION_CODE_BY_NAME = {
     "전국": "ALL",
     "서울": "11",
@@ -188,16 +177,8 @@ def _parse_regions(value: str | None) -> list[tuple[str, str]]:
     return regions
 
 
-# 기업마당 hashtags에는 K-Startup의 supt_regin="전국" 같은 전국 대상
-# 표현이 따로 없다 — 실제 응답으로 확인함: 전국 대상 공고는 "전국" 태그
-# 하나 대신 광역자치단체를 전부 나열하는 방식으로 표현된다(예:
-# "금융,서울,부산,대구,...,제주,..."). 이게 다 태그돼 있으면
-# K-Startup과 동일한 기준(region_code=ALL)으로도 조회되도록 "전국"을
-# 함께 추가한다.
-#
-# 2026-07-01 전남·광주 통합으로 "전국"의 구성이 둘로 나뉜다 — 통합 이전
-# 수집된 공고는 구 체계(전남+광주 별도, 17개)로, 이후 공고는 신 체계
-# (전남광주통합특별시 하나, 16개)로 나열될 수 있어 둘 다 인정한다.
+# 기업마당은 "전국" 태그 대신 광역자치단체를 전부 나열하는 방식으로 표현한다.
+# 전남·광주 통합(2026-07-01) 전후로 구성이 다를 수 있어(17개/16개) 둘 다 인정한다.
 _JEONNAM_CODE = REGION_CODE_BY_NAME["전남"]
 _GWANGJU_CODE = REGION_CODE_BY_NAME["광주"]
 _JEONNAM_GWANGJU_CODE = REGION_CODE_BY_NAME["전남광주통합특별시"]
@@ -214,12 +195,7 @@ _ALL_REGION_CODES_CURRENT = _UNCHANGED_REGION_CODES | {_JEONNAM_GWANGJU_CODE}
 def _parse_bizinfo_regions(hashtags: str | None) -> list[tuple[str, str]]:
     """기업마당 hashtags 필드에서 지역명과 일치하는 태그만 골라낸다.
 
-    기업마당 API에는 K-Startup의 supt_regin 같은 전용 지역 필드가 없다.
-    대신 hashtags에 지역명이 "경영", "2026", 기관명 같은 다른 주제 태그와
-    뒤섞여 들어있다(실제 응답 예: "경영,서울,부산,...,지식재산처"). 알려진
-    지역명과 정확히 일치하는 태그만 채택하고 나머지는 조용히 무시한다 —
-    지역이 아닌 태그가 대부분이라 _parse_regions처럼 태그마다 경고를
-    남기면 로그가 도배된다.
+    지역명이 다른 주제 태그와 뒤섞여 있어, 일치하지 않는 태그는 경고 없이 무시한다.
     """
     regions: list[tuple[str, str]] = []
     seen_codes: set[str] = set()
@@ -238,6 +214,7 @@ def _parse_bizinfo_regions(hashtags: str | None) -> list[tuple[str, str]]:
 
 
 def _file_type_from_name(file_name: str) -> str | None:
+    """파일명 확장자를 대문자로 뽑는다 (확장자 없으면 None)."""
     if "." not in file_name:
         return None
     return file_name.rsplit(".", 1)[-1].upper()
@@ -246,13 +223,7 @@ def _file_type_from_name(file_name: str) -> str | None:
 def _parse_bizinfo_attachments(item: dict) -> list[tuple[str, str]]:
     """기업마당 응답에 이미 들어있는 첨부파일 (파일명, URL) 목록을 뽑는다.
 
-    K-Startup과 달리 기업마당은 목록 API 응답 자체에 첨부파일 URL이 있어
-    별도 상세페이지 크롤링이 필요 없다. 다만 첨부파일이 여러 개인 공고는
-    fileNm/flpthNm(그리고 printFileNm/printFlpthNm) 각각이 "@"로 이어붙은
-    문자열로 온다 — 실제 응답으로 확인함(파일 4개짜리 공고에서 flpthNm이
-    "url0@url1@url2@url3" 형태, fileSn만 0/1/2/3으로 다름). 그대로 하나의
-    파일명/URL로 저장하면 URL 여러 개가 이어붙은 깨진 값이 되어 다운로드가
-    안 되므로, "@" 기준으로 나눠서 같은 순번끼리 짝짓는다.
+    첨부파일이 여러 개면 fileNm/flpthNm이 "@"로 이어붙은 문자열로 오므로 나눠서 짝짓는다.
     """
     attachments: list[tuple[str, str]] = []
     seen_urls: set[str] = set()
@@ -280,11 +251,8 @@ def _parse_bizinfo_attachments(item: dict) -> list[tuple[str, str]]:
     return attachments
 
 
-# 기업마당 전체(1,439건) 실제 데이터로 확인함: reqstBeginEndDe가
-# "YYYY-MM-DD ~ YYYY-MM-DD" 형식이 아닌 787건 중 726건(약 92%)이
-# 날짜가 없는 게 아니라 "상시/예산 소진 시까지" 같은, 정해진 종료일 없이
-# 계속 열려있다는 뜻의 표현이었다. 이걸 그냥 "확인필요"로 두면 실제로는
-# 신청 가능한 공고 대부분이 "확인필요"로 잘못 분류된다.
+# 실측(기업마당 1,439건 중 날짜 형식 아닌 787건의 92%)으로 확인: 이 표현들은
+# 날짜가 없는 게 아니라 "상시모집" 등 종료일 없이 계속 열려있다는 뜻이다.
 _ROLLING_OPEN_KEYWORDS = (
     "예산 소진",
     "상시",
@@ -301,10 +269,8 @@ def _is_rolling_open(value: str | None) -> bool:
     return any(keyword in value for keyword in _ROLLING_OPEN_KEYWORDS)
 
 
-# "모집 완료"/"모집 마감"/"모집규모 충족"류는 반대로 이미 신청이 끝났다는
-# 뜻이라(정원 충족 포함), _ROLLING_OPEN_KEYWORDS와 같이 두면 마감된
-# 공고가 모집중/actionable=True로 잘못 분류된다 — _ROLLING_OPEN_KEYWORDS에
-# 섞여 있던 버그를 분리해 고침.
+# "모집 완료"류는 반대로 이미 끝났다는 뜻이라 _ROLLING_OPEN_KEYWORDS와 분리했다
+# (같이 두면 마감된 공고가 모집중으로 잘못 분류되는 버그가 있었음).
 _CLOSED_KEYWORDS = (
     "모집 완료",
     "모집완료",
@@ -325,35 +291,33 @@ def _is_closed_by_keyword(value: str | None) -> bool:
 def _within_collection_window(start_date: date | None) -> bool:
     """올해·작년 공고만 수집 대상으로 삼는다 (그 이전 데이터는 저장하지 않음).
 
-    신청시작일을 못 구한 공고까지 무조건 버리면 "오래된 공고"와 "API 응답에
-    날짜가 아예 없는 경우"를 구분할 수 없어, 시작일을 모르면 일단 수집
-    대상으로 둔다.
+    시작일을 못 구한 공고는 "오래된 것"과 구분할 수 없어 일단 수집 대상으로 둔다.
     """
     if start_date is None:
         return True
     return start_date.year >= date.today().year - 1
 
 
-# docs/notice-category-mapping.md, category_mapping 시드 데이터(0756e6c105fe) 기준 —
-# 통합 카테고리 "자금"에 매핑되는 원본 카테고리 원문 값. 지금은 자금만 수집하기로
-# 정해서, 나머지 카테고리(기술/수출·글로벌/인력 등)는 아예 저장하지 않는다.
+# 통합 카테고리 "자금"에 매핑되는 원본 카테고리 값(docs/notice-category-mapping.md).
+# 지금은 자금만 수집하기로 해서 나머지 카테고리는 저장하지 않는다.
 _BIZINFO_FUND_LCLAS = "금융"
 _KSTARTUP_FUND_CLSFC = {"정책자금", "융자ㆍ보증", "사업화"}
 
 
 def _is_bizinfo_fund_category(item: dict) -> bool:
+    """기업마당 대분류가 "자금" 카테고리(금융)인지 확인한다."""
     return item.get("pldirSportRealmLclasCodeNm") == _BIZINFO_FUND_LCLAS
 
 
 def _is_kstartup_fund_category(item: dict) -> bool:
+    """K-Startup 분류가 "자금" 카테고리(정책자금/융자보증/사업화)인지 확인한다."""
     return item.get("supt_biz_clsfc") in _KSTARTUP_FUND_CLSFC
 
 
 def _bizinfo_raw_category_key(item: dict) -> str | None:
     """category_mapping.raw_category와 매칭되는 키를 만든다.
 
-    기업마당은 대분류 기준이 원칙이지만, "경영"만 중분류까지 붙여야
-    한다 (docs/notice-category-mapping.md, 0756e6c105fe 시드 데이터 참고).
+    기업마당은 대분류 기준이 원칙이지만 "경영"만 중분류까지 붙여야 한다.
     """
     lclas = item.get("pldirSportRealmLclasCodeNm")
     if not lclas:
@@ -367,6 +331,7 @@ def _bizinfo_raw_category_key(item: dict) -> str | None:
 
 
 def _kstartup_raw_category_key(item: dict) -> str | None:
+    """category_mapping.raw_category와 매칭되는 키(KSTARTUP:분류)를 만든다."""
     clsfc = item.get("supt_biz_clsfc")
     if not clsfc:
         return None
@@ -378,8 +343,7 @@ def _derive_status_from_dates(
 ) -> tuple[str, bool]:
     """기업마당 모집 상태를 신청 시작일과 종료일 기준으로 추정한다.
 
-    실제 상태 플래그가 존재하는지는 COL-002(정규화) 단계에서 원본 raw
-    데이터를 보며 다시 검토가 필요할 수 있다. 지금은 수집·적재만 다룬다.
+    날짜로 판단 안 되면 raw_period의 마감/상시모집 키워드로 보조 판정한다.
     """
     today = date.today()
     if start_date is not None and start_date > today:
@@ -404,18 +368,8 @@ async def _find_cross_source_duplicate_notice_ids(
 ) -> list[int]:
     """기업마당·K-Startup 교차 중복 판정을 2단계로 한다.
 
-    1) 제목으로만 후보를 찾는다.
-    2) 후보가 1건뿐이면 애매할 게 없으므로 그대로 확정한다(신청기간
-       유무와 무관). 후보가 2건 이상(정기 반복 공고처럼 같은 제목의
-       회차가 여러 건 존재)이면, 신청기간까지 정확히 일치하는 것만
-       추려서 지금 이 회차와 무관한 다른 회차를 잘못 건드리지 않는다
-       — 이쪽 신청기간을 모르면(하나라도 None) 안전하게 아무것도
-       매칭하지 않는다(잘못 지우거나 잘못 건너뛰는 것보다 안전).
-
-    처음엔 신청기간을 무조건 요구했었는데, 실제 DB로 확인해보니 기업마당
-    공고의 89%가 "상시모집" 등으로 신청기간이 아예 없어서 그 공고들은
-    중복 판정 자체가 통째로 안 되는 문제가 있었다 — 제목 후보가 1건뿐인
-    압도적 다수의 경우까지 날짜를 요구할 필요는 없어서 이렇게 나눴다.
+    제목 후보 1건이면 그대로 확정, 2건 이상이면 신청기간까지 일치해야 매칭한다
+    (기업마당 89%가 상시모집이라 날짜를 무조건 요구하면 대부분 매칭이 안 됐음).
     """
     candidates = await find_notice_ids_by_source_and_title(session, source_name, title)
     if len(candidates) <= 1:
@@ -469,10 +423,7 @@ async def _process_bizinfo_item(
                 external_id=external_id,
                 title=title,
                 organization_id=organization_id,
-                # 기업마당 응답에는 재공고/연장공고를 나타내는 필드가
-                # 확인되지 않아 notice_group_key는 비워둔다
-                # (K-Startup의 intg_pbanc_yn과 달리 별도 이슈로 조사 필요).
-                notice_group_key=None,
+                notice_group_key=None,  # 기업마당은 재공고/연장공고 필드가 없어 비워둠
                 category_id=category_mapping.get(_bizinfo_raw_category_key(item)),
                 application_start_date=start_date,
                 application_end_date=end_date,
@@ -489,9 +440,7 @@ async def _process_bizinfo_item(
                 field=json.dumps(item, ensure_ascii=False),
                 notice_id=notice_id,
             )
-            # delete는 값이 없어도 항상 실행돼야 하므로(예전 값 정리),
-            # 값이 falsy여도 무조건 호출한다. 기업마당은 전용 지역 필드가
-            # 없어 hashtags에서 지역명과 일치하는 태그만 추려 사용한다.
+            # delete는 값이 없어도 예전 값 정리를 위해 항상 실행돼야 한다.
             await replace_notice_target_type(
                 session, notice_id, _split_multi_value(item.get("trgetNm"))
             )
@@ -507,22 +456,14 @@ async def _process_bizinfo_item(
                     file_url,
                     _file_type_from_name(file_name),
                 )
-            # 기업마당은 목록 API 응답에 첨부파일 전체 목록이 항상 실려오므로
-            # (수집 시점이든 recollect든 동일), 이번에 없는 URL은 원본에서
-            # 사라진(교체·삭제된) 첨부파일로 보고 정리한다 — save_attachment는
-            # upsert만 해서 URL이 바뀐 경우 예전 URL이 그대로 남는 문제가
-            # 있었다(recollect_bizinfo_notice의 "첨부파일 교체 반영" 목적과
-            # 어긋남).
+            # 기업마당 응답엔 항상 첨부파일 전체 목록이 실려오므로, 이번에
+            # 없는 URL은 원본에서 사라진(교체·삭제) 첨부파일로 보고 정리한다.
             await prune_stale_attachments(
                 session, notice_id, {url for _, url in bizinfo_attachments}
             )
 
-            # 기업마당·K-Startup에 같은 사업의 같은 회차가 각자 다른
-            # external_id로 중복 등록되는 경우, 기업마당을 우선한다.
-            # K-Startup을 먼저 수집해서 이미 저장돼 있었더라도 여기서
-            # 정리한다. 판정 기준은 _find_cross_source_duplicate_notice_ids
-            # 참고 — 제목 후보가 1건뿐이면 신청기간 없이도 매칭하고,
-            # 여러 건(정기 반복 공고)이면 신청기간까지 일치해야 매칭한다.
+            # 기업마당·K-Startup 중복 등록 시 기업마당을 우선해 K-Startup
+            # 쪽을 정리한다 (판정 기준은 _find_cross_source_duplicate_notice_ids).
             if title:
                 duplicate_ids = await _find_cross_source_duplicate_notice_ids(
                     session, KSTARTUP_SOURCE_NAME, title, start_date, end_date
@@ -533,9 +474,7 @@ async def _process_bizinfo_item(
                     )
                     await delete_notice(session, duplicate_id)
     except Exception:
-        # 이 항목만 SAVEPOINT 단위로 롤백되고, 나머지 항목 처리와
-        # 페이지 전체 커밋은 영향받지 않는다. 컬럼 길이 초과 같은
-        # 개별 데이터 문제로 페이지 전체가 날아가는 것을 막기 위함.
+        # 이 항목만 SAVEPOINT 단위로 롤백되어 나머지 항목·페이지 커밋엔 영향 없다.
         logger.exception("기업마당 공고 저장 실패 (external_id=%s)", external_id)
         collection_result.failed_count += 1
         collection_result.failed_ids.append(external_id)
@@ -573,13 +512,7 @@ async def collect_bizinfo_notices(
 async def recollect_bizinfo_notice(session: AsyncSession, notice_id: int) -> None:
     """이미 저장된 기업마당 공고 하나만 원본 API에서 다시 가져와 갱신한다.
 
-    변경공고(마감일 연장, 첨부파일 교체 등)를 전체 재수집 없이 바로
-    반영하고 싶을 때 쓴다. K-Startup은 목록 API가 pbanc_sn 필터를 받아도
-    조용히 무시하고 첫 페이지를 그대로 돌려주는 것을 실제 호출로 확인해
-    (필터링되지 않음 — 즉 원하는 건 하나만 골라올 방법이 없음), 페이지를
-    끝까지 훑지 않는 한 단건 조회가 불가능하다. 그래서 기업마당만
-    지원한다 (pblancId 필터가 실제로 동작하는 것을 확인함,
-    fetch_bizinfo_notice_by_id 참고).
+    K-Startup은 pbanc_sn 필터가 무시돼 단건 조회가 불가능해 기업마당만 지원한다.
     """
     row = await get_notice_detail(session, notice_id)
     if row is None:
@@ -606,22 +539,16 @@ async def recollect_bizinfo_notice(session: AsyncSession, notice_id: int) -> Non
     )
     await session.commit()
 
-    # _process_bizinfo_item은 펀드 카테고리가 아니거나 수집 기간을 벗어나면
-    # (이미 한 번 저장됐던 공고라 실제로는 거의 없는 경우) 아무것도 하지
-    # 않고 조용히 리턴한다 — 이런 "해당 없음"은 실패가 아니므로
-    # failed_count만 오류로 취급한다.
+    # _process_bizinfo_item이 "해당 없음"으로 조용히 리턴하는 경우는 실패가
+    # 아니므로 failed_count만 오류로 취급한다.
     if collection_result.failed_count > 0:
         raise NoticeRecollectionError(
             "재수집 처리 중 오류가 발생해 반영하지 못했습니다."
         )
 
 
-# 기업마당 응답은 creatPnttm(등록시각) 기준 최신순으로 오는 것을 실제
-# 호출로 확인함(페이지 넘어가도 끊김 없이 내림차순). 조기종료 시 직전
-# 수집 시각(notice_source.updated_at) 딱 그 지점에서 멈추면, 시스템
-# 내부적으로 ID/시각이 먼저 잡히고 공개는 나중에 되는 경우(관공서
-# 시스템에서 흔함) 그 사이에 낀 공고를 영원히 놓칠 수 있다. 여유분을
-# 두고 그보다 더 과거까지 다시 확인한다.
+# 기업마당 응답은 creatPnttm(등록시각) 기준 내림차순이 실측 확인됨. ID가
+# 먼저 잡히고 공개가 나중인 경우를 놓치지 않도록 여유분을 두고 더 과거까지 본다.
 _BIZINFO_EARLY_STOP_BUFFER = timedelta(hours=24)
 
 
@@ -636,17 +563,8 @@ def _bizinfo_item_before_cutoff(item: dict, stop_before: datetime | None) -> boo
 async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult:
     """기업마당 공고를 첫 페이지부터 끝까지 전부 수집한다.
 
-    빈 페이지가 나오면 끝으로 간주한다 (page=9999처럼 끝을 넘어가도
-    에러 없이 빈 리스트를 주는 것을 실제 호출로 확인함). 페이지마다
-    커밋해서 트랜잭션이 지나치게 커지는 것을 막는다.
-
-    조기종료: 직전 수집에서 실제로 저장에 성공한 공고들의 등록시각
-    (creatPnttm) 최댓값 이전에 등록된 공고를 만나면 그 이후는 이미 다
-    확인한 것으로 보고 멈춘다 (아직 저장된 공고가 없으면 조기종료 없이
-    전부 훑는다). get_max_notice_external_id(K-Startup)와 같은 이유로
-    "수집 시작 시각"이 아니라 "실제로 저장된 데이터" 기준으로 커서를
-    계산한다 — 페이지 중간에 수집이 실패해도 그만큼만 커서가 전진해서,
-    실패 지점 이후를 영원히 건너뛰는 일이 없다.
+    조기종료: 직전 수집에서 실제 저장된 공고의 등록시각 최댓값 이전을 만나면 멈춘다
+    (수집 실패분은 커서에 반영 안 돼 다음 회차에서 다시 시도됨).
     """
     source = await get_or_create_source(
         session,
@@ -655,11 +573,8 @@ async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult
         collect_type="API",
     )
     try:
-        # bizinfo_raw.field를 SQL에서 jsonb로 캐스팅하는 쿼리라, 혹시라도
-        # 유효하지 않은 JSON이 섞여 있으면 이 문장 자체가 실패한다.
-        # Postgres는 실패한 문장이 있으면 롤백 전까지 트랜잭션 전체를
-        # 막아버리므로, SAVEPOINT로 감싸서 실패해도 이 지점까지만
-        # 롤백되고 이후 페이지 처리·커밋에는 영향이 없게 한다.
+        # jsonb 캐스팅 쿼리라 유효하지 않은 JSON이 있으면 실패할 수 있어,
+        # SAVEPOINT로 감싸 실패해도 이후 페이지 처리·커밋에 영향 없게 한다.
         async with session.begin_nested():
             since = await get_max_bizinfo_registration_time(session, source.id)
     except Exception:
@@ -704,15 +619,13 @@ async def collect_all_bizinfo_notices(session: AsyncSession) -> CollectionResult
     return collection_result
 
 
-# 과학기술정보통신부 사업공고 API(msit_client.py)는 신청기간 필드가 아예
-# 없는 게시판형 API라, 이미 마감·종료된 항목까지 실측으로 확인함(2026-07-13,
-# 이슈 #104) — "~선정결과 공고"처럼 이미 끝난 과제의 결과 발표가 신규
-# 모집 공고와 같은 목록에 섞여 온다. 날짜로 거를 방법이 없으니 제목
-# 키워드로 결과 발표성 게시물을 제외한다.
+# MSIT API는 신청기간 필드가 없는 게시판형이라 이미 끝난 "~선정결과" 게시물이
+# 섞여 온다(실측, 이슈 #104). 날짜로 못 거르니 제목 키워드로 제외한다.
 _MSIT_RESULT_KEYWORDS = ("선정결과", "결과")
 
 
 def _is_msit_result_announcement(subject: str | None) -> bool:
+    """제목이 이미 끝난 과제의 결과 발표성 게시물인지 확인한다."""
     if not subject:
         return False
     return any(keyword in subject for keyword in _MSIT_RESULT_KEYWORDS)
@@ -737,9 +650,7 @@ _MSIT_VIEW_URL_ID_PATTERN = re.compile(r"nttSeqNo=(\d+)")
 def _extract_msit_external_id(view_url: str | None) -> str | None:
     """상세페이지 URL(viewUrl)의 nttSeqNo를 고유 id로 쓴다.
 
-    이 API 응답에는 별도 게시물 id 필드가 없다 — viewUrl 안의
-    nttSeqNo(게시물 순번)가 실제로 게시물마다 고유한 것을 실측으로
-    확인함(2026-07-13).
+    이 API 응답에는 별도 게시물 id 필드가 없어, 게시물마다 고유한 nttSeqNo로 대신한다.
     """
     if not view_url:
         return None
@@ -776,10 +687,8 @@ async def _process_msit_item(
         async with session.begin_nested():
             organization = await get_or_create_organization(session, MSIT_SOURCE_NAME)
 
-            # 신청기간 필드가 없어(위 주석 참고) 상태를 날짜로 판단할 수
-            # 없다 — "~선정결과" 등 이미 끝난 게시물은 위에서 걸러졌으므로,
-            # 남은 항목은 열려있는 것으로 간주한다(한계: 결과 발표
-            # 문구 없이 조용히 마감된 경우는 걸러내지 못함).
+            # 신청기간 필드가 없어 날짜로 상태 판단이 안 되므로, 결과 발표성
+            # 게시물이 걸러진 나머지는 열려있는 것으로 간주한다.
             notice_id = await upsert_notice(
                 session,
                 source_id=source_id,
@@ -827,12 +736,8 @@ async def _process_msit_item(
 async def collect_all_msit_notices(session: AsyncSession) -> CollectionResult:
     """과학기술정보통신부 사업공고를 첫 페이지부터 올해~작년치까지 수집한다.
 
-    이 API는 기업마당(creatPnttm)처럼 등록시각 기준 조기종료 커서를 쓰기엔
-    실측으로 순서를 확정하지 못했다 — 대신 매 페이지 항목의 게시일이
-    수집 기간(올해~작년, _within_collection_window와 동일 기준) 밖으로
-    나가면 그 페이지에서 멈춘다. 응답이 최신순으로 온다는 전제이며(실측
-    샘플에서 확인함), 전제가 깨지면 오래된 항목을 놓칠 수 있다 — 발견되면
-    페이지 전체를 끝까지 훑는 방식으로 재검토 필요.
+    등록시각 기준 커서 대신, 응답이 최신순이라는 전제 하에 게시일이 수집
+    기간 밖인 항목을 만나면 그 페이지에서 멈춘다.
     """
     source = await get_or_create_source(
         session,
@@ -887,21 +792,8 @@ async def _save_kstartup_attachments(
 ) -> None:
     """K-Startup 상세페이지를 크롤링해 첨부파일 메타데이터만 저장한다.
 
-    현재 수집 파이프라인(_process_kstartup_item)에서는 호출하지 않는다.
-    기업마당과 달리 K-Startup은 목록 API 응답에 첨부파일 정보가 없어
-    이 함수 자체가 상세페이지를 여는 크롤링이라(app/crawler/
-    kstartup_attachment_client.py 참고), 전체 공고에 대해 매번 돌리면
-    "매칭 후보로 좁혀진 것만 무거운 작업 한다"는 원칙에 어긋난다.
-    수집 시점이 아니라 매칭 후보로 좁혀진 공고에 대해서만, 2차 필터링
-    단계(docs/matching-pipeline.md 4단계)에서 호출하는 용도로 남겨둔다.
-    텍스트 추출(OCR)도 이 함수가 아니라 그 단계에서 별도로 수행한다.
-
-    공고 저장 자체와는 독립적인 부가 작업이라, 실패해도 공고 저장 결과에는
-    영향을 주지 않도록 별도 SAVEPOINT로 격리한다. 상세페이지 조회(외부 HTTP,
-    재시도 포함 최대 KSTARTUP_REQUEST_TIMEOUT_SECONDS × KSTARTUP_MAX_RETRIES까지
-    걸릴 수 있음)는 SAVEPOINT 밖에서 먼저 끝내고, DB에 쓰는 부분만 짧게
-    SAVEPOINT로 감싼다 — 안에서 같이 하면 느린 외부 요청 동안 DB 커넥션과
-    트랜잭션을 계속 붙잡고 있게 된다.
+    현재 수집 파이프라인에서는 호출하지 않는다 — 무거운 상세페이지 크롤링이라
+    매칭 후보로 좁혀진 공고에 대해서만 2차 필터링 단계에서 쓰는 용도로 남겨둔다.
     """
     try:
         attachments = await fetch_kstartup_attachments(int(pbanc_sn))
@@ -945,12 +837,8 @@ async def _process_kstartup_item(
         return
     end_date = _parse_kstartup_date(item.get("pbanc_rcpt_end_dt"))
 
-    # 기업마당·K-Startup에 같은 사업의 같은 회차가 각자 다른
-    # external_id로 중복 등록되는 경우, 기업마당을 우선한다. 기업마당이
-    # 이미 수집돼 있으면 이 K-Startup 항목은 저장하지 않는다. 판정 기준은
-    # _find_cross_source_duplicate_notice_ids 참고 — 제목 후보가 1건뿐이면
-    # 신청기간 없이도 매칭하고, 여러 건(정기 반복 공고)이면 신청기간까지
-    # 일치해야 매칭한다.
+    # 기업마당·K-Startup 중복 등록 시 기업마당을 우선해 이 K-Startup 항목은
+    # 저장하지 않는다 (판정 기준은 _find_cross_source_duplicate_notice_ids).
     title = item.get("biz_pbanc_nm")
     if title:
         duplicate_ids = await _find_cross_source_duplicate_notice_ids(
@@ -968,8 +856,10 @@ async def _process_kstartup_item(
             elif rcrt_prgs_yn == "N":
                 status, is_actionable = "마감", False
             else:
-                # 값이 없거나 Y/N이 아닌 경우 마감으로 단정하지 않는다.
-                status, is_actionable = "확인필요", False
+                status, is_actionable = (
+                    "확인필요",
+                    False,
+                )  # Y/N 아니면 마감으로 단정 안 함
             apply_url = item.get("biz_aply_url") or item.get("aply_mthd_onli_rcpt_istc")
 
             organization_id = None
@@ -980,10 +870,8 @@ async def _process_kstartup_item(
                 )
                 organization_id = organization.id
 
-            # intg_pbanc_yn(통합공고여부)이 "Y"면 intg_pbanc_biz_nm(통합공고
-            # 사업명)이 재공고/연장공고를 묶는 상위 이름 역할을 한다. 이
-            # 값을 notice_group_key로 써서 같은 통합공고 아래 공고들을
-            # 묶는다.
+            # intg_pbanc_yn(통합공고여부)="Y"면 intg_pbanc_biz_nm이 재공고/연장공고를
+            # 묶는 상위 이름 역할을 하므로 notice_group_key로 쓴다.
             notice_group_key = None
             if item.get("intg_pbanc_yn") == "Y":
                 notice_group_key = item.get("intg_pbanc_biz_nm")
@@ -1019,8 +907,7 @@ async def _process_kstartup_item(
                 notice_id=notice_id,
             )
 
-            # delete는 값이 없어도 항상 실행돼야 하므로(예전 값 정리),
-            # 값이 falsy여도 무조건 호출한다.
+            # delete는 값이 없어도 예전 값 정리를 위해 항상 실행돼야 한다.
             await replace_notice_target_type(
                 session, notice_id, _split_multi_value(item.get("aply_trgt"))
             )
@@ -1062,15 +949,8 @@ async def collect_kstartup_notices(
     return collection_result
 
 
-# K-Startup 목록 API에는 등록시각 필드가 없다(신청시작일 pbanc_rcpt_bgng_dt는
-# 등록순과 안 맞는 것을 실측 확인함 — 예: pbanc_sn 178487이 7/8, 바로 다음
-# 178486이 7/9). 순서가 보장되는 값은 pbanc_sn(정수 일련번호)뿐이라 이걸
-# 커서로 쓰되, 새 컬럼 없이 "이미 저장된 공고 중 가장 큰 external_id"로
-# 대신한다 — 자금 카테고리만 저장하므로 이 값은 "마지막으로 확인한 지점"
-# 보다 항상 같거나 작다(놓치는 방향이 아니라 더 훑는 방향으로만 어긋남).
-# 여기에 추가로 여유분을 둔다 — pbanc_sn이 먼저 채번되고 공개는 나중에
-# 되는 경우(관공서 시스템에서 흔함) 이미 지나친 것처럼 보이는 번호가
-# 나중에 나타날 수 있어서다.
+# K-Startup은 등록시각 필드가 없어 순서가 보장되는 pbanc_sn(일련번호)을
+# 커서로 쓴다. 채번과 공개 시점이 어긋날 수 있어 여유분을 둔다(실측 확인).
 _KSTARTUP_EARLY_STOP_BUFFER = 200
 
 
@@ -1085,11 +965,8 @@ def _kstartup_item_before_cutoff(item: dict, stop_below: int | None) -> bool:
 async def collect_all_kstartup_notices(session: AsyncSession) -> CollectionResult:
     """K-Startup 공고를 첫 페이지부터 끝까지 전부 수집한다.
 
-    K-Startup은 전체가 29,000건 이상이라 페이지 수가 많다(perPage=100
-    기준 약 290페이지). 빈 페이지가 나오면 끝으로 간주하고, 페이지마다
-    커밋한다 (collect_all_bizinfo_notices와 동일한 이유).
-
-    조기종료: _KSTARTUP_EARLY_STOP_BUFFER 설명 참고.
+    전체 29,000건 이상이라 페이지가 많다(perPage=100 기준 약 290페이지).
+    조기종료 기준은 _KSTARTUP_EARLY_STOP_BUFFER 참고.
     """
     source = await get_or_create_source(
         session,
@@ -1098,10 +975,8 @@ async def collect_all_kstartup_notices(session: AsyncSession) -> CollectionResul
         collect_type="API",
     )
     try:
-        # get_max_bizinfo_registration_time과 같은 이유로 SAVEPOINT로
-        # 감싼다 — external_id를 SQL에서 정수로 캐스팅하는 쿼리라, 혹시
-        # 숫자가 아닌 값이 섞여 있으면 이 문장이 실패하면서 Postgres
-        # 트랜잭션 전체를 막을 수 있다.
+        # external_id를 정수로 캐스팅하는 쿼리라 숫자가 아닌 값이 섞이면
+        # 실패할 수 있어, SAVEPOINT로 감싸 트랜잭션 전체가 막히지 않게 한다.
         async with session.begin_nested():
             max_saved_id = await get_max_notice_external_id(session, source.id)
     except Exception:
@@ -1151,11 +1026,7 @@ async def collect_all_kstartup_notices(session: AsyncSession) -> CollectionResul
 async def backfill_notice_categories(session: AsyncSession) -> dict[str, int]:
     """category_id가 비어있는 기존 공고를 채운다 (일회성 보정).
 
-    _process_bizinfo_item/_process_kstartup_item에 category_id 매핑을
-    붙이기 전에 이미 저장돼 있던 공고들은 category_id가 NULL로 남는다.
-    외부 API를 다시 호출하지 않고, 그때 같이 저장해 둔 원본 응답
-    (bizinfo_raw/kstartup_raw.field)만으로 category_mapping과 대조해
-    채운다.
+    외부 API를 다시 호출하지 않고, 저장해둔 원본 응답만으로 category_mapping과 대조한다.
     """
     category_mapping = await get_category_mapping(session)
     checked = 0
@@ -1168,11 +1039,8 @@ async def backfill_notice_categories(session: AsyncSession) -> dict[str, int]:
         rows = await get_notices_missing_category(session, raw_model_cls)
         for notice_id, raw_field in rows:
             checked += 1
-            # raw_field는 항상 save_raw()에서 json.dumps()로 채워지지만,
-            # 컬럼 자체는 NULL을 허용해서(레거시 데이터·수동 조작 가능성)
-            # 여기서 깨지면 json.loads가 예외를 던진다. 한 건 때문에
-            # 나머지 수천 건 백필이 통째로 실패하면 안 되므로(수집
-            # 파이프라인의 SAVEPOINT 격리와 같은 이유), 이 건만 건너뛴다.
+            # raw_field가 NULL이거나 손상됐어도 이 건만 건너뛰고 나머지
+            # 수천 건 백필은 계속되게 한다.
             try:
                 item = json.loads(raw_field)
             except (TypeError, json.JSONDecodeError):
@@ -1193,20 +1061,10 @@ async def backfill_notice_categories(session: AsyncSession) -> dict[str, int]:
 
 
 async def refresh_notice_statuses(session: AsyncSession) -> dict[str, int]:
-    """마감일이 지났는데 status가 아직 갱신 안 된 공고를 오늘 날짜 기준으로
-    다시 계산한다 (수집 시점에만 계산해서 저장해두는 값이라, 재수집 없이는
-    시간이 지나도 저절로 안 바뀜).
+    """마감일이 지났는데 status가 아직 갱신 안 된 공고를 오늘 날짜 기준으로 재계산한다.
 
-    외부 API를 다시 호출하지 않고, 이미 저장된 application_start_date/
-    application_end_date만으로 재계산한다 — 날짜 자체는 수집 이후 바뀌지
-    않으므로 이 값만으로 충분하다. 단, "확인필요"였던 공고를 "모집중"으로
-    바꿔줬던 상시모집 판단(reqstBeginEndDe의 "상시"/"예산 소진" 등 키워드,
-    _is_rolling_open)은 원본 문자열을 다시 안 부르면 재현할 수 없어서,
-    재계산 결과가 "확인필요"인데 기존 상태가 "모집중"이면 건드리지 않는다
-    (상시모집 공고가 여기서 잘못 마감 취급되는 걸 막기 위함).
-
-    지금은 직접 호출하는 용도이고, 나중에 만들 스케줄러가 주기적으로
-    호출해서 마감 처리를 최신 상태로 유지하는 데 쓴다.
+    상시모집 판단은 원본 문자열 없이 재현 불가하므로, 재계산이 "확인필요"인데
+    기존이 "모집중"이면 건드리지 않는다(상시모집 공고 오탐 마감 방지).
     """
     checked = 0
     updated = 0
@@ -1231,10 +1089,7 @@ async def backfill_bizinfo_nationwide_regions(session: AsyncSession) -> dict[str
     """기업마당 공고 중 hashtags에 광역자치단체 17개가 모두 태그돼 있는데
     아직 region_code=ALL("전국")이 없는 공고에 이를 추가한다.
 
-    _parse_bizinfo_regions에 전국 판정 로직을 추가하기 전에 이미 수집된
-    공고는 조기종료 커서 때문에 일반 재수집으로는 다시 훑이지 않을 수
-    있어(이미 저장된 지점보다 과거라 건너뜀), 저장된 원본 hashtags를
-    다시 읽어 일회성으로 보정한다. 외부 API를 다시 호출하지 않는다.
+    조기종료 커서 때문에 일반 재수집으로는 훑이지 않는 기존 공고를 위한 일회성 보정.
     """
     checked = 0
     updated = 0
@@ -1268,14 +1123,9 @@ async def backfill_bizinfo_nationwide_regions(session: AsyncSession) -> dict[str
 
 
 async def backfill_notice_region_codes(session: AsyncSession) -> dict[str, int]:
-    """저장된 원본 데이터를 다시 읽어 모든 공고(기업마당+K-Startup)의
-    지역 코드를 최신 REGION_CODE_BY_NAME 기준으로 재계산해 보정한다.
+    """저장된 원본 데이터를 다시 읽어 모든 공고의 지역 코드를 최신 기준으로 재계산한다.
 
-    2026-07-10에 강원(51→42)/전북(52→45) 코드가 처음부터 잘못
-    들어가 있던 것과, 전남·광주 통합(2026-07-01)으로 "전남광주통합
-    특별시"가 새 지역명으로 추가된 것을 뒤늦게 발견해 만든 백필이다.
-    외부 API를 다시 호출하지 않고, 이미 저장된 원본(hashtags/
-    supt_regin)만으로 재계산한다.
+    강원/전북 오류 코드 정정과 전남·광주 통합 대응을 위한 일회성 백필(2026-07-10).
     """
     checked = 0
     updated = 0

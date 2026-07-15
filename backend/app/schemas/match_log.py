@@ -20,6 +20,12 @@ class MatchLogResponse(BaseModel):
     completed_at: datetime | None
 
 
+class MatchLogDeleteResponse(BaseModel):
+    match_log_id: int
+    deleted: bool = True
+    message: str = "매칭 기록이 삭제되었습니다."
+
+
 class MatchResultNoticeInfo(BaseModel):
     """결과 카드에 표시할 공고 요약."""
 

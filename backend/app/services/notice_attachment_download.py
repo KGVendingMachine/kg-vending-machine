@@ -1,10 +1,6 @@
-"""
-services/notice_attachment_download.py
+"""공고 첨부파일 하나를 다운로드해 텍스트를 추출하는 로직.
 
-공고 첨부파일 하나를 다운로드해 텍스트를 추출하는 로직. app/api/notice_ocr.py(단건 OCR
-트리거)와 app/services/notice_normalization_service.py(정규화, 후보 전부 OCR) 양쪽에서
-같은 다운로드·추출 로직을 써야 해서 여기서 공유한다 — 원래 notice_ocr.py에만 있던
-로직을 그대로 옮긴 것이라 동작 자체는 바뀌지 않았다.
+notice_ocr.py(단건 OCR)와 notice_normalization_service.py(정규화) 양쪽이 공유해서 쓴다.
 """
 
 import tempfile
@@ -28,14 +24,7 @@ async def download_and_extract_attachment(
 ) -> str:
     """첨부파일을 다운로드해 텍스트를 추출한다.
 
-    다운로드 실패, 텍스트 추출 실패 모두 예외를 그대로 전파한다 — 호출하는 쪽이
-    "이 후보는 실패했다"로 처리할지, 유일한 후보라 그대로 에러로 전파할지 결정한다.
-
-    이슈 #104 도입 당시 실측: 과기정통부(MSIT) 소스를 이 분기에서 빼먹어
-    bizinfo 다운로더로 잘못 라우팅되고 있었다(우연히 동작은 했음 -
-    bizinfo 쪽이 헤더를 안 가려 받아서). 소스별로 실제 서버 요구사항이
-    다를 수 있어(MSIT 목록 API는 User-Agent 없으면 차단됨, 실측 확인)
-    명시적으로 분기해야 한다.
+    다운로드/추출 실패는 예외로 그대로 전파해 호출하는 쪽이 처리를 결정하게 한다.
     """
     if source_name == KSTARTUP_SOURCE_NAME:
         data = await download_kstartup_attachment(attachment.file_url)

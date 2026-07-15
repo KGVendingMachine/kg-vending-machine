@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_plan import BusinessPlan
 from app.models.category import KgCategory
-from app.models.match import MatchLog, MatchResult
+from app.models.match import MatchLog, MatchReport, MatchResult
 from app.models.notice import Notice
 from app.models.notice_bookmark import NoticeBookmark
 from app.models.organization import Organization
@@ -80,6 +80,29 @@ async def get_owned_by_user(
     if row is None:
         return None
     return (row[0], row[1])
+
+
+async def delete_owned_by_user(
+    session: AsyncSession, match_log_id: int, user_id: int
+) -> bool:
+    """유저 소유의 매칭 로그 한 건을 자식 레코드와 함께 삭제한다.
+
+    match_result/match_report는 match_log에 대해 ON DELETE 규칙이 없어(기본
+    RESTRICT) 자식부터 지워야 FK 제약을 피할 수 있다
+    (user_repository.delete_owned_data의 회원탈퇴 삭제 순서와 동일 규칙).
+    없거나 남의 로그면 False — 커밋은 호출자가 한다.
+    """
+    row = await get_owned_by_user(session, match_log_id, user_id)
+    if row is None:
+        return False
+    await session.execute(
+        delete(MatchResult).where(MatchResult.recommendation_run_id == match_log_id)
+    )
+    await session.execute(
+        delete(MatchReport).where(MatchReport.match_run_id == match_log_id)
+    )
+    await session.execute(delete(MatchLog).where(MatchLog.id == match_log_id))
+    return True
 
 
 async def get_result_owned_by_user(

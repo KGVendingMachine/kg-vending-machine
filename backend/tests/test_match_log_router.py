@@ -4,10 +4,10 @@ import pytest
 
 from sqlalchemy import select
 
-from app.api.match_log import create_match_log, list_match_results
+from app.api.match_log import create_match_log, delete_match_log, list_match_results
 from app.models.business_plan import BusinessPlan
 from app.models.company import CompanyProfile
-from app.models.match import MatchLog
+from app.models.match import MatchLog, MatchReport, MatchResult
 from app.models.notice import Notice
 from app.models.notice_source import NoticeSource
 from app.models.user import User
@@ -215,6 +215,72 @@ async def test_create_match_log_fails_when_no_normalized_notices(
     row = await db_session.execute(select(MatchLog).where(MatchLog.user_id == user.id))
     log = row.scalar_one()
     assert log.run_status == JobStatus.FAILED.value
+
+
+async def test_delete_match_log_removes_log_and_children(db_session):
+    user = await _make_user(db_session, "match-delete-user")
+    profile = CompanyProfile(user_id=user.id)
+    db_session.add(profile)
+    await db_session.flush()
+    plan = await _make_plan(db_session, profile)
+    source = await _make_notice_source(db_session)
+    await _make_notice(
+        db_session,
+        source,
+        title="AI smart factory support",
+        normalized_json=_notice_json(
+            "AI smart factory support", ["AI", "manufacturing", "vision"]
+        ),
+    )
+
+    created = await create_match_log(
+        payload=MatchLogCreateRequest(business_plan_id=plan.id, max_results=50),
+        current_user=user,
+        session=db_session,
+    )
+    db_session.add(MatchReport(match_run_id=created.id, content="report"))
+    await db_session.flush()
+
+    response = await delete_match_log(
+        match_log_id=created.id, current_user=user, session=db_session
+    )
+
+    assert response.match_log_id == created.id
+    assert response.deleted is True
+    assert await db_session.get(MatchLog, created.id) is None
+    remaining_results = await db_session.execute(
+        select(MatchResult).where(MatchResult.recommendation_run_id == created.id)
+    )
+    assert remaining_results.scalars().all() == []
+    remaining_reports = await db_session.execute(
+        select(MatchReport).where(MatchReport.match_run_id == created.id)
+    )
+    assert remaining_reports.scalars().all() == []
+
+
+async def test_delete_match_log_rejects_other_users_log(db_session):
+    owner = await _make_user(db_session, "match-owner")
+    other_user = await _make_user(db_session, "match-other")
+    profile = CompanyProfile(user_id=owner.id)
+    db_session.add(profile)
+    await db_session.flush()
+    plan = await _make_plan(db_session, profile)
+
+    log = await match_log_repository.create(
+        db_session,
+        user_id=owner.id,
+        company_profile_id=profile.id,
+        business_plan_id=plan.id,
+        run_status=JobStatus.COMPLETED.value,
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        await delete_match_log(
+            match_log_id=log.id, current_user=other_user, session=db_session
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 404
+    assert await db_session.get(MatchLog, log.id) is not None
 
 
 async def test_create_match_log_rejects_unanalyzed_plan(db_session):
