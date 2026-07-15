@@ -12,14 +12,7 @@ _BASE_URL = "https://www.k-startup.go.kr"
 async def fetch_kstartup_attachments(pbanc_sn: int) -> list[tuple[str, str]]:
     """K-Startup 공고 상세페이지에서 첨부파일 (파일명, 다운로드 URL) 목록을 가져온다.
 
-    K-Startup 목록 API 응답에는 첨부파일 정보가 없다 (전체 29,353건 실제
-    확인함). 상세페이지 HTML을 열어보면 자바스크립트 렌더링 없이도 서버가
-    이미 첨부파일 링크(/afile/fileDownload/{코드})를 내려주는 것을 실제
-    호출로 확인해, 헤드리스 브라우저 없이 httpx + BeautifulSoup만으로
-    처리한다.
-
-    전체 공고를 미리 다 훑지 않고, 매칭 후보로 좁혀진 공고에 대해서만
-    필요할 때 단건으로 호출하는 용도다 (docs/matching-pipeline.md 4단계).
+    목록 API 응답에는 첨부파일 정보가 없어(실측 확인) 상세페이지 HTML을 파싱한다.
     """
     settings = get_settings()
     params = {"schM": "view", "pbancSn": pbanc_sn}
@@ -44,6 +37,7 @@ async def fetch_kstartup_attachments(pbanc_sn: int) -> list[tuple[str, str]]:
 
 
 def _parse_attachments(html: str) -> list[tuple[str, str]]:
+    """상세페이지 HTML에서 a.file_bg 링크들을 (파일명, 절대 URL)로 파싱한다."""
     soup = BeautifulSoup(html, "html.parser")
     attachments = []
     for file_link in soup.select("a.file_bg"):
@@ -57,18 +51,18 @@ def _parse_attachments(html: str) -> list[tuple[str, str]]:
     return attachments
 
 
-# K-Startup 서버가 예상외로 큰 파일을 내려주는 경우(오설정·오류 응답 등)에
-# 대비한 안전장치. response.content로 그냥 받으면 크기 제한 없이 응답
-# 전체를 메모리에 올리는데, 배치 OCR 트리거로 여러 첨부파일을 동시에
-# 다운로드할 때 이게 겹치면 서버 메모리를 위협할 수 있다(HWP/HWPX/PDF
-# 압축 해제 폭탄과 같은 종류의 문제). 실제 공고 첨부파일은 이 크기를
-# 넘는 경우가 없다고 보고 넉넉하게 잡은 값.
+# 서버가 예상외로 큰 파일을 내려줄 경우에 대비한 안전장치(응답 전체를
+# 메모리에 올리는 압축 해제 폭탄류 문제 방지). 실제 첨부파일은 이 크기를 넘지 않음.
 _MAX_ATTACHMENT_SIZE_BYTES = 100 * 1024 * 1024
 
 
 async def _read_response_with_size_limit(
     response: httpx.Response, source: str
 ) -> bytes:
+    """응답 바디를 스트리밍으로 읽되 크기 제한을 넘으면 중단한다.
+
+    response.content를 바로 쓰지 않는 이유: 크기 제한 없이 전체를 메모리에 올리기 때문.
+    """
     chunks = []
     size = 0
     async for chunk in response.aiter_bytes():
@@ -85,8 +79,7 @@ async def _read_response_with_size_limit(
 async def download_kstartup_attachment(file_url: str) -> bytes:
     """fetch_kstartup_attachments가 반환한 다운로드 URL로 실제 파일을 받는다.
 
-    별도 로그인/세션 없이 GET 한 번으로 파일이 내려오는 것을 실제
-    호출로 확인함 (%PDF 매직바이트 검증).
+    별도 로그인/세션 없이 GET 한 번으로 파일이 내려온다 (%PDF 매직바이트로 검증함).
     """
     settings = get_settings()
     last_error: Exception | None = None

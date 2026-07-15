@@ -185,6 +185,9 @@ async def normalize_notice(
             f"notice_id {notice_id}를 찾을 수 없습니다."
         )
     notice, source_name, category_name = row
+    # KgCategory.name은 CategoryName(str, Enum)으로 조회되는데, 그대로 두면
+    # 직렬화 시 .value("자금") 대신 enum의 기본 __str__("CategoryName.FUND")가 나온다.
+    category_name = category_name.value if category_name is not None else None
 
     attachments = await get_notice_attachments(session, notice_id)
     candidates = [a for a in attachments if a.file_type in OCR_TARGET_FILE_TYPES]

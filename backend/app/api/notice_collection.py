@@ -5,6 +5,9 @@ api/notice_collection.py
 POST /internal/notices/collect              -> 수집 작업 시작 (202 Accepted)
 GET  /internal/notices/collect/{job_id}      -> 작업 상태/결과 조회
 
+일회성 백필 API 3개는 운영 DB에서 이미 실행 완료해 제거함 — 서비스 함수와
+단위 테스트는 로직 검증용으로 남겨둔다.
+
 작업 상태는 인메모리 딕셔너리(_JOBS)에 보관한다. 서버 재시작하면 사라지고
 멀티 워커 환경에서는 워커마다 따로 관리됨 - 영속화는 추후 과제
 (app/api/business_plan.py의 정규화 작업과 동일한 패턴/한계).
@@ -32,14 +35,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import async_session_factory, get_db
 from app.repositories.notice_repository import get_collection_stats
 from app.schemas.notice_collection import (
-    BizinfoRegionBackfillResult,
-    CategoryBackfillResult,
     CollectionJobAccepted,
     CollectionJobStatus,
     CollectionJobStatusResponse,
     CollectionStatsResponse,
     NoticeRecollectionResult,
-    RegionCodeBackfillResult,
     SourceCollectionResult,
     StatusRefreshResult,
 )
@@ -48,9 +48,6 @@ from app.services.notice_collection_service import (
     NoticeRecollectionError,
     NoticeRecollectionNotFoundError,
     UnsupportedRecollectionSourceError,
-    backfill_bizinfo_nationwide_regions,
-    backfill_notice_categories,
-    backfill_notice_region_codes,
     collect_all_bizinfo_notices,
     collect_all_kstartup_notices,
     collect_all_msit_notices,
@@ -216,21 +213,6 @@ async def get_collection_status(job_id: str):
 
 
 @router.post(
-    "/backfill-category",
-    response_model=CategoryBackfillResult,
-    summary="기존 공고 category_id 보정",
-    description=(
-        "category_id 자동 매핑이 붙기 전에 저장돼 category_id가 비어있는 "
-        "공고를 찾아, 이미 저장된 원본 응답(raw)만으로 다시 채운다. "
-        "외부 API를 호출하지 않아 빠르게 끝나므로 동기로 처리한다."
-    ),
-)
-async def backfill_category(session: AsyncSession = Depends(get_db)):
-    result = await backfill_notice_categories(session)
-    return CategoryBackfillResult(**result)
-
-
-@router.post(
     "/refresh-status",
     response_model=StatusRefreshResult,
     summary="공고 모집 상태 갱신",
@@ -244,39 +226,6 @@ async def backfill_category(session: AsyncSession = Depends(get_db)):
 async def refresh_status(session: AsyncSession = Depends(get_db)):
     result = await refresh_notice_statuses(session)
     return StatusRefreshResult(**result)
-
-
-@router.post(
-    "/backfill-bizinfo-region",
-    response_model=BizinfoRegionBackfillResult,
-    summary="기업마당 전국 대상 공고 지역 보정",
-    description=(
-        "기업마당은 hashtags에 광역자치단체 17개를 전부 나열하는 방식으로 "
-        "전국 대상을 표현한다. 전국 판정 로직이 추가되기 전에 저장된 공고에 "
-        "region_code=ALL을 보정해 채운다. 이미 저장된 원본 응답(raw)만으로 "
-        "재계산하므로 외부 API를 호출하지 않는다."
-    ),
-)
-async def backfill_bizinfo_region(session: AsyncSession = Depends(get_db)):
-    result = await backfill_bizinfo_nationwide_regions(session)
-    return BizinfoRegionBackfillResult(**result)
-
-
-@router.post(
-    "/backfill-region-codes",
-    response_model=RegionCodeBackfillResult,
-    summary="공고 지역 코드 전체 보정",
-    description=(
-        "강원(51→42)/전북(52→45) 코드가 처음부터 잘못 저장돼 있던 것과, "
-        "2026-07-01 전남·광주 통합으로 새로 생긴 '전남광주통합특별시' "
-        "지역명을 반영해, 기업마당·K-Startup 공고 전체의 지역 코드를 "
-        "저장된 원본(hashtags/supt_regin) 기준으로 재계산해 보정한다. "
-        "외부 API를 다시 호출하지 않는다."
-    ),
-)
-async def backfill_region_codes(session: AsyncSession = Depends(get_db)):
-    result = await backfill_notice_region_codes(session)
-    return RegionCodeBackfillResult(**result)
 
 
 @router.post(

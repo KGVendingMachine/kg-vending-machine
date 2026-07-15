@@ -1,24 +1,6 @@
-"""
-services/msit_document_selector.py
+"""과학기술정보통신부 사업공고 첨부파일 중 실제 "공고문" 1개를 골라낸다.
 
-과학기술정보통신부 사업공고 첨부파일 중 실제 "공고문" 1개를 골라낸다.
-
-향후 2차 필터링(RAG, docs/matching-pipeline.md 4단계)에서 공고 원문을
-벡터로 만들 때, 공고문 하나만 깔끔하게 필요하다 — 지금처럼 후보 전부를
-넣으면 (1) 같은 내용의 hwpx/odt/hwp 중복본이 섞여 같은 텍스트가 여러 번
-임베딩되고, (2) 신청서식/매뉴얼/법령 같은 부가자료가 섞여 벡터가
-흐려진다. 정규화(옵션4, notice_normalization_service.py)처럼 "후보 전부
-시도"하는 방식은 여기선 안 맞는다 — RAG는 벡터 하나로 합쳐야 하는 반면
-정규화는 후보마다 독립된 LLM 결과를 비교해 고르는 것이라 성격이 다르다.
-
-선택 흐름:
-1) 포맷 필터: HWP/HWPX/PDF만 후보로 본다(ODT는 같은 내용의 중복 포맷,
-   ZIP은 텍스트 추출 대상이 아니라 애초에 제외).
-2) 규칙 기반 키워드 필터: "신청서식"/"매뉴얼"/"양식"/"법령"/"안내서"/
-   "동의서" 등 부가자료 이름 패턴을 제외한다.
-3) 그래도 여러 개 남으면(애매한 경우) LLM에게 파일명 목록을 주고
-   실제 공고문 1개를 고르게 한다 — bizSupportNavigator(강사님 참고
-   프로젝트)의 공고문 판별 방식과 동일한 패턴.
+포맷 필터 -> 부가자료 키워드 필터 -> (그래도 여럿이면) LLM 판단 순으로 좁혀나간다.
 """
 
 import json
@@ -47,6 +29,7 @@ _SUPPLEMENTARY_KEYWORDS = (
 
 
 def _is_supplementary_document(file_name: str | None) -> bool:
+    """파일명에 부가자료 키워드(신청서식/안내서 등)가 포함되는지 확인한다."""
     if not file_name:
         return False
     return any(keyword in file_name for keyword in _SUPPLEMENTARY_KEYWORDS)
@@ -65,10 +48,7 @@ async def _select_via_llm(
 ) -> NoticeAttachment:
     """규칙 필터로도 못 좁힌 애매한 후보를 LLM이 최종 선택한다.
 
-    LLM 호출이 실패하거나 응답을 못 알아들으면(비용/장애로 판단이 아예
-    불가능한 상황), 첫 번째 후보로 조용히 폴백한다 - 공고문 후보 자체가
-    없는 것보다는, 완벽하지 않아도 하나 고르는 게 2차 필터링 파이프라인
-    전체를 막지 않는다.
+    LLM 호출/응답 파싱이 실패하면 첫 번째 후보로 조용히 폴백해 파이프라인을 막지 않는다.
     """
     settings = get_settings()
     active_client = client or AsyncOpenAI(

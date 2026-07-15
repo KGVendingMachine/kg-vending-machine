@@ -8,8 +8,7 @@ from app.core.config import get_settings
 async def _fetch_bizinfo_page(extra_params: dict) -> list[dict]:
     """기업마당(bizinfoApi.do) 원본 응답을 가져온다 (공통 재시도 로직).
 
-    응답 실패 시 settings.BIZINFO_MAX_RETRIES만큼 재시도한다(공공 API가
-    간헐적으로 5xx/timeout을 반환하는 경우가 있어 즉시 실패시키지 않음).
+    공공 API가 간헐적으로 5xx/timeout을 반환할 수 있어 즉시 실패시키지 않고 재시도한다.
     """
     settings = get_settings()
     params = {
@@ -29,9 +28,8 @@ async def _fetch_bizinfo_page(extra_params: dict) -> list[dict]:
                 response = await client.get(settings.BIZINFO_API_URL, params=params)
                 response.raise_for_status()
                 payload = response.json()
-                # HTTP 200이어도 요청 파라미터가 잘못되면 {"reqErr": "..."}
-                # 같은 오류 응답을 줄 수 있다(실제로 겪음). jsonArray가 없는
-                # 응답을 "공고 0개"로 오인하지 않도록 명시적으로 에러 처리한다.
+                # HTTP 200이어도 파라미터가 잘못되면 {"reqErr": "..."}를 줄 수 있어
+                # jsonArray 없는 응답을 "공고 0개"로 오인하지 않도록 에러 처리한다.
                 if "jsonArray" not in payload:
                     raise RuntimeError(f"BizInfo API가 오류를 반환했습니다: {payload}")
                 items = payload["jsonArray"]
@@ -53,11 +51,7 @@ async def _fetch_bizinfo_page(extra_params: dict) -> list[dict]:
 async def fetch_bizinfo_notices(page: int = 1) -> list[dict]:
     """기업마당(bizinfoApi.do)에서 공고 목록 원본 응답을 가져온다.
 
-    pageUnit(페이지당 개수) + pageIndex(페이지 번호) 조합이 실제 페이징
-    파라미터다. searchCnt만 단독으로 쓰면 페이지 이동 없이 항상 첫
-    페이지만 반환되고, pageIndex를 searchCnt와 같이 보내면 API가
-    "한 페이지의 보여지는 데이터 개수를 입력해주세요" 에러를 반환한다
-    (실제 호출로 확인함, 공식 문서에 명확히 없음).
+    pageUnit+pageIndex 조합이 실제 페이징 파라미터다(searchCnt 단독으로는 페이지 이동 안 됨).
     """
     settings = get_settings()
     return await _fetch_bizinfo_page(
@@ -68,10 +62,7 @@ async def fetch_bizinfo_notices(page: int = 1) -> list[dict]:
 async def fetch_bizinfo_notice_by_id(pblanc_id: str) -> dict | None:
     """기업마당 공고 하나를 pblancId로 단건 조회한다 (단건 재수집용).
 
-    pblancId를 파라미터로 주면 실제로 해당 건 하나만 필터링해서 돌려주는
-    것을 실제 호출로 확인했다(totCnt=1). K-Startup 목록 API와 달리
-    기업마당은 이 필터가 실제로 동작하므로 페이지를 훑지 않고 바로
-    가져올 수 있다.
+    pblancId 필터가 실제로 동작해(totCnt=1) 페이지를 훑지 않고 바로 가져올 수 있다.
     """
     items = await _fetch_bizinfo_page(
         {"pageUnit": 10, "pageIndex": 1, "pblancId": pblanc_id}
@@ -79,18 +70,18 @@ async def fetch_bizinfo_notice_by_id(pblanc_id: str) -> dict | None:
     return items[0] if items else None
 
 
-# 기업마당 서버가 예상외로 큰 파일을 내려주는 경우(오설정·오류 응답 등)에
-# 대비한 안전장치. response.content로 그냥 받으면 크기 제한 없이 응답
-# 전체를 메모리에 올리는데, 배치 OCR 트리거로 여러 첨부파일을 동시에
-# 다운로드할 때 이게 겹치면 서버 메모리를 위협할 수 있다(HWP/HWPX/PDF
-# 압축 해제 폭탄과 같은 종류의 문제). 실제 공고 첨부파일은 이 크기를
-# 넘는 경우가 없다고 보고 넉넉하게 잡은 값.
+# 서버가 예상외로 큰 파일을 내려줄 경우에 대비한 안전장치(응답 전체를
+# 메모리에 올리는 압축 해제 폭탄류 문제 방지). 실제 첨부파일은 이 크기를 넘지 않음.
 _MAX_ATTACHMENT_SIZE_BYTES = 100 * 1024 * 1024
 
 
 async def _read_response_with_size_limit(
     response: httpx.Response, source: str
 ) -> bytes:
+    """응답 바디를 스트리밍으로 읽되 크기 제한을 넘으면 중단한다.
+
+    response.content를 바로 쓰지 않는 이유: 크기 제한 없이 전체를 메모리에 올리기 때문.
+    """
     chunks = []
     size = 0
     async for chunk in response.aiter_bytes():
@@ -107,8 +98,7 @@ async def _read_response_with_size_limit(
 async def download_bizinfo_attachment(file_url: str) -> bytes:
     """기업마당 첨부파일 URL(getImageFile.do?...)에서 실제 파일을 받는다.
 
-    기업마당은 목록 API 응답에 다운로드 URL이 바로 들어있어(K-Startup처럼
-    상세페이지를 열 필요 없음), URL만 있으면 바로 GET으로 받아온다.
+    목록 API 응답에 다운로드 URL이 바로 들어있어 상세페이지를 열 필요가 없다.
     """
     settings = get_settings()
     last_error: Exception | None = None

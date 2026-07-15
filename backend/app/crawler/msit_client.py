@@ -12,14 +12,7 @@ _MAX_ATTACHMENT_SIZE_BYTES = 100 * 1024 * 1024
 async def fetch_msit_notices(page: int = 1) -> list[dict]:
     """과학기술정보통신부 사업공고 API에서 공고 목록 원본 응답을 가져온다.
 
-    실제 응답 실측 확인(2026-07-13): 문서(data.go.kr 활용가이드)와 달리
-    http로 호출하면 400(Request Blocked)이 반환되고, https + User-Agent
-    헤더가 있어야 정상 응답한다. 응답 구조도 문서와 달리
-    response(list) -> [header, body] -> body.items -> [{"item": {...}}]로
-    한 번 더 감싸여 있다. items 각각을 {"item": {...}}에서 풀어서
-    반환한다 - 호출하는 쪽은 fileNm 같은 필드에 바로 접근할 수 있는 평탄한
-    dict 리스트를 기대하므로(bizinfo_client.py/kstartup_client.py와 동일한
-    계약을 맞춤).
+    문서와 달리 http는 400을 반환해 https + User-Agent 헤더가 필요함(2026-07-13 실측).
     """
     settings = get_settings()
     params = {
@@ -56,9 +49,10 @@ async def fetch_msit_notices(page: int = 1) -> list[dict]:
 
 
 def _extract_items(payload: dict) -> list[dict]:
-    """response -> [header, body] -> body.items -> [{"item": {...}}] 구조를
-    풀어서 item dict 리스트로 만든다. 각 item의 files도
-    [{"file": {...}}] -> [{...}]로 같이 풀어준다."""
+    """response -> [header, body] -> body.items -> [{"item": {...}}] 구조를 평탄화한다.
+
+    각 item의 files도 [{"file": {...}}] -> [{...}]로 같이 풀어준다.
+    """
     try:
         sections = payload["response"]
         header = next(s["header"] for s in sections if "header" in s)
@@ -91,6 +85,10 @@ def _extract_items(payload: dict) -> list[dict]:
 async def _read_response_with_size_limit(
     response: httpx.Response, source: str
 ) -> bytes:
+    """응답 바디를 스트리밍으로 읽되 크기 제한을 넘으면 중단한다.
+
+    response.content를 바로 쓰지 않는 이유: 크기 제한 없이 전체를 메모리에 올리기 때문.
+    """
     chunks = []
     size = 0
     async for chunk in response.aiter_bytes():
@@ -105,9 +103,10 @@ async def _read_response_with_size_limit(
 
 
 async def download_msit_attachment(file_url: str) -> bytes:
-    """과학기술정보통신부 첨부파일 URL(msit.go.kr/ssm/file/fileDown.do?...)에서
-    실제 파일을 받는다. 목록 API 응답에 다운로드 URL이 바로 들어있어
-    (bizinfo와 동일하게) 상세페이지를 열 필요가 없다."""
+    """과학기술정보통신부 첨부파일 URL(msit.go.kr/ssm/file/fileDown.do?...)에서 실제 파일을 받는다.
+
+    목록 API 응답에 다운로드 URL이 바로 들어있어 상세페이지를 열 필요가 없다.
+    """
     settings = get_settings()
     headers = {"User-Agent": "Mozilla/5.0"}
     last_error: Exception | None = None
