@@ -265,6 +265,29 @@ def _eligibility_score(
         status = "needs_review"
     else:
         status = "likely_ineligible"
+
+    # R&D 공고 실측(300건) 기준 80%가 컨소시엄/연구기관 신청구조를 갖는데,
+    # 그중 "대학·출연연 전용"(기업이 아예 참여 불가)인 공고까지 매칭 후보에
+    # 그대로 올라가고 있었다. 이건 감점이 아니라 확실한 하드 컷이어야 한다 —
+    # 지역/규모/단계가 아무리 잘 맞아도 회사가 신청 자체를 할 수 없는
+    # 공고이므로, 다른 요인과 무관하게 무조건 likely_ineligible로 강제한다.
+    if notice.eligibility.applicant_structure == "컨소시엄·기관 전용(기업 참여 불가)":
+        score = min(score, 20.0)
+        status = "likely_ineligible"
+        cautions.append(
+            "이 공고는 대학·연구기관 전용으로 보입니다 — 기업 단독/참여 신청이"
+            " 불가능할 수 있으니 원문을 확인하세요."
+        )
+    elif notice.eligibility.applicant_structure == "컨소시엄 필요(기업 주관/참여 가능)":
+        # 사업계획서는 "이 회사가 지금 파트너를 구했는지"를 알려주지 않는다
+        # (그건 신청 시점의 섭외 상황이지, 회사의 기술/업종 정보가 아니다).
+        # 그래서 점수는 그대로 두되(기술 적합성 자체는 여전히 유효한 신호),
+        # "파트너를 구해야 신청 가능하다"는 걸 놓치지 않도록 반드시 안내한다.
+        cautions.append(
+            "이 공고는 컨소시엄(공동 신청) 구성이 필요합니다 — 대학·연구소·"
+            "타 기업 등 파트너를 먼저 구해야 신청할 수 있습니다."
+        )
+
     return score, status, cautions
 
 
@@ -643,12 +666,20 @@ async def run_matching(
     # 어느 기준에서 몇 건이 걸러졌는지는 로그로만 추적할 수 있다.
     quality_failed: dict[int, list[str]] = {}
     parse_failed_ids: list[int] = []
+    quantitative_failed: dict[int, str] = {}
     eligibility_counts: dict[str, int] = {
         "eligible": 0,
         "needs_review": 0,
         "likely_ineligible": 0,
     }
 
+    # PPT 원래 설계("2차 필터링 · 정량 적합도 평가 — 임계값 이상만 통과")를
+    # 실제로 구현한 게이트. _eligibility_score(신청주체 구조·지역·기업규모·
+    # 단계)를 임베딩·LLM 판정(비용이 큰 RAG·LLM 단계) 이전에 먼저 계산해,
+    # likely_ineligible로 확정된 후보는 여기서 걸러낸다 — 그래야 RAG·LLM
+    # 호출 자체가 줄어 PPT가 말한 비용 효율이 실현된다. 이전엔 이 점수를
+    # _score_notice에서 맨 마지막에만 계산해서, 명백히 안 맞는 공고까지
+    # 전부 임베딩·LLM 호출을 거친 뒤에야 낮은 점수로 걸러졌다.
     passed: list[tuple[Notice, NormalizedNoticeSchema]] = []
     for notice in candidates:
         quality_errors = _quality_errors(notice.normalized_json or {})
@@ -661,11 +692,28 @@ async def run_matching(
             parse_failed_ids.append(notice.id)
             continue
 
+        _, eligibility_status, _ = _eligibility_score(profile, normalized_notice)
+        if eligibility_status == "likely_ineligible":
+            quantitative_failed[notice.id] = (
+                normalized_notice.eligibility.applicant_structure or "자격요건 불일치"
+            )
+            continue
+
         passed.append((notice, normalized_notice))
+
+    if quantitative_failed:
+        logger.info(
+            "2차 필터링(정량 게이트) [match_log_id=%s] 자격요건 미달로 %d건 제외"
+            " (RAG·LLM 단계 진입 전): %s",
+            log.id,
+            len(quantitative_failed),
+            quantitative_failed,
+        )
 
     if not passed:
         logger.warning(
-            "매칭 불가 (match_log_id=%s): 후보 %d건 전부 품질 기준 미달 또는 파싱 실패",
+            "매칭 불가 (match_log_id=%s): 후보 %d건 전부 품질 기준 미달·파싱 실패·"
+            "자격요건 미달(정량 게이트)로 제외됨",
             log.id,
             len(candidates),
         )
