@@ -6,13 +6,7 @@ import {
   startBusinessPlanAnalysis,
 } from '../../api/businessPlanAnalysis'
 import type { AnalysisStatus } from '../../api/businessPlanAnalysis'
-import {
-  createMatchLog,
-  formatMatchLogDate,
-  listMatchLogs,
-  listMatchResults,
-} from '../../api/matchLogs'
-import type { MatchLog } from '../../api/matchLogs'
+import { createMatchLog, listMatchResults } from '../../api/matchLogs'
 import { ApiError } from '../../api/client'
 import { STEP_LABELS } from '../../constants/analysisSteps'
 
@@ -24,9 +18,6 @@ const MAX_CONSECUTIVE_POLL_ERRORS = 3
 // 막는다. 백엔드 stale 기준(10분)과 맞춰, 초과 시 실패 UI를 띄우고 "다시
 // 시도"(POST 재호출)가 서버의 stale 재선점으로 이어지게 한다.
 const MAX_POLL_DURATION_MS = 10 * 60 * 1000
-
-// 이전 매칭 기록 한 페이지 크기. "더보기"를 누를 때마다 이만큼 이어붙인다.
-const MATCH_LOG_PAGE_SIZE = 5
 
 // 화면 진행 국면. 분석 단계는 백엔드 status/step을 매핑하고, analyzed부터는
 // 이 페이지의 매칭 실행 흐름(대기 → 실행 → 완료)이다. 매칭이 끝나도 결과로
@@ -88,7 +79,7 @@ function buildLogLines(phase: Phase): LogLine[] {
         { text: '✓ 문서 읽기 완료', active: false },
         { text: '✓ 사업 내용 정리 완료', active: false },
         { text: '✓ 공고 매칭 완료', active: false },
-        { text: '→ 아래 매칭 기록 맨 위에 새 결과가 추가됐어요', active: true },
+        { text: '→ 아래 버튼으로 결과를 확인할 수 있어요', active: true },
       ]
     case 'failed':
       return []
@@ -129,18 +120,10 @@ export function AnalysisProgressPage() {
   // "다시 시도" 버튼이 증가시켜 effect를 다시 태운다. 0이면 첫 진입(현재
   // 상태 조회부터), 1 이상이면 명시적 재시도(바로 POST).
   const [attempt, setAttempt] = useState(0)
-  // 유저의 이전 매칭 실행 기록. 분석 완료 화면에서 리스트로 보여줘 지난
-  // 결과로 바로 이동할 수 있게 한다. null이면 아직 로딩 전/실패.
-  const [matchLogs, setMatchLogs] = useState<MatchLog[] | null>(null)
-  // 마지막 페이지 응답이 꽉 찼으면(=PAGE_SIZE) 더 있을 수 있다고 보고
-  // "더보기"를 노출한다. 개수가 정확히 배수로 끝나면 한 번 더 눌러 빈
-  // 응답을 받고서야 사라지는데, 총 개수 API 없이 감수하는 트레이드오프.
-  const [hasMoreLogs, setHasMoreLogs] = useState(false)
-  const [loadingMoreLogs, setLoadingMoreLogs] = useState(false)
   const [matchError, setMatchError] = useState<string | null>(null)
-  // 방금 실행으로 만들어진 로그 id. 리스트 맨 위 항목에 NEW 강조를 붙여
-  // 유저가 새 결과가 생겼음을 인지하고 클릭해 이동하게 한다.
-  const [newMatchLogId, setNewMatchLogId] = useState<number | null>(null)
+  // 방금 실행으로 만들어진 매칭 로그 id. 매칭 완료 시 "결과 보기" 버튼이
+  // 이 id 기준으로 결과 페이지로 보낸다.
+  const [matchedLogId, setMatchedLogId] = useState<number | null>(null)
 
   useEffect(() => {
     // 업로드를 거치지 않고 직접 들어오면 분석할 대상이 없다 → 업로드로 되돌린다.
@@ -233,35 +216,6 @@ export function AnalysisProgressPage() {
     }
   }, [businessPlanId, navigate, attempt])
 
-  useEffect(() => {
-    // 이전 매칭 기록은 부가 정보라 실패해도 페이지 흐름을 막지 않는다(무시).
-    let cancelled = false
-    listMatchLogs(MATCH_LOG_PAGE_SIZE, 0)
-      .then((logs) => {
-        if (cancelled) return
-        setMatchLogs(logs)
-        setHasMoreLogs(logs.length === MATCH_LOG_PAGE_SIZE)
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  async function handleLoadMoreLogs() {
-    if (matchLogs == null || loadingMoreLogs) return
-    setLoadingMoreLogs(true)
-    try {
-      const more = await listMatchLogs(MATCH_LOG_PAGE_SIZE, matchLogs.length)
-      setMatchLogs([...matchLogs, ...more])
-      setHasMoreLogs(more.length === MATCH_LOG_PAGE_SIZE)
-    } catch {
-      // 실패해도 버튼은 남아 있어 다시 누르면 재시도된다.
-    } finally {
-      setLoadingMoreLogs(false)
-    }
-  }
-
   function handleRetry() {
     setPhase('starting')
     setError(null)
@@ -282,10 +236,7 @@ export function AnalysisProgressPage() {
       if (remain > 0) {
         await new Promise((resolve) => setTimeout(resolve, remain))
       }
-      // 결과 페이지로 바로 이동하지 않는다. 새 로그를 리스트 맨 위에 붙이고
-      // NEW로 강조해, 유저가 기록이 생긴 걸 확인하고 직접 클릭해 이동한다.
-      setMatchLogs((current) => [log, ...(current ?? [])])
-      setNewMatchLogId(log.id)
+      setMatchedLogId(log.id)
       setPhase('matched')
     } catch (err) {
       // 매칭 실행 실패는 분석 실패와 달리 완료 화면으로 되돌려 다시 시도하게 한다.
@@ -334,9 +285,9 @@ export function AnalysisProgressPage() {
         </div>
         <div className="mt-1.5 text-sm text-muted">
           {analyzed
-            ? '공고 매칭을 시작하거나, 이전 매칭 결과를 다시 볼 수 있어요.'
+            ? '공고 매칭을 시작해보세요. 지난 매칭 기록은 상단 "이전 기록" 메뉴에서 볼 수 있어요.'
             : phase === 'matched'
-              ? '매칭 기록 맨 위에 새 결과가 추가됐어요. 클릭해서 결과를 확인하세요.'
+              ? '공고 매칭이 완료됐어요. 아래 버튼으로 결과를 확인하세요.'
               : '보통 1~2분 정도 걸려요. 창을 닫아도 분석은 계속됩니다.'}
         </div>
 
@@ -443,57 +394,14 @@ export function AnalysisProgressPage() {
                   : '공고 매칭 시작하기 →'}
             </button>
 
-            {matchLogs && matchLogs.length > 0 ? (
-              <div className="mt-9">
-                <div className="text-[15px] font-extrabold">
-                  {phase === 'matched' ? '매칭 기록' : '이전 매칭 기록'}
-                </div>
-                <div className="mt-1 text-[13px] text-muted">
-                  새로 매칭하지 않아도 지난 결과를 바로 볼 수 있어요.
-                </div>
-                <div className="mt-3.5 flex flex-col gap-2">
-                  {matchLogs.map((log) => {
-                    const isNew = log.id === newMatchLogId
-                    return (
-                      <button
-                        type="button"
-                        key={log.id}
-                        className={
-                          isNew
-                            ? 'flex cursor-pointer items-center gap-3.5 rounded-md border border-primary bg-primary-soft px-[18px] py-3.5 text-left text-[13px] hover:border-primary'
-                            : 'flex cursor-pointer items-center gap-3.5 rounded-md border border-border bg-white px-[18px] py-3.5 text-left text-[13px] hover:border-primary'
-                        }
-                        onClick={() => navigate(resultsPath(log.id))}
-                      >
-                        {isNew ? (
-                          <span className="shrink-0 rounded-[3px] bg-primary px-1.5 py-0.5 text-[10px] font-extrabold text-white">
-                            NEW
-                          </span>
-                        ) : null}
-                        <span className="min-w-0 flex-1 truncate font-bold">
-                          {log.business_plan_title ?? '사업계획서'}
-                        </span>
-                        <span className="shrink-0 text-muted">
-                          {formatMatchLogDate(log.created_at)}
-                        </span>
-                        <span className="shrink-0 font-bold text-primary">
-                          결과 보기 →
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
-                {hasMoreLogs ? (
-                  <button
-                    type="button"
-                    className="mt-2.5 w-full cursor-pointer rounded-md border border-dashed border-border-strong bg-transparent px-0 py-2.5 text-[13px] font-semibold text-muted hover:border-primary hover:text-primary disabled:cursor-default disabled:text-faint"
-                    onClick={handleLoadMoreLogs}
-                    disabled={loadingMoreLogs}
-                  >
-                    {loadingMoreLogs ? '불러오는 중…' : '+ 더보기'}
-                  </button>
-                ) : null}
-              </div>
+            {phase === 'matched' && matchedLogId != null ? (
+              <button
+                type="button"
+                className="ml-3 h-12 cursor-pointer rounded border-0 bg-primary px-7 text-[15px] font-bold text-white"
+                onClick={() => navigate(resultsPath(matchedLogId))}
+              >
+                결과 보기 →
+              </button>
             ) : null}
           </>
         ) : null}

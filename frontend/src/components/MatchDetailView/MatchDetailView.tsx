@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { ScoreGauge } from '../ScoreGauge/ScoreGauge'
 import type { MatchedNotice } from '../../types/notice'
 
@@ -65,6 +66,19 @@ export function MatchDetailView({
   backLabel,
   onCompareClick,
 }: MatchDetailViewProps) {
+  // 신청 전 체크리스트는 이 화면에서만 쓰는 로컬 진행 표시라 저장하지 않고,
+  // 공고를 나갔다 들어오면 초기화된다.
+  const [checkedItems, setCheckedItems] = useState<Set<string>>(new Set())
+
+  function toggleChecklistItem(label: string) {
+    setCheckedItems((current) => {
+      const next = new Set(current)
+      if (next.has(label)) next.delete(label)
+      else next.add(label)
+      return next
+    })
+  }
+
   return (
     <div className="flex flex-1 flex-col">
       <div className="flex h-14 items-center gap-[14px] border-b border-[#eef0f2] bg-white px-6">
@@ -426,12 +440,34 @@ export function MatchDetailView({
             신청 전 체크리스트
           </div>
           <div className="flex flex-col gap-[10px]">
-            {APPLICATION_CHECKLIST.map((label) => (
-              <label className="flex items-center gap-[9px] text-[13px]" key={label}>
-                <span className="h-4 w-4 flex-shrink-0 rounded-[3px] border border-[#c8cdd3]" />
-                {label}
-              </label>
-            ))}
+            {APPLICATION_CHECKLIST.map((label) => {
+              const checked = checkedItems.has(label)
+              return (
+                <label
+                  className="flex cursor-pointer items-center gap-[9px] text-[13px]"
+                  key={label}
+                >
+                  <input
+                    type="checkbox"
+                    className="sr-only"
+                    checked={checked}
+                    onChange={() => toggleChecklistItem(label)}
+                  />
+                  <span
+                    className={
+                      checked
+                        ? 'flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[3px] border border-primary bg-primary text-[10px] leading-none text-white'
+                        : 'h-4 w-4 flex-shrink-0 rounded-[3px] border border-[#c8cdd3]'
+                    }
+                  >
+                    {checked ? '✓' : ''}
+                  </span>
+                  <span className={checked ? 'text-faint line-through' : ''}>
+                    {label}
+                  </span>
+                </label>
+              )
+            })}
           </div>
 
           <div className="mt-6 rounded-md bg-surface-subtle px-4 py-3.5 text-xs leading-[1.6] text-muted">
