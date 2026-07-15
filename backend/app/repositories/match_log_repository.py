@@ -8,7 +8,7 @@ business_plan.title을 함께 돌려준다.
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import and_, delete, null, select
+from sqlalchemy import and_, delete, null, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_plan import BusinessPlan
@@ -43,6 +43,18 @@ async def create(
     session.add(log)
     await session.flush()
     return log
+
+
+async def mark_stale_processing_as_failed(session: AsyncSession) -> int:
+    """서버 기동 시 호출 — 이전 프로세스가 죽으면서(재배포·dev --reload 재시작 등)
+    completed_at도 못 남기고 processing에 멈춰버린 매칭을 failed로 정리한다.
+    새 프로세스는 이전 백그라운드 태스크를 이어받을 방법이 없어 항상 실패 처리다."""
+    result = await session.execute(
+        update(MatchLog)
+        .where(MatchLog.run_status == "processing")
+        .values(run_status="failed")
+    )
+    return result.rowcount or 0
 
 
 async def list_by_user(

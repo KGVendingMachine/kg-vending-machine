@@ -38,11 +38,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.chroma_client import get_business_plan_collection, get_notice_collection
 from app.ai.embedding_client import AiEmbeddingError
+from app.db.session import async_session_factory
 from app.repositories import business_plan_repository
 from app.services.business_plan_embedding_service import ensure_business_plan_embedded
-from app.services.notice_embedding_service import ensure_notice_embedded
+from app.services.notice_embedding_service import (
+    NoticeEmbeddingResult,
+    ensure_notice_embedded,
+)
 
 logger = logging.getLogger(__name__)
+
+# 공고별 임베딩 확인(ensure_notice_embedded)을 동시에 여러 건 돌리기 위한 상한.
+# notice_normalization_service._NOTICE_LLM_CONCURRENCY_LIMIT과 같은 값 —
+# DB pool 기본값(5)+overflow(10)을 넘지 않으면서도 순차 실행 대비 크게
+# 빨라지는 선에서 정함(2026-07-16, 운영 DB를 SSH 터널로 접속할 때 공고당
+# 순차 DB 왕복이 누적돼 매칭 전체가 느려지는 문제 확인).
+_NOTICE_EMBEDDING_CONCURRENCY_LIMIT = 10
+_notice_embedding_semaphore = asyncio.Semaphore(_NOTICE_EMBEDDING_CONCURRENCY_LIMIT)
 
 # 사업계획서 청크 하나당 후보 공고 청크 중 몇 개까지 볼지. where 필터로 이미
 # 1차 필터링 통과 후보로만 좁힌 상태라 넉넉하게 잡아도 비용이 크지 않다.
@@ -103,6 +115,23 @@ def _similarity_to_score(distance: float) -> float:
     return max(0.0, min(100.0, 35.0 + similarity * 65.0))
 
 
+async def _ensure_notice_embedded_isolated(
+    notice_id: int,
+) -> tuple[int, NoticeEmbeddingResult | None]:
+    """공고 하나의 임베딩 확인을 자체 세션으로 수행한다(반환값 None=임베딩 실패).
+    공유 세션을 asyncio.gather로 동시 접근하면 asyncpg InterfaceError가
+    나므로(2026-07 초 온디맨드 정규화에서 이미 겪은 문제), 매칭 세션과는
+    별도로 매 공고마다 세션을 열고 그 안에서 커밋까지 마친다."""
+    async with _notice_embedding_semaphore:
+        async with async_session_factory() as task_session:
+            try:
+                notice_result = await ensure_notice_embedded(task_session, notice_id)
+            except AiEmbeddingError:
+                return notice_id, None
+            await task_session.commit()
+            return notice_id, notice_result
+
+
 async def run_secondary_filtering(
     session: AsyncSession,
     *,
@@ -142,18 +171,21 @@ async def run_secondary_filtering(
     result.plan_embedded = True
 
     embedded_notice_ids: list[int] = []
-    for notice_id in candidate_notice_ids:
-        try:
-            notice_result = await ensure_notice_embedded(session, notice_id)
-        except AiEmbeddingError:
+    task_results = await asyncio.gather(
+        *(
+            _ensure_notice_embedded_isolated(notice_id)
+            for notice_id in candidate_notice_ids
+        )
+    )
+    for notice_id, notice_result in task_results:
+        if notice_result is None:
             logger.warning(
                 "공고 임베딩 실패로 2차 필터링에서 제외 (notice_id=%s)", notice_id
             )
             result.skips.append(
                 SecondaryFilteringSkip(notice_id=notice_id, reason="embedding_failed")
             )
-            continue
-        if notice_result.embedded:
+        elif notice_result.embedded:
             embedded_notice_ids.append(notice_id)
         else:
             result.skips.append(
