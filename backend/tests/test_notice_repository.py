@@ -213,15 +213,16 @@ async def test_get_kg_category_id_returns_seeded_id(db_session):
 # ---------------------------------------------------------------------------
 
 
-async def test_get_notice_ids_pending_normalization_excludes_already_attempted(
+async def test_get_notice_ids_pending_normalization_excludes_only_completed(
     db_session,
 ):
-    """normalization_status가 있는(완료든 실패든) 공고는 대상에서 빠지고,
-    아직 시도한 적 없는(NULL) 공고만 반환돼야 한다."""
+    """completed인 공고만 대상에서 빠지고, 아직 시도한 적 없는(NULL) 공고와
+    실패/스킵된 공고는 재시도 대상으로 반환돼야 한다(2026-07-15)."""
     source = await _create_source(db_session, "정규화대기출처")
     pending_id = await _create_notice(db_session, source, external_id="pending-1")
     completed_id = await _create_notice(db_session, source, external_id="completed-1")
     failed_id = await _create_notice(db_session, source, external_id="failed-1")
+    skipped_id = await _create_notice(db_session, source, external_id="skipped-1")
 
     await update_notice_normalization(
         db_session,
@@ -239,6 +240,14 @@ async def test_get_notice_ids_pending_normalization_excludes_already_attempted(
         normalization_error="테스트 실패",
         normalized_at=datetime(2026, 1, 1),
     )
+    await update_notice_normalization(
+        db_session,
+        skipped_id,
+        normalized_json=None,
+        normalization_status="skipped",
+        normalization_error="원문 없음",
+        normalized_at=datetime(2026, 1, 1),
+    )
 
     # limit을 넉넉히 크게 준다 — 실제 DB(SAVEPOINT 밖의 기존 데이터)에도
     # normalization_status가 NULL인 공고가 많아서, limit이 작으면 정렬
@@ -246,8 +255,9 @@ async def test_get_notice_ids_pending_normalization_excludes_already_attempted(
     result = await get_notice_ids_pending_normalization(db_session, limit=100_000)
 
     assert pending_id in result
+    assert failed_id in result
+    assert skipped_id in result
     assert completed_id not in result
-    assert failed_id not in result
 
 
 async def test_get_notice_ids_pending_normalization_respects_limit(db_session):

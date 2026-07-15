@@ -11,18 +11,16 @@ from langchain_core.documents import Document
 
 _IMAGE_EXTENSIONS = (".bmp", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff")
 
-# 압축 해제 폭탄(zlib bomb) 방지용 상한. 실측: 100KB짜리 압축 스트림을
-# 제한 없이 풀면 100MB로 부풀어 오름(0.25초) — HWP는 사업계획서 업로드로
-# 로그인한 일반 사용자가 직접 올릴 수 있는 파일이라, 압축률이 비정상적으로
-# 높은 스트림을 넣어 서버 메모리를 고갈시키는 게 가능했다. 실제 문서의
-# BodyText 섹션·임베드 이미지가 이 크기를 넘는 경우는 없다고 보고 넉넉하게
-# 잡은 값.
+# 압축 해제 폭탄(zlib bomb) 방지용 상한. 실측: 100KB 압축 스트림이 제한 없이
+# 풀면 100MB로 부풀어 오름(0.25초) — 사용자가 직접 올리는 HWP라 악용 가능.
 _MAX_DECOMPRESSED_SIZE = 100 * 1024 * 1024
 
 
 def _zlib_decompress_safely(data: bytes) -> bytes:
-    """HWP 스펙 고정값 -15(raw deflate)로 풀되, 결과가 _MAX_DECOMPRESSED_SIZE를
-    넘으면 예외를 던져 무제한 압축 해제를 막는다."""
+    """HWP 스펙 고정값 -15(raw deflate)로 풀되, 무제한 압축 해제를 막는다.
+
+    결과가 _MAX_DECOMPRESSED_SIZE를 넘으면 예외를 던진다.
+    """
     decompressor = zlib.decompressobj(-15)
     result = decompressor.decompress(data, _MAX_DECOMPRESSED_SIZE)
     if decompressor.unconsumed_tail:
@@ -31,6 +29,7 @@ def _zlib_decompress_safely(data: bytes) -> bytes:
 
 
 def _is_compressed(load_file: olefile.OleFileIO) -> bool:
+    """FileHeader 스트림의 압축 플래그 비트를 읽어 문서 압축 여부를 반환한다."""
     with load_file.openstream("FileHeader") as header:
         header_data = header.read()
         return bool(header_data[36] & 1)
@@ -39,14 +38,7 @@ def _is_compressed(load_file: olefile.OleFileIO) -> bool:
 def extract_embedded_images(file_path: str) -> list[tuple[bytes, str]]:
     """HWP 안에 그림으로 삽입된 표/차트 등의 원본 이미지를 꺼낸다.
 
-    BinData 스토리지의 각 스트림은 스트림 이름 끝의 확장자로 원본 포맷을
-    알 수 있다. 압축 여부는 문서 전체 압축 플래그(FileHeader)를 그대로
-    따른다고 보고 시도하되, 압축 안 된 스트림도 있을 수 있어 압축 해제가
-    실패하면 원본 바이트를 그대로 쓴다.
-
-    (2026-07-10 검증 완료) K-Startup 공고 첨부 HWP 4건(임베드 이미지 총
-    8개, 표/차트/기관 로고 포함)으로 실제 확인함 — 압축 스트림 해제, 이미지
-    바이트 유효성(PIL로 열림), CLOVA OCR 연동까지 전부 정상 동작한다.
+    압축 여부는 문서 전체 압축 플래그를 따르되, 해제 실패 시 원본 바이트를 그대로 쓴다.
     """
     images = []
     with olefile.OleFileIO(file_path) as load_file:
@@ -103,9 +95,11 @@ class HWPLoader(BaseLoader):
         yield Document(page_content=result_text, metadata=self.extra_info)
 
     def _is_valid_hwp(self, dirs: list[list[str]]) -> bool:
+        """FileHeader/HwpSummaryInformation 스트림 존재로 HWP 파일 여부를 판별한다."""
         return [self.FILE_HEADER_SECTION] in dirs and [self.HWP_SUMMARY_SECTION] in dirs
 
     def _get_body_sections(self, dirs: list[list[str]]) -> list[str]:
+        """BodyText/Section{n} 스트림들을 번호 순서대로 정렬해 경로 목록을 만든다."""
         section_numbers = [
             int(d[1][self.SECTION_NAME_LENGTH :])
             for d in dirs
@@ -118,12 +112,14 @@ class HWPLoader(BaseLoader):
     def _extract_text(
         self, load_file: olefile.OleFileIO, file_dir: list[list[str]]
     ) -> str:
+        """BodyText 섹션들을 순서대로 읽어 텍스트를 이어붙인다."""
         sections = self._get_body_sections(file_dir)
         return "\n".join(
             self._get_text_from_section(load_file, section) for section in sections
         )
 
     def _get_text_from_section(self, load_file: olefile.OleFileIO, section: str) -> str:
+        """한 BodyText 섹션의 레코드를 파싱해 HWPTAG_PARA_TEXT 값만 뽑아 텍스트로 만든다."""
         with load_file.openstream(section) as bodytext:
             data = bodytext.read()
 
@@ -157,18 +153,15 @@ class HWPLoader(BaseLoader):
 
     @staticmethod
     def _remove_chinese_characters(s: str) -> str:
+        """한자 유니코드 범위(一-鿿)를 모두 제거한다."""
         return re.sub(r"[一-鿿]+", "", s)
 
     @staticmethod
     def _remove_control_characters(s: str) -> str:
         """OCR·인코딩 과정에서 섞여 들어오는 깨진 제어문자를 제거한다.
 
-        "\\n"도 유니코드 카테고리상 제어문자(Cc)라, 필터링 없이 그대로
-        걸러내면 문단 구분을 위해 "\\n".join으로 이미 넣어둔 개행까지
-        지워져 모든 문단이 구분자 없이 이어붙는 문제가 있었다(실제 HWP
-        샘플로 확인: "...동의서" + "전남창조경제혁신센터는..."가 "...동의서전남창조경제혁신센터는..."로
-        붙어버림). "\\n"은 보존하고 "\\r"은 버려서(원본에 섞여 있는
-        "\\r\\n"이 "\\n" 하나로 정리되게) 나머지 진짜 깨진 제어문자만 제거한다.
+        "\\n"도 유니코드 카테고리상 제어문자(Cc)라 그대로 걸러내면 문단 구분용
+        개행까지 지워져 모든 문단이 붙어버리므로, "\\n"만 보존하고 나머지를 제거한다.
         """
         return "".join(
             ch for ch in s if ch == "\n" or unicodedata.category(ch)[0] != "C"
@@ -176,6 +169,7 @@ class HWPLoader(BaseLoader):
 
     @staticmethod
     def _parse_record_header(header_bytes: bytes) -> tuple[int, int, int]:
+        """HWP 레코드 4바이트 헤더에서 (원본값, 태그, 길이)를 비트 마스크로 뽑는다."""
         header = struct.unpack_from("<I", header_bytes)[0]
         rec_type = header & 0x3FF
         rec_len = (header >> 20) & 0xFFF
