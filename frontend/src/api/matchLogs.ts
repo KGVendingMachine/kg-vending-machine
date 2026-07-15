@@ -42,6 +42,20 @@ export function getMatchLog(matchLogId: number): Promise<MatchLog> {
   return apiFetch<MatchLog>(`/api/match-logs/${matchLogId}`)
 }
 
+/** backend/app/schemas/match_log.py MatchLogDeleteResponse */
+export interface MatchLogDeleteResponse {
+  match_log_id: number
+  deleted: boolean
+  message: string
+}
+
+/** DELETE /match-logs/{id} — 매칭 기록(및 그 결과)을 삭제한다. */
+export function deleteMatchLog(matchLogId: number): Promise<MatchLogDeleteResponse> {
+  return apiFetch<MatchLogDeleteResponse>(`/api/match-logs/${matchLogId}`, {
+    method: 'DELETE',
+  })
+}
+
 /**
  * matching_service._score_notice가 채우는 result_json 중 프론트가 쓰는 부분.
  * score_breakdown의 eligibility/item_fit/business_fit/growth/bonus는
