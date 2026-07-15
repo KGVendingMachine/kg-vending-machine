@@ -19,34 +19,41 @@ export function LoginPage() {
     : null
 
   return (
-    <div className="flex flex-1 items-center justify-center p-6">
-      <div className="flex w-[460px] max-w-full flex-col items-center rounded-lg border border-border bg-white px-11 py-14 text-center shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
-        <div className="mb-6 flex h-14 w-14 items-center justify-center rounded-lg border-2 border-ink text-[22px] font-extrabold">
+    <div className="flex flex-1 items-center justify-center bg-[linear-gradient(180deg,#fafbfc,#fff)] p-6">
+      <div className="relative w-[440px] max-w-full overflow-hidden rounded-2xl border border-[#e6e9ed] bg-white px-10 py-12 text-center shadow-[0_20px_50px_rgba(20,30,50,0.08)]">
+        <div className="absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,#2f6df6,#7aa4ff)]" />
+
+        <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-xl bg-[#15181c] text-xl font-extrabold text-white">
           K
         </div>
-        <div className="text-2xl font-extrabold tracking-[-0.5px]">
+        <div className="text-[22px] font-extrabold tracking-[-0.5px]">
           KGVendingMachine
         </div>
-        <div className="mt-2.5 text-[15px] leading-normal text-muted">
+        <div className="mt-2 text-[14px] leading-relaxed text-muted">
           사업계획서 한 장이면
           <br />
           맞는 정부지원사업을 찾아드려요
         </div>
 
         {errorMessage && (
-          <div className="mt-5 w-full rounded-md bg-[#fdecec] px-4 py-3 text-[13px] leading-normal text-[#c0392b]">
-            {errorMessage}
+          <div className="mt-5 flex items-start gap-2 rounded-lg bg-danger-soft px-4 py-3 text-left text-[13px] leading-normal text-danger">
+            <span className="mt-px font-bold">!</span>
+            <span>{errorMessage}</span>
           </div>
         )}
 
-        <div className="my-9 h-px w-full bg-[#eef0f2]" />
+        <div className="my-8 flex items-center gap-3">
+          <div className="h-px flex-1 bg-[#eef0f2]" />
+          <span className="text-[11px] font-medium text-faint">간편 로그인</span>
+          <div className="h-px flex-1 bg-[#eef0f2]" />
+        </div>
 
         <button
           type="button"
-          className="flex h-[52px] w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-kakao text-base font-bold text-kakao-ink"
+          className="flex h-[52px] w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-kakao text-base font-bold text-kakao-ink shadow-[0_2px_8px_rgba(254,229,0,0.5)] transition hover:brightness-[0.97] active:scale-[0.99]"
           onClick={redirectToBackendKakaoLogin}
         >
-          <span className="inline-block h-5 w-5 rounded bg-kakao-ink opacity-85" />
+          <span className="inline-block h-5 w-5 rounded-md bg-kakao-ink opacity-85" />
           카카오로 시작하기
         </button>
         <div className="mt-4 text-xs leading-[1.6] text-faint">
@@ -55,7 +62,7 @@ export function LoginPage() {
           최초 로그인 시 자동으로 회원가입돼요.
         </div>
 
-        <div className="mt-auto pt-8 text-[11px] text-[#b0b5bb]">
+        <div className="mt-8 text-[11px] text-[#b0b5bb]">
           로그인 시 <u>이용약관</u> 및 <u>개인정보처리방침</u>에 동의합니다
         </div>
       </div>
