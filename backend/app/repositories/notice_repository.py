@@ -146,6 +146,8 @@ async def upsert_notice(
     source_url: str | None,
     apply_url: str | None,
     summary_text: str | None,
+    target_business_years_max: int | None = None,
+    target_allows_prestartup: bool | None = None,
 ) -> int:
     """(source_id, external_id) 기준으로 공고를 upsert하고 notice.id를 반환한다.
 
@@ -176,6 +178,8 @@ async def upsert_notice(
             source_url=source_url,
             apply_url=apply_url,
             summary_text=summary_text,
+            target_business_years_max=target_business_years_max,
+            target_allows_prestartup=target_allows_prestartup,
         )
         .on_conflict_do_update(
             index_elements=[Notice.source_id, Notice.external_id],
@@ -191,6 +195,8 @@ async def upsert_notice(
                 "source_url": source_url,
                 "apply_url": apply_url,
                 "summary_text": summary_text,
+                "target_business_years_max": target_business_years_max,
+                "target_allows_prestartup": target_allows_prestartup,
                 "updated_at": func.now(),
             },
         )
@@ -456,6 +462,41 @@ async def set_notice_category(
     )
 
 
+async def get_notice_business_years(
+    session: AsyncSession, notice_id: int
+) -> tuple[int | None, bool | None]:
+    """공고의 업력 구조화 값 (target_business_years_max, target_allows_prestartup)을
+    반환한다. 업력 백필에서 재파싱 결과가 기존과 다른지 비교하는 용도."""
+    result = await session.execute(
+        select(Notice.target_business_years_max, Notice.target_allows_prestartup).where(
+            Notice.id == notice_id
+        )
+    )
+    row = result.first()
+    return (None, None) if row is None else (row[0], row[1])
+
+
+async def set_notice_business_years(
+    session: AsyncSession,
+    notice_id: int,
+    max_years: int | None,
+    allows_prestartup: bool | None,
+) -> None:
+    """공고의 업력 구조화 컬럼만 갱신한다(다른 컬럼은 건드리지 않음).
+
+    K-Startup biz_enyy 재파싱 백필 전용. upsert_notice는 다른 수집 필드를
+    함께 덮어써서 원문 재조회 없이 업력만 보정하려는 백필에는 맞지 않는다.
+    """
+    await session.execute(
+        update(Notice)
+        .where(Notice.id == notice_id)
+        .values(
+            target_business_years_max=max_years,
+            target_allows_prestartup=allows_prestartup,
+        )
+    )
+
+
 async def get_notices_for_status_refresh(
     session: AsyncSession,
 ) -> list[tuple[int, date | None, date | None, str | None]]:
@@ -647,6 +688,28 @@ async def get_notice_target_types(session: AsyncSession, notice_id: int) -> list
         )
     )
     return list(result.scalars().all())
+
+
+async def get_notice_target_types_by_ids(
+    session: AsyncSession, notice_ids: list[int]
+) -> dict[int, list[str]]:
+    """여러 공고의 신청대상(target_type)을 notice_id -> 목록으로 묶어 반환한다.
+
+    신청주체 필터(services/applicant_type_filter) 등 후보 공고를 한 번에
+    거르는 쪽이 notice_id마다 get_notice_target_types를 따로 부르면 후보
+    건수만큼 쿼리가 나간다(N+1). get_notice_regions_by_ids와 같은 패턴으로
+    한 번에 가져온다."""
+    if not notice_ids:
+        return {}
+    result = await session.execute(
+        select(NoticeTargetType.notice_id, NoticeTargetType.target_type).where(
+            NoticeTargetType.notice_id.in_(notice_ids)
+        )
+    )
+    target_types_by_notice: dict[int, list[str]] = {}
+    for notice_id, target_type in result.all():
+        target_types_by_notice.setdefault(notice_id, []).append(target_type)
+    return target_types_by_notice
 
 
 async def get_notice_regions(session: AsyncSession, notice_id: int) -> list[str]:

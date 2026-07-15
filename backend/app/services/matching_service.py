@@ -20,6 +20,7 @@ from app.models.notice import Notice
 from app.repositories import match_log_repository
 from app.schemas.business_plan import NormalizedBusinessPlanSchema
 from app.schemas.notice_normalization import NormalizedNoticeSchema
+from app.services.notice_eligibility_service import get_eligible_notices
 from app.services.secondary_filtering_judge_service import (
     JudgedSecondaryScore,
     judge_notice,
@@ -645,12 +646,19 @@ async def run_matching(
     max_results: int,
 ) -> list[MatchResult]:
     normalized_plan = _parse_business_plan(plan)
-    candidates = await match_log_repository.list_normalized_notice_candidates(session)
+    eligibility_result = await get_eligible_notices(session, profile)
+    candidates = await match_log_repository.list_normalized_notice_candidates(
+        session,
+        notice_ids=eligibility_result.notice_ids,
+    )
     logger.info(
-        "매칭 시작 (match_log_id=%s, business_plan_id=%s): 정규화 완료 후보 공고 %d건",
+        "매칭 시작 (match_log_id=%s, business_plan_id=%s): 1차 하드필터 통과 "
+        "%d건 중 정규화 완료 후보 공고 %d건 (축별 집계=%s)",
         log.id,
         plan.id,
+        len(eligibility_result.notice_ids),
         len(candidates),
+        eligibility_result.counts,
     )
 
     if not candidates:

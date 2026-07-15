@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import async_session_factory, get_db
 from app.repositories.notice_repository import get_collection_stats
 from app.schemas.notice_collection import (
+    BusinessYearsBackfillResult,
     CollectionJobAccepted,
     CollectionJobStatus,
     CollectionJobStatusResponse,
@@ -48,6 +49,7 @@ from app.services.notice_collection_service import (
     NoticeRecollectionError,
     NoticeRecollectionNotFoundError,
     UnsupportedRecollectionSourceError,
+    backfill_notice_business_years,
     collect_all_bizinfo_notices,
     collect_all_kstartup_notices,
     collect_all_msit_notices,
@@ -226,6 +228,23 @@ async def get_collection_status(job_id: str):
 async def refresh_status(session: AsyncSession = Depends(get_db)):
     result = await refresh_notice_statuses(session)
     return StatusRefreshResult(**result)
+
+
+@router.post(
+    "/backfill-business-years",
+    response_model=BusinessYearsBackfillResult,
+    summary="공고 업력 구조화 컬럼 전체 보정",
+    description=(
+        "1차 필터의 업력 축을 위해 K-Startup 공고 전체의 biz_enyy를 저장된 "
+        "원본 기준으로 다시 파싱해 target_business_years_max/"
+        "target_allows_prestartup 컬럼을 채운다(해석 A: 누적 상한). "
+        "컬럼 도입 이전에 수집된 공고를 소급 반영하는 용도이며 외부 API를 "
+        "다시 호출하지 않는다."
+    ),
+)
+async def backfill_business_years(session: AsyncSession = Depends(get_db)):
+    result = await backfill_notice_business_years(session)
+    return BusinessYearsBackfillResult(**result)
 
 
 @router.post(

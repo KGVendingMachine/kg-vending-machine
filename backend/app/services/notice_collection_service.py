@@ -22,6 +22,7 @@ from app.repositories.notice_repository import (
     get_kstartup_notices_with_raw,
     get_max_bizinfo_registration_time,
     get_max_notice_external_id,
+    get_notice_business_years,
     get_notice_detail,
     get_notice_region_codes,
     get_notice_regions,
@@ -34,10 +35,12 @@ from app.repositories.notice_repository import (
     replace_notice_target_type,
     save_attachment,
     save_raw,
+    set_notice_business_years,
     set_notice_category,
     update_notice_status,
     upsert_notice,
 )
+from app.services.notice_business_years import parse_biz_enyy
 
 logger = logging.getLogger(__name__)
 
@@ -873,6 +876,11 @@ async def _process_kstartup_item(
             if item.get("intg_pbanc_yn") == "Y":
                 notice_group_key = item.get("intg_pbanc_biz_nm")
 
+            # 업력 축(1차 필터)용으로 biz_enyy를 구조화해 컬럼에 저장한다.
+            # 제한 정보가 없으면(None) 두 컬럼 모두 NULL로 둔다(permissive).
+            parsed_years = parse_biz_enyy(item.get("biz_enyy"))
+            allows_prestartup, max_years = parsed_years or (None, None)
+
             notice_id = await upsert_notice(
                 session,
                 source_id=source_id,
@@ -888,6 +896,8 @@ async def _process_kstartup_item(
                 source_url=item.get("detl_pg_url"),
                 apply_url=apply_url,
                 summary_text=item.get("pbanc_ctnt"),
+                target_business_years_max=max_years,
+                target_allows_prestartup=allows_prestartup,
             )
             await save_raw(
                 session,
@@ -1158,6 +1168,46 @@ async def backfill_notice_region_codes(session: AsyncSession) -> dict[str, int]:
         if new_codes == existing_codes:
             continue
         await replace_notice_region(session, notice_id, new_regions)
+        updated += 1
+
+    await session.commit()
+    return {"checked": checked, "updated": updated}
+
+
+async def backfill_notice_business_years(session: AsyncSession) -> dict[str, int]:
+    """저장된 K-Startup 원본(biz_enyy)을 다시 읽어 업력 구조화 컬럼
+    (target_business_years_max, target_allows_prestartup)을 보정한다.
+
+    업력 축(1차 필터)을 위해 컬럼을 새로 도입해, 그 이전에 수집된 공고는
+    두 컬럼이 비어 있다. backfill_notice_region_codes와 같은 패턴으로 외부
+    API 재호출 없이 저장된 원본만으로 재계산한다. biz_enyy가 없는 bizinfo는
+    애초에 대상이 아니라 K-Startup 원본만 훑는다.
+    """
+    checked = 0
+    updated = 0
+
+    kstartup_rows = await get_kstartup_notices_with_raw(session)
+    for notice_id, raw_field in kstartup_rows:
+        checked += 1
+        try:
+            item = json.loads(raw_field)
+        except (TypeError, json.JSONDecodeError):
+            logger.warning(
+                "업력 백필 중 K-Startup raw 데이터를 파싱하지 못했습니다 "
+                "(notice_id=%s)",
+                notice_id,
+            )
+            continue
+        allows_prestartup, max_years = parse_biz_enyy(item.get("biz_enyy")) or (
+            None,
+            None,
+        )
+        existing = await get_notice_business_years(session, notice_id)
+        if existing == (max_years, allows_prestartup):
+            continue
+        await set_notice_business_years(
+            session, notice_id, max_years, allows_prestartup
+        )
         updated += 1
 
     await session.commit()
