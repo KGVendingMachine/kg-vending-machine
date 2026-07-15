@@ -21,11 +21,11 @@ export interface CompanyProfile {
 export interface CompanyProfileUpdate {
   representative_name?: string
   business_registration_number?: string
-  company_size?: string
+  // company_size는 입력하지 않는다 — 업종·매출에서 서버가 산출한다.
   employee_count?: number
   /** 개인사업자 / 법인사업자 / 예비창업자 */
   business_type?: string
-  /** 예비창업 / 초기창업 / 도약 / 소상공인 */
+  /** 예비창업 / 초기창업 / 도약 */
   company_stage?: string
   /** KSIC 대분류 코드 (A~S) */
   industry_code?: string

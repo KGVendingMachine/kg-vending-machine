@@ -38,7 +38,8 @@ async def test_save_then_get_round_trip(db_session):
     payload = CompanyProfileUpdate(
         representative_name="홍길동",
         business_registration_number="000-00-00000",
-        company_size="소기업",
+        industry_code="C",  # 제조업
+        annual_revenue=5_000_000_000,  # 50억 → 중소기업 상한(1,000억) 이하
         employee_count=15,
     )
 
@@ -53,7 +54,8 @@ async def test_save_then_get_round_trip(db_session):
     fetched = await get_my_company_profile(current_user=user, session=db_session)
     assert fetched is not None
     assert fetched.id == saved.id
-    assert fetched.company_size == "소기업"
+    # company_size는 입력이 아니라 업종·매출에서 파생된다.
+    assert fetched.company_size == "중소기업"
 
 
 async def test_partial_update_accumulates(db_session):
@@ -81,18 +83,46 @@ async def test_blank_strings_are_ignored(db_session):
     user = await _make_user(db_session)
     payload = CompanyProfileUpdate(
         representative_name="박대표",
-        company_size="",  # 빈 값 → None 처리
+        business_type="",  # 빈 값 → None 처리
     )
     fields = payload.model_dump(exclude_unset=True)
-    # company_size는 값이 None이라 저장 대상엔 남지만 컬럼은 None으로 세팅된다.
     assert fields["representative_name"] == "박대표"
-    assert fields["company_size"] is None
+    assert fields["business_type"] is None
 
     saved = await save_my_company_profile(
         payload=payload, current_user=user, session=db_session
     )
     assert saved.representative_name == "박대표"
+    assert saved.business_type is None
+
+
+async def test_company_size_is_derived_not_input(db_session):
+    """company_size는 사용자 입력이 아니라 업종·매출에서 산출된다."""
+    user = await _make_user(db_session, kakao_id="company-size-derive")
+
+    # 매출을 모르면 판정 불가 → None
+    saved = await save_my_company_profile(
+        payload=CompanyProfileUpdate(industry_code="J"),
+        current_user=user,
+        session=db_session,
+    )
     assert saved.company_size is None
+
+    # 정보통신(J, 상한 600억)에 700억 매출 → 중견기업
+    saved = await save_my_company_profile(
+        payload=CompanyProfileUpdate(annual_revenue=70_000_000_000),
+        current_user=user,
+        session=db_session,
+    )
+    assert saved.company_size == "중견기업"
+
+    # 매출을 400억으로 낮추면 다시 중소기업 (파생값이 매 저장마다 갱신됨)
+    saved = await save_my_company_profile(
+        payload=CompanyProfileUpdate(annual_revenue=40_000_000_000),
+        current_user=user,
+        session=db_session,
+    )
+    assert saved.company_size == "중소기업"
 
 
 async def test_save_matching_fields_with_conversion(db_session):
@@ -191,7 +221,6 @@ async def test_transition_to_pre_founder_clears_registration_fields(db_session):
             company_stage="도약",
             business_registration_number="000-00-00000",
             founded_year=2020,
-            company_size="중기업",
             employee_count=30,
             annual_revenue=5_000_000_000,
         ),

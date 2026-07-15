@@ -122,7 +122,7 @@ async def _make_notice(
         external_id=title,
         title=title,
         application_end_date=date(2026, 12, 31),
-        status="open",
+        status="모집중",
         is_actionable=is_actionable,
         normalized_json=normalized_json,
         normalization_status="completed",
@@ -195,7 +195,7 @@ async def test_create_match_log_fails_when_no_normalized_notices(
     await db_session.flush()
     plan = await _make_plan(db_session, profile)
 
-    async def _no_candidates(session, *, limit=200):
+    async def _no_candidates(session, *, notice_ids=None):
         return []
 
     monkeypatch.setattr(

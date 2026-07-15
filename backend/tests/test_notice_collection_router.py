@@ -15,6 +15,7 @@ from app.api.notice_collection import (
     _JOBS,
     _execute_collection_job,
     _run_collection_job,
+    backfill_business_years,
     get_collection_stats_endpoint,
     get_collection_status,
     recollect_notice,
@@ -150,6 +151,19 @@ async def test_get_collection_status_404_when_unknown():
 
 async def test_refresh_status_returns_checked_and_updated_counts(db_session):
     result = await refresh_status(session=db_session)
+
+    assert result.checked >= 0
+    assert result.updated >= 0
+    assert result.updated <= result.checked
+
+
+# ---------------------------------------------------------------------------
+# backfill_business_years
+# ---------------------------------------------------------------------------
+
+
+async def test_backfill_business_years_returns_checked_and_updated_counts(db_session):
+    result = await backfill_business_years(session=db_session)
 
     assert result.checked >= 0
     assert result.updated >= 0

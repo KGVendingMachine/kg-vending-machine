@@ -134,17 +134,25 @@ async def get_business_plan_id_for_result(
 
 
 async def list_normalized_notice_candidates(
-    session: AsyncSession, *, limit: int = 200
+    session: AsyncSession,
+    *,
+    notice_ids: list[int] | None = None,
 ) -> list[Notice]:
+    if notice_ids == []:
+        return []
+
+    conditions = [
+        Notice.normalized_json.is_not(None),
+        Notice.normalization_status == "completed",
+        Notice.is_actionable.is_not(False),
+    ]
+    if notice_ids is not None:
+        conditions.append(Notice.id.in_(notice_ids))
+
     result = await session.execute(
         select(Notice)
-        .where(
-            Notice.normalized_json.is_not(None),
-            Notice.normalization_status == "completed",
-            Notice.is_actionable.is_not(False),
-        )
+        .where(*conditions)
         .order_by(Notice.application_end_date.asc().nulls_last(), Notice.id.desc())
-        .limit(limit)
     )
     return list(result.scalars().all())
 

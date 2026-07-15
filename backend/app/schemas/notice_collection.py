@@ -55,6 +55,15 @@ class StatusRefreshResult(BaseModel):
     """실제로 status가 바뀐 공고 수 (주로 마감일 경과로 인한 마감 처리)"""
 
 
+class BusinessYearsBackfillResult(BaseModel):
+    """POST /internal/notices/backfill-business-years 응답"""
+
+    checked: int
+    """검사한 K-Startup 공고 수"""
+    updated: int
+    """업력 구조화 컬럼을 갱신한 공고 수"""
+
+
 class NoticeRecollectionResult(BaseModel):
     """POST /internal/notices/{notice_id}/recollect 응답"""
 

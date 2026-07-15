@@ -26,7 +26,6 @@ export function CompanyProfilePage() {
   const [industryCode, setIndustryCode] = useState('')
   const [region, setRegion] = useState('')
   const [foundedYear, setFoundedYear] = useState('')
-  const [companySize, setCompanySize] = useState('')
   const [employeeCount, setEmployeeCount] = useState('')
   const [annualRevenue, setAnnualRevenue] = useState('')
   const [saving, setSaving] = useState(false)
@@ -48,7 +47,6 @@ export function CompanyProfilePage() {
         setFoundedYear(
           profile.founded_date ? String(new Date(profile.founded_date).getFullYear()) : '',
         )
-        setCompanySize(profile.company_size ?? '')
         setEmployeeCount(
           profile.employee_count != null ? String(profile.employee_count) : '',
         )
@@ -67,7 +65,7 @@ export function CompanyProfilePage() {
     }
   }, [])
 
-  /** 예비창업자는 사업자등록 전이므로 등록번호·설립연도·규모 관련 입력이 무의미하다. */
+  /** 예비창업자는 사업자등록 전이므로 등록번호·설립연도·근로자수·매출 입력이 무의미하다. */
   const isPreFounder = businessType === '예비창업자'
   const stageOptions = isPreFounder
     ? COMPANY_STAGES.filter((stage) => stage === '예비창업')
@@ -81,7 +79,6 @@ export function CompanyProfilePage() {
       setCompanyStage('예비창업')
       setBusinessRegistrationNumber('')
       setFoundedYear('')
-      setCompanySize('')
       setEmployeeCount('')
       setAnnualRevenue('')
     } else if (value && companyStage === '예비창업') {
@@ -110,7 +107,6 @@ export function CompanyProfilePage() {
     if (region) payload.region_name = region
     const year = Number(foundedYear)
     if (foundedYear.trim() && Number.isInteger(year)) payload.founded_year = year
-    if (companySize) payload.company_size = companySize
     const employees = Number(employeeCount)
     if (employeeCount.trim() && Number.isFinite(employees))
       payload.employee_count = employees
@@ -240,22 +236,6 @@ export function CompanyProfilePage() {
                 />
               </div>
               <div>
-                <label className={FIELD_LABEL_CLASS}>기업 규모</label>
-                <select
-                  className={FIELD_INPUT_CLASS}
-                  value={companySize}
-                  disabled={isPreFounder}
-                  onChange={(event) => setCompanySize(event.target.value)}
-                >
-                  <option value="">선택 안 함</option>
-                  <option value="소기업">소기업</option>
-                  <option value="중기업">중기업</option>
-                  <option value="중견기업">중견기업</option>
-                </select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
                 <label className={FIELD_LABEL_CLASS}>상시근로자 수</label>
                 <input
                   className={FIELD_INPUT_CLASS}
@@ -265,16 +245,20 @@ export function CompanyProfilePage() {
                   onChange={(event) => setEmployeeCount(event.target.value)}
                 />
               </div>
-              <div>
-                <label className={FIELD_LABEL_CLASS}>매출액 (억원)</label>
-                <input
-                  className={FIELD_INPUT_CLASS}
-                  value={annualRevenue}
-                  placeholder="예: 12"
-                  disabled={isPreFounder}
-                  onChange={(event) => setAnnualRevenue(event.target.value)}
-                />
-              </div>
+            </div>
+            <div>
+              <label className={FIELD_LABEL_CLASS}>매출액 (억원)</label>
+              <input
+                className={FIELD_INPUT_CLASS}
+                value={annualRevenue}
+                placeholder="예: 12"
+                disabled={isPreFounder}
+                onChange={(event) => setAnnualRevenue(event.target.value)}
+              />
+              <p className="mt-1.5 text-xs text-faint">
+                업종·매출로 중소기업 여부를 자동 판정해요. 규모는 따로 고르지
+                않아도 됩니다.
+              </p>
             </div>
             <div className="rounded bg-surface-subtle p-3 text-xs leading-[1.6] text-faint">
               입력값은 계획서에서 추출한 정보를 보완하는 데 쓰여요. 비워두면

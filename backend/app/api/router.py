@@ -16,6 +16,7 @@ from app.api.notice_attachment_precollection import (
     router as notice_attachment_precollection_router,
 )
 from app.api.bookmark import router as bookmark_router
+from app.api.notice_eligibility import router as notice_eligibility_router
 
 from app.api import auth, company_profile
 
@@ -36,3 +37,4 @@ api_router.include_router(notice_normalization_backlog_router)
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(company_profile.router)
 api_router.include_router(bookmark_router)
+api_router.include_router(notice_eligibility_router)
