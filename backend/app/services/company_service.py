@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.company import CompanyProfile
 from app.repositories import company_repository
 from app.schemas.company import PRE_FOUNDER_STAGE, PRE_FOUNDER_TYPE, REGION_CODES
+from app.services.company_size import derive_company_size
 
 
 class CompanyProfileInconsistentError(Exception):
@@ -39,10 +40,11 @@ def _validate_stage_consistency(
 
 
 # 사업자등록 이후에만 의미가 있는 필드. 예비창업자로 전환되면 null로 정리한다.
+# company_size는 여기 없다 — 입력이 아니라 파생값이라, annual_revenue가 null로
+# 정리되면 _derive_and_set_company_size가 알아서 None으로 만든다.
 _PRE_FOUNDER_ONLY_FIELDS = (
     "business_registration_number",
     "founded_year",
-    "company_size",
     "employee_count",
     "annual_revenue",
 )
@@ -63,6 +65,25 @@ def _apply_pre_founder_transition(fields: dict) -> dict:
     for key in _PRE_FOUNDER_ONLY_FIELDS:
         cleaned[key] = None
     return cleaned
+
+
+def _derive_and_set_company_size(fields: dict, existing: CompanyProfile | None) -> dict:
+    """이번 요청 반영 후의 업종·매출로 company_size를 산출해 채운다.
+
+    company_size는 사용자가 고르는 값이 아니라 파생값이라, 저장할 때마다
+    최종 상태(이번 요청 + 기존 저장값)를 기준으로 다시 계산한다. 부분
+    갱신이라 이번 요청에 industry_code/annual_revenue가 없으면 기존 값을
+    그대로 쓴다.
+    """
+    industry_code = fields.get(
+        "industry_code", existing.industry_code if existing else None
+    )
+    annual_revenue = fields.get(
+        "annual_revenue", existing.annual_revenue if existing else None
+    )
+    result = dict(fields)
+    result["company_size"] = derive_company_size(industry_code, annual_revenue)
+    return result
 
 
 def _convert_to_column_fields(fields: dict) -> dict:
@@ -121,6 +142,8 @@ async def save_my_profile(
         "company_stage", existing.company_stage if existing else None
     )
     _validate_stage_consistency(effective_business_type, effective_company_stage)
+
+    fields = _derive_and_set_company_size(fields, existing)
 
     profile = await company_repository.upsert_primary(
         session, user_id, _convert_to_column_fields(fields)

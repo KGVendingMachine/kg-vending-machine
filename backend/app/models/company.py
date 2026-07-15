@@ -29,7 +29,7 @@ class CompanyProfile(Base):
     business_type: Mapped[str | None] = mapped_column(String(50))
     """사업자유형 개인사업자/법인사업자/예비창업자"""
     company_stage: Mapped[str | None] = mapped_column(String(50))
-    """예비창업/초기창업/도약/소상공인"""
+    """예비창업/초기창업/도약 (소상공인은 단계가 아니라 규모라 company_size로 뺌)"""
     region_code: Mapped[str | None] = mapped_column(String(20))
     """사업장 행정표준코드"""
     region_name: Mapped[str | None] = mapped_column(String(100))
@@ -49,7 +49,8 @@ class CompanyProfile(Base):
     business_registration_number: Mapped[str | None] = mapped_column(String(20))
     """사업자등록번호"""
     company_size: Mapped[str | None] = mapped_column(String(20))
-    """기업 규모 (소기업/중기업/중견기업)"""
+    """기업 규모. 사용자 입력이 아니라 업종·매출에서 산출한 파생값
+    (services/company_size.derive_company_size) — 현재는 중소기업/중견기업."""
     is_primary: Mapped[bool] = mapped_column(
         Boolean, server_default=false(), nullable=False
     )

@@ -19,8 +19,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # 사업자유형 (models/company.py business_type 컬럼과 동일한 값 집합)
 BUSINESS_TYPES = ("개인사업자", "법인사업자", "예비창업자")
 
-# 기업 단계 (company_stage 컬럼)
-COMPANY_STAGES = ("예비창업", "초기창업", "도약", "소상공인")
+# 기업 단계 (company_stage 컬럼). 소상공인은 단계가 아니라 규모라 여기 두지
+# 않는다 — 규모는 company_size로 별도 산출한다(services/company_size.py).
+COMPANY_STAGES = ("예비창업", "초기창업", "도약")
 
 # 예비창업자만 가질 수 있는 기업 단계. business_type과의 정합성 검증에 사용.
 PRE_FOUNDER_TYPE = "예비창업자"
@@ -74,7 +75,6 @@ KSIC_INDUSTRIES: dict[str, str] = {
 _STRING_FIELDS = (
     "representative_name",
     "business_registration_number",
-    "company_size",
     "business_type",
     "company_stage",
     "industry_code",
@@ -87,14 +87,13 @@ class CompanyProfileUpdate(BaseModel):
 
     representative_name: str | None = Field(None, max_length=100)
     business_registration_number: str | None = Field(None, max_length=20)
-    company_size: str | None = Field(None, max_length=20)
+    # company_size는 사용자 입력을 받지 않는다 — 업종·매출에서 서버가 산출한다
+    # (services/company_size.derive_company_size). 응답 스키마에만 남긴다.
     employee_count: int | None = Field(None, ge=0)
     business_type: str | None = Field(
         None, description="개인사업자 / 법인사업자 / 예비창업자"
     )
-    company_stage: str | None = Field(
-        None, description="예비창업 / 초기창업 / 도약 / 소상공인"
-    )
+    company_stage: str | None = Field(None, description="예비창업 / 초기창업 / 도약")
     industry_code: str | None = Field(None, description="KSIC 대분류 코드 (A~S)")
     region_name: str | None = Field(None, description="사업장 시/도 이름")
     founded_year: int | None = Field(None, ge=1900, description="설립연도 (예: 2021)")
