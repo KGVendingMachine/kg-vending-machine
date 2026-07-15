@@ -10,6 +10,7 @@ _SECTION_NUMBER_RE = re.compile(r"section(\d+)\.xml$")
 
 
 def _section_number(name: str) -> int:
+    """section{n}.xml 파일명에서 숫자만 뽑는다 (없으면 0)."""
     match = _SECTION_NUMBER_RE.search(name)
     return int(match.group(1)) if match else 0
 
@@ -20,15 +21,8 @@ _IMAGE_EXTENSIONS = (".bmp", ".jpg", ".jpeg", ".png", ".gif", ".tif", ".tiff")
 def _reject_unsafe_xml(xml_data: bytes) -> None:
     """XML 엔티티 확장 공격("billion laughs") 방지.
 
-    정상적인 HWPX 본문 XML(Contents/section*.xml)은 그냥 문단·서식 마크업이라
-    DOCTYPE/커스텀 엔티티를 쓸 이유가 없다. 그런데 표준 라이브러리
-    xml.etree.ElementTree는 엔티티 확장 개수·깊이에 제한을 두지 않아서, 이
-    로더가 그대로 파싱하는 파일(사업계획서 업로드로 사용자가 직접 올리는
-    .hwpx도 포함 — ZIP 안의 XML이라 여기로 그대로 들어옴)에 악의적으로 중첩
-    엔티티를 넣으면 몇백 바이트짜리 파일이 파싱 시점에 기하급수적으로
-    부풀어(실측: 365바이트 → 30만자, 깊이 몇 단만 더 늘려도 기가바이트 단위)
-    서버 메모리를 고갈시킬 수 있다(DoS). DOCTYPE 선언 자체를 막아 원천
-    차단한다 — 정상 HWPX 파일은 DOCTYPE이 없으므로 오탐 위험이 없다.
+    ElementTree는 엔티티 확장에 제한이 없어(실측: 365바이트 → 30만자) DoS가
+    가능하므로, 정상 HWPX엔 없는 DOCTYPE 선언 자체를 막아 원천 차단한다.
     """
     if b"<!DOCTYPE" in xml_data:
         raise RuntimeError(
@@ -36,17 +30,16 @@ def _reject_unsafe_xml(xml_data: bytes) -> None:
         )
 
 
-# 압축 해제 폭탄(zip bomb) 방지용 상한. 실측: 100KB짜리 압축 항목을 제한
-# 없이 풀면 100MB로 부풀어 오름(0.3초) — HWPX는 사업계획서 업로드로 로그인한
-# 일반 사용자가 직접 올릴 수 있는 파일이라, 압축률이 비정상적으로 높은 ZIP
-# 항목 하나로 서버 메모리를 고갈시키는 게 가능했다. 실제 문서의 본문 XML·
-# 임베드 이미지가 이 크기를 넘는 경우는 없다고 보고 넉넉하게 잡은 값.
+# 압축 해제 폭탄(zip bomb) 방지용 상한. 실측: 100KB 압축 항목이 제한 없이
+# 풀면 100MB로 부풀어 오름(0.3초) — 사용자가 직접 올리는 HWPX라 악용 가능.
 _MAX_UNCOMPRESSED_ENTRY_SIZE = 100 * 1024 * 1024
 
 
 def _read_zip_entry_safely(zf: zipfile.ZipFile, name: str) -> bytes:
-    """압축 해제 전 선언된 크기(ZipInfo.file_size)를 먼저 확인해, 과도하게
-    큰 항목은 실제로 풀어보지도 않고 거부한다."""
+    """압축 해제 전 선언된 크기(ZipInfo.file_size)를 먼저 확인해 과도한 항목을 거부한다.
+
+    실제로 풀어보기 전에 거부하므로 압축 해제 자체가 일어나지 않는다.
+    """
     info = zf.getinfo(name)
     if info.file_size > _MAX_UNCOMPRESSED_ENTRY_SIZE:
         raise RuntimeError(
@@ -58,10 +51,7 @@ def _read_zip_entry_safely(zf: zipfile.ZipFile, name: str) -> bytes:
 def extract_embedded_images(file_path: str) -> list[tuple[bytes, str]]:
     """HWPX 안에 그림으로 삽입된 표/차트 등의 원본 이미지를 꺼낸다.
 
-    본문(Contents/section*.xml)의 t 태그에는 텍스트로 안 남고 통째로
-    그림으로 붙여넣은 슬라이드(예: SWOT/PEST 분석)가 실제 샘플에서
-    발견되어, 이 이미지들을 따로 OCR에 넘기기 위해 추출한다.
-    Preview/PrvImage.png는 문서 전체 축소 미리보기라 내용이 아니므로 뺀다.
+    통째로 그림으로 붙여넣은 슬라이드(SWOT/PEST 등)를 OCR에 넘기기 위해 추출한다.
     """
     images = []
     with zipfile.ZipFile(file_path, "r") as zf:
@@ -85,14 +75,13 @@ class HWPXLoader(BaseLoader):
         self.file_path = file_path
 
     def lazy_load(self) -> Iterator[Document]:
+        """HWPX 본문 section*.xml을 순서대로 파싱해 문단 텍스트로 합친다."""
         text_content = []
 
         try:
             with zipfile.ZipFile(self.file_path, "r") as zf:
-                # HWPX 내부 본문 XML 파일 목록 (Contents/section0.xml, section1.xml ...)
-                # 문자열로 그냥 정렬하면 section10.xml이 section2.xml보다
-                # 앞에 와서 섹션이 10개 넘는 문서는 본문 순서가 뒤섞인다
-                # (실제로 재현해서 확인함) — 번호를 뽑아 숫자로 정렬한다.
+                # 문자열 정렬은 section10.xml이 section2.xml보다 앞에 와서
+                # 섹션 10개 넘는 문서의 순서가 뒤섞이므로, 숫자로 정렬한다.
                 section_files = sorted(
                     (
                         name
@@ -107,18 +96,8 @@ class HWPXLoader(BaseLoader):
                     _reject_unsafe_xml(xml_data)
                     root = ET.fromstring(xml_data)
 
-                    # HWPX(OWPML) 표준의 텍스트 태그는 보통 't' 또는 네임스페이스를
-                    # 포함한 '{...}t' 형태이고, 문단 태그는 'p'/'{...}p' 형태다.
-                    # 한 문단(<hp:p>) 안에서도 글자 서식(굵게/색 등)이 바뀌는
-                    # 지점마다 <hp:run>이 나뉘어 <hp:t>가 여러 개 생긴다 — 이걸
-                    # 문단 구분 없이 전부 개별 줄로 이어붙이면 한 문장이 서식
-                    # 경계에서 줄바꿈으로 잘린다(실제 샘플에서 "어르신들의 건강
-                    # 상태에 대한"과 "주관적 판단으로 대처 오류 발생"이 한
-                    # 문장인데 두 줄로 쪼개지는 것을 확인함). 'p' 태그를 만날
-                    # 때마다 지금까지 모은 run 텍스트를 한 문단으로 확정하고,
-                    # 그 사이에 나온 't' 텍스트는 구분자 없이 이어붙인다 — 표
-                    # 셀 안에 중첩된 문단도 자기 차례에 똑같이 처리되므로 표
-                    # 안팎을 구분해서 따로 다룰 필요가 없다.
+                    # 한 문단 안에서도 서식이 바뀌는 지점마다 <hp:run>이 나뉘어
+                    # <hp:t>가 여러 개 생기므로, 'p' 태그 단위로 run 텍스트를 모아 확정한다.
                     current_paragraph: list[str] = []
                     for node in root.iter():
                         if node.tag.endswith("}p") or node.tag == "p":
