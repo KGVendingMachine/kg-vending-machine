@@ -110,7 +110,6 @@ def _build_user_prompt(
         f"[공고문 발췌]\n{evidence_block}\n\n"
         f"[판정할 요건]\n{criteria_block}"
     )
-    print("##### build_userpormpt()", result)
     return result
 
 
