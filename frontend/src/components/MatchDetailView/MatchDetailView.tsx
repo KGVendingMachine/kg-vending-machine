@@ -1,5 +1,7 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { ScoreGauge } from '../ScoreGauge/ScoreGauge'
+import { PATHS } from '../../routes/paths'
 import type { MatchedNotice } from '../../types/notice'
 
 const APPLICATION_CHECKLIST = [
@@ -66,9 +68,18 @@ export function MatchDetailView({
   backLabel,
   onCompareClick,
 }: MatchDetailViewProps) {
+  const navigate = useNavigate()
+
   // 신청 전 체크리스트는 이 화면에서만 쓰는 로컬 진행 표시라 저장하지 않고,
   // 공고를 나갔다 들어오면 초기화된다.
   const [checkedItems, setCheckedItems] = useState<Set<string>>(new Set())
+
+  // 기업 프로필(매출액·상시근로자수·기업규모·사업자유형 등)이 비어 있으면
+  // 판정에 쓸 근거가 없어 "정보부족"만 나온다 — 프로필을 채우면 해결되는
+  // 문제라는 걸 알려준다(정보부족 판정 개수를 세서, 하나라도 있을 때만).
+  const infoInsufficientCount = notice.secondaryFilterReasons.filter(
+    (reason) => reason.status === '정보부족',
+  ).length
 
   function toggleChecklistItem(label: string) {
     setCheckedItems((current) => {
@@ -353,6 +364,22 @@ export function MatchDetailView({
               <div className="mb-1.5 text-[15px] font-extrabold">
                 공고 원문 정밀 판정
               </div>
+              {infoInsufficientCount > 0 ? (
+                <div className="mb-2.5 flex items-center justify-between gap-2.5 rounded bg-primary-soft px-3 py-2 text-[12.5px]">
+                  <span>
+                    [정보부족] 항목은 기업 프로필(매출액·상시근로자 수·기업규모·
+                    사업자유형 등)이 비어 있어 판정 근거가 부족했던 항목이에요.
+                    프로필을 채우면 더 정확한 결과를 볼 수 있어요.
+                  </span>
+                  <button
+                    type="button"
+                    className="shrink-0 cursor-pointer whitespace-nowrap rounded border-none bg-primary px-2.5 py-1.5 text-[12px] font-semibold text-white"
+                    onClick={() => navigate(PATHS.COMPANY_PROFILE)}
+                  >
+                    프로필 채우기
+                  </button>
+                </div>
+              ) : null}
               <div className="mb-[26px] flex flex-col gap-2 text-[12.5px] leading-[1.6]">
                 {notice.secondaryFilterReasons.map((reason, index) => (
                   <div
