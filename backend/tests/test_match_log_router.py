@@ -1,10 +1,16 @@
 from datetime import date
 
 import pytest
+from fastapi import BackgroundTasks
 
 from sqlalchemy import select
 
-from app.api.match_log import create_match_log, delete_match_log, list_match_results
+from app.api.match_log import (
+    _run_matching_job,
+    create_match_log,
+    delete_match_log,
+    list_match_results,
+)
 from app.models.business_plan import BusinessPlan
 from app.models.company import CompanyProfile
 from app.models.match import MatchLog, MatchReport, MatchResult
@@ -163,11 +169,22 @@ async def test_create_match_log_scores_and_persists_results(db_session):
     # 로컬 DB에 실제 정규화된 공고가 있어도 밀려나지 않게 여유 있게 요청한다.
     response = await create_match_log(
         payload=MatchLogCreateRequest(business_plan_id=plan.id, max_results=50),
+        background_tasks=BackgroundTasks(),
         current_user=user,
         session=db_session,
     )
 
-    assert response.run_status == JobStatus.COMPLETED
+    # 매칭(OCR·정규화·임베딩·LLM 판정)이 실측 몇 분까지 걸려 요청-응답 안에서
+    # 동기로 안 끝낸다 — 즉시 processing으로 응답하고 백그라운드로 넘어간다
+    # (2026-07-15, 배포에서 프록시 게이트웨이 타임아웃에 걸리던 문제 수정).
+    assert response.run_status == JobStatus.PROCESSING
+
+    # 실제 배포에서는 _execute_matching_job이 별도 세션을 열어 백그라운드로
+    # 돌지만, 테스트는 트랜잭션 격리를 위해 내부 로직(_run_matching_job)에
+    # db_session을 직접 넣어 실행한다(test_run_normalization_job_* 패턴과 동일).
+    await _run_matching_job(
+        db_session, response.id, business_plan_id=plan.id, max_results=50
+    )
 
     results = await list_match_results(
         match_log_id=response.id,
@@ -185,10 +202,13 @@ async def test_create_match_log_scores_and_persists_results(db_session):
     assert all(r.notice_id != low_quality_notice.id for r in results)
 
 
-async def test_create_match_log_fails_when_no_normalized_notices(
+async def test_create_match_log_marks_failed_when_no_normalized_notices(
     db_session, monkeypatch
 ):
-    """정규화된 공고가 0건이면 빈 결과로 완료하지 않고 409로 실패해야 한다."""
+    """정규화된 공고가 0건이면 빈 결과로 완료 처리하지 않고 run_status가
+    failed로 남아야 한다. 실행이 백그라운드로 넘어가므로(2026-07-15) 더 이상
+    create_match_log 자체가 409를 던지지 않는다 — 실패는 job 실행 이후에만
+    확인 가능하다."""
     user = await _make_user(db_session, "match-empty-user")
     profile = CompanyProfile(user_id=user.id)
     db_session.add(profile)
@@ -202,17 +222,19 @@ async def test_create_match_log_fails_when_no_normalized_notices(
         match_log_repository, "list_normalized_notice_candidates", _no_candidates
     )
 
-    with pytest.raises(Exception) as exc_info:
-        await create_match_log(
-            payload=MatchLogCreateRequest(business_plan_id=plan.id),
-            current_user=user,
-            session=db_session,
-        )
+    response = await create_match_log(
+        payload=MatchLogCreateRequest(business_plan_id=plan.id),
+        background_tasks=BackgroundTasks(),
+        current_user=user,
+        session=db_session,
+    )
+    assert response.run_status == JobStatus.PROCESSING
 
-    assert getattr(exc_info.value, "status_code", None) == 409
+    await _run_matching_job(
+        db_session, response.id, business_plan_id=plan.id, max_results=10
+    )
 
-    # 실행 이력은 failed로 남는다.
-    row = await db_session.execute(select(MatchLog).where(MatchLog.user_id == user.id))
+    row = await db_session.execute(select(MatchLog).where(MatchLog.id == response.id))
     log = row.scalar_one()
     assert log.run_status == JobStatus.FAILED.value
 
@@ -235,6 +257,7 @@ async def test_delete_match_log_removes_log_and_children(db_session):
 
     created = await create_match_log(
         payload=MatchLogCreateRequest(business_plan_id=plan.id, max_results=50),
+        background_tasks=BackgroundTasks(),
         current_user=user,
         session=db_session,
     )
@@ -295,6 +318,7 @@ async def test_create_match_log_rejects_unanalyzed_plan(db_session):
     with pytest.raises(Exception) as exc_info:
         await create_match_log(
             payload=MatchLogCreateRequest(business_plan_id=plan.id),
+            background_tasks=BackgroundTasks(),
             current_user=user,
             session=db_session,
         )

@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
-from app.db.session import get_db
+from app.db.session import async_session_factory, get_db
 from app.models.company import CompanyProfile
 from app.models.match import MatchLog
 from app.models.user import User
@@ -18,6 +20,8 @@ from app.schemas.match_log import (
     SecondaryFilteringLogResponse,
 )
 from app.services.matching_service import MatchingNotReadyError, run_matching
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/match-logs", tags=["match-logs"])
 
@@ -71,14 +75,79 @@ def _result_to_response(
     )
 
 
+async def _run_matching_job(
+    session: AsyncSession, log_id: int, *, business_plan_id: int, max_results: int
+) -> None:
+    """매칭(OCR·정규화·임베딩·LLM 판정)을 실행하고 log 상태를 갱신한다.
+
+    실측 2~3분까지 걸려(2026-07-15, match_log_id=119 기준 2분27초) 요청-응답
+    안에서 동기로 처리하면 Vercel 같은 리버스 프록시의 게이트웨이 타임아웃
+    (보통 30초 안팎)에 먼저 끊긴다 — 백엔드는 결국 성공해서 DB에 저장하는데도
+    사용자에게는 실패로 보이는 원인이었다. run_status를 폴링 대상으로 써서
+    완료를 기다리게 한다.
+    """
+    log = await session.get(MatchLog, log_id)
+    plan = await get_owned_by_user(session, business_plan_id, log.user_id)
+    profile = await session.get(CompanyProfile, log.company_profile_id)
+    try:
+        await run_matching(
+            session,
+            log=log,
+            plan=plan,
+            profile=profile,
+            max_results=max_results,
+        )
+    except MatchingNotReadyError as exc:
+        logger.info("매칭 실패 (match_log_id=%s): %s", log_id, exc)
+        log.run_status = JobStatus.FAILED.value
+        log.completed_at = None
+        await session.commit()
+        return
+    await session.commit()
+
+
+async def _execute_matching_job(
+    log_id: int, *, business_plan_id: int, max_results: int
+) -> None:
+    """백그라운드 진입점. 요청 스코프 session이 아니라 새 세션을 직접 연다
+    (notice_collection.py의 배치 수집 실행기와 동일한 이유 — 요청이 끝나면
+    요청 스코프 session은 닫힌다). _run_matching_job이 잡는 예외 외의 실패
+    (세션 확보 실패 등)까지 여기서 잡아야 job이 processing에 영원히
+    멈추지 않는다(_execute_notice_ocr_job과 같은 이유)."""
+    try:
+        async with async_session_factory() as session:
+            await _run_matching_job(
+                session,
+                log_id,
+                business_plan_id=business_plan_id,
+                max_results=max_results,
+            )
+    except Exception:
+        logger.exception("매칭 작업 실행 실패 (match_log_id=%s)", log_id)
+        async with async_session_factory() as session:
+            log = await session.get(MatchLog, log_id)
+            if log is not None:
+                log.run_status = JobStatus.FAILED.value
+                log.completed_at = None
+                await session.commit()
+
+
 @router.post(
     "",
     response_model=MatchLogResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Run notice matching for a normalized business plan",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Start notice matching for a normalized business plan",
+    description=(
+        "매칭 실행을 백그라운드로 시작하고 즉시 processing 상태로 응답한다 — "
+        "OCR·정규화·임베딩·LLM 판정을 합치면 실측 2~3분까지 걸려 요청-응답 "
+        "안에서 동기로 처리할 수 없다(프록시 게이트웨이 타임아웃에 걸림). "
+        "GET /match-logs/{id}로 run_status가 completed/failed가 될 때까지 "
+        "폴링해야 한다."
+    ),
 )
 async def create_match_log(
     payload: MatchLogCreateRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
@@ -109,24 +178,15 @@ async def create_match_log(
         run_status=JobStatus.PROCESSING.value,
         query_json=plan.analysis_json,
     )
-    try:
-        await run_matching(
-            session,
-            log=log,
-            plan=plan,
-            profile=profile,
-            max_results=payload.max_results,
-        )
-    except MatchingNotReadyError as exc:
-        # 실행 이력은 남기되(실패 원인 추적용) 빈 결과로 완료 처리하지 않는다.
-        log.run_status = JobStatus.FAILED.value
-        log.completed_at = None
-        await session.commit()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
     await session.commit()
+
+    background_tasks.add_task(
+        _execute_matching_job,
+        log.id,
+        business_plan_id=plan.id,
+        max_results=payload.max_results,
+    )
+
     return _to_response(log, plan.title)
 
 
