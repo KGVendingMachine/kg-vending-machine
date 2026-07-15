@@ -37,7 +37,10 @@ _BATCH_CHUNK_SIZE = 30
 def _has_active_backlog_job() -> bool:
     return any(
         job.status
-        in (NormalizationBacklogJobStatus.PENDING, NormalizationBacklogJobStatus.RUNNING)
+        in (
+            NormalizationBacklogJobStatus.PENDING,
+            NormalizationBacklogJobStatus.RUNNING,
+        )
         for job in _JOBS.values()
     )
 
@@ -106,7 +109,9 @@ async def start_normalization_backlog(
             detail="이미 실행 중인 정규화 백로그 작업이 있습니다.",
         )
 
-    notice_ids = await get_notice_ids_pending_normalization(session, limit=request.limit)
+    notice_ids = await get_notice_ids_pending_normalization(
+        session, limit=request.limit
+    )
 
     job_id = str(uuid.uuid4())
     _JOBS[job_id] = NormalizationBacklogJobStatusResponse(

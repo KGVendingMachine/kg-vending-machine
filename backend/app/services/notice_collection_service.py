@@ -853,7 +853,10 @@ async def _process_kstartup_item(
             elif rcrt_prgs_yn == "N":
                 status, is_actionable = "마감", False
             else:
-                status, is_actionable = "확인필요", False  # Y/N 아니면 마감으로 단정 안 함
+                status, is_actionable = (
+                    "확인필요",
+                    False,
+                )  # Y/N 아니면 마감으로 단정 안 함
             apply_url = item.get("biz_aply_url") or item.get("aply_mthd_onli_rcpt_istc")
 
             organization_id = None

@@ -107,7 +107,9 @@ async def _run_attachment_ocr_precollection(session: "AsyncSession") -> None:
     try:
         result = await precollect_notice_attachment_ocr(
             background_tasks,
-            request=NoticeAttachmentPrecollectRequest(limit=_DAILY_ATTACHMENT_OCR_LIMIT),
+            request=NoticeAttachmentPrecollectRequest(
+                limit=_DAILY_ATTACHMENT_OCR_LIMIT
+            ),
             session=session,
         )
         # 요청 컨텍스트가 없어 BackgroundTasks가 자동 실행되지 않으므로 직접 실행한다.
