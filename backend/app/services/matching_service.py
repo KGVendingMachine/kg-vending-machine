@@ -8,10 +8,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models.business_plan import BusinessPlan
+from app.models.category import CategoryName, KgCategory
 from app.models.company import CompanyProfile
 from app.models.match import MatchLog, MatchResult
 from app.models.notice import Notice
@@ -375,13 +377,13 @@ def _score_notice(
     weakness = _weakness(cautions, item_fit_score, business_fit_score)
     strategy = _strategy_suggestion(normalized_notice, growth_score)
 
-    logger.info(
-        "🧠 AI 정밀 판정 근거 (notice_id=%s): 💪 강점=%s | ⚠️ 주의=%s | 💡 제안=%s",
-        notice.id,
-        strengths,
-        weakness,
-        strategy,
-    )
+    # logger.info(
+    #     "🧠 AI 정밀 판정 근거 (notice_id=%s): 💪 강점=%s | ⚠️ 주의=%s | 💡 제안=%s",
+    #     notice.id,
+    #     strengths,
+    #     weakness,
+    #     strategy,
+    # )
 
     result_json = {
         "notice_quality": {"status": "passed", "missing_fields": []},
@@ -721,6 +723,21 @@ async def run_matching(
             "매칭 기준을 충족하는 공고가 없습니다. 공고 정규화 품질을 확인해주세요."
         )
 
+    # R&D(기술개발) 공고는 지원자격·평가기준이 원문에 길게 나열되는 경우가
+    # 많아, 2차 필터링(임베딩 유사도 검색)에서 일반 공고보다 더 넓게 훑어야
+    # 자격요건 근거를 놓치지 않는다 — run_secondary_filtering에 넘길
+    # notice_id 집합을 여기서 category_id로 가려낸다.
+    rd_category_id = (
+        await session.execute(
+            select(KgCategory.id).where(KgCategory.name == CategoryName.TECH)
+        )
+    ).scalar_one_or_none()
+    rd_notice_ids = (
+        {notice.id for notice, _ in passed if notice.category_id == rd_category_id}
+        if rd_category_id is not None
+        else set()
+    )
+
     # 2차 필터링(docs/matching-pipeline.md 4단계) — 1차 필터링(품질+자격요건)을
     # 통과한 후보에 한해서만 공고 PDF 임베딩·유사도 검색을 수행한다(전체
     # 후보를 다 임베딩하면 비용이 크므로, 3단계에서 명백히 무관한 공고를
@@ -730,6 +747,7 @@ async def run_matching(
         session,
         business_plan_id=plan.id,
         candidate_notice_ids=[notice.id for notice, _ in passed],
+        rd_notice_ids=rd_notice_ids,
     )
     # 유사도 상위 K건만 LLM으로 정밀 판정한다(docs/secondary-filtering-llm-judge-guide.md)
     # — final_scores는 판정된 공고는 판정 점수, 나머지는 기존 유사도 점수를 담는다.

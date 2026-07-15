@@ -53,6 +53,15 @@ _N_RESULTS_PER_QUERY = 20
 # 판정 프롬프트가 길어지기만 하고, 가장 유사도 높은 몇 개면 충분하다.
 _MAX_EVIDENCE_CHUNKS_PER_NOTICE = 3
 
+# R&D(기술개발) 공고는 지원자격·평가기준·우대조건이 번호 목록·표로 길게
+# 나열되는 경우가 많아, 자격요건 문장이 상위 20개 청크 밖에 있을 위험이
+# 일반 공고보다 크다(실측 근거는 없지만 R&D 공고 원문 분량이 유의하게 김).
+# n_results/근거 청크 개수는 이미 계산된 임베딩 벡터로 Chroma 인덱스를 더
+# 넓게 훑는 것뿐이라 추가 OpenAI 비용이 없다 — R&D만 넉넉하게 잡아도 비용
+# 부담이 없어 전체를 다 올리는 대신 R&D 카테고리에만 적용한다.
+_N_RESULTS_PER_QUERY_RD = 40
+_MAX_EVIDENCE_CHUNKS_PER_NOTICE_RD = 5
+
 
 @dataclass(frozen=True)
 class SecondaryFilteringSkip:
@@ -99,11 +108,16 @@ async def run_secondary_filtering(
     *,
     business_plan_id: int,
     candidate_notice_ids: list[int],
+    rd_notice_ids: set[int] | None = None,
 ) -> SecondaryFilteringResult:
     """1차 필터링 통과 후보의 2차 필터링(유사도) 결과를 반환한다.
 
     임베딩이 없거나 만들 수 없는 공고/사업계획서는 skips에 사유와 함께
     기록되고 scores에서는 빠진다(예외를 던지지 않음).
+
+    rd_notice_ids로 표시된 공고는 R&D 공고 원문이 유의하게 길다는 특성을
+    감안해 _N_RESULTS_PER_QUERY_RD/_MAX_EVIDENCE_CHUNKS_PER_NOTICE_RD로 더
+    넓게 검색한다(matching_service.run_matching이 category_id로 판별해 넘김).
     """
     result = SecondaryFilteringResult()
     if not candidate_notice_ids:
@@ -171,30 +185,43 @@ async def run_secondary_filtering(
     if plan_vectors is None or len(plan_vectors) == 0:
         return result
 
+    rd_ids = rd_notice_ids or set()
+    rd_embedded_ids = [nid for nid in embedded_notice_ids if nid in rd_ids]
+    other_embedded_ids = [nid for nid in embedded_notice_ids if nid not in rd_ids]
+    # R&D 후보와 그 외 후보를 같은 n_results로 한 번에 조회하면 R&D만 넓게
+    # 볼 수 없다 — 그룹별로 나눠 각자 맞는 n_results로 따로 조회한다.
+    query_groups = [
+        (other_embedded_ids, _N_RESULTS_PER_QUERY),
+        (rd_embedded_ids, _N_RESULTS_PER_QUERY_RD),
+    ]
+
     notice_collection = get_notice_collection()
     best_score_by_notice: dict[int, float] = {}
     # (notice_id, chunk_content) -> 그 청크의 최소 거리. 같은 청크가 여러
     # 사업계획서 청크 쿼리에서 반복 매칭될 수 있어(중복 근거를 LLM에 그대로
     # 넘기지 않도록) content로 중복 제거하면서 가장 좋은 거리만 남긴다.
     best_distance_by_chunk: dict[tuple[int, str], float] = {}
-    for vector in plan_vectors:
-        query_result = await asyncio.to_thread(
-            notice_collection.query,
-            query_embeddings=[vector],
-            n_results=_N_RESULTS_PER_QUERY,
-            where={"notice_id": {"$in": embedded_notice_ids}},
-        )
-        metadatas = (query_result.get("metadatas") or [[]])[0]
-        distances = (query_result.get("distances") or [[]])[0]
-        documents = (query_result.get("documents") or [[]])[0]
-        for metadata, distance, document in zip(metadatas, distances, documents):
-            notice_id = metadata["notice_id"]
-            score = _similarity_to_score(distance)
-            if score > best_score_by_notice.get(notice_id, -1.0):
-                best_score_by_notice[notice_id] = score
-            chunk_key = (notice_id, document)
-            if distance < best_distance_by_chunk.get(chunk_key, float("inf")):
-                best_distance_by_chunk[chunk_key] = distance
+    for group_notice_ids, n_results in query_groups:
+        if not group_notice_ids:
+            continue
+        for vector in plan_vectors:
+            query_result = await asyncio.to_thread(
+                notice_collection.query,
+                query_embeddings=[vector],
+                n_results=n_results,
+                where={"notice_id": {"$in": group_notice_ids}},
+            )
+            metadatas = (query_result.get("metadatas") or [[]])[0]
+            distances = (query_result.get("distances") or [[]])[0]
+            documents = (query_result.get("documents") or [[]])[0]
+            for metadata, distance, document in zip(metadatas, distances, documents):
+                notice_id = metadata["notice_id"]
+                score = _similarity_to_score(distance)
+                if score > best_score_by_notice.get(notice_id, -1.0):
+                    best_score_by_notice[notice_id] = score
+                chunk_key = (notice_id, document)
+                if distance < best_distance_by_chunk.get(chunk_key, float("inf")):
+                    best_distance_by_chunk[chunk_key] = distance
 
     result.scores = best_score_by_notice
     evidence_by_notice: dict[int, list[EvidenceChunk]] = {}
@@ -204,7 +231,11 @@ async def run_secondary_filtering(
         )
     result.evidence = {
         notice_id: sorted(chunks, key=lambda chunk: chunk.distance)[
-            :_MAX_EVIDENCE_CHUNKS_PER_NOTICE
+            : (
+                _MAX_EVIDENCE_CHUNKS_PER_NOTICE_RD
+                if notice_id in rd_ids
+                else _MAX_EVIDENCE_CHUNKS_PER_NOTICE
+            )
         ]
         for notice_id, chunks in evidence_by_notice.items()
     }
