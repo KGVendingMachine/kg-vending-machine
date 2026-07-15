@@ -38,7 +38,11 @@ class Notice(Base):
     title: Mapped[str | None] = mapped_column(String(500))
     """공고명"""
     target_business_years_max: Mapped[int | None] = mapped_column(Integer)
-    """업력 상한(년), NULL=제한없음"""
+    """업력 상한(년), NULL=제한없음. K-Startup biz_enyy의 'N년미만' 최댓값
+    (해석 A, services/notice_business_years.parse_biz_enyy)."""
+    target_allows_prestartup: Mapped[bool | None] = mapped_column(Boolean)
+    """공고가 예비창업자를 대상에 포함하는가. NULL=업력 제한 정보 없음
+    (biz_enyy 없음/미백필 → 필터에서 permissive 통과)."""
     application_start_date: Mapped[date | None] = mapped_column(Date)
     """신청시작일"""
     application_end_date: Mapped[date | None] = mapped_column(Date)

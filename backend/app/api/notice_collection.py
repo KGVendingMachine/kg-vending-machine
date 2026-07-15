@@ -49,6 +49,7 @@ from app.services.notice_collection_service import (
     NoticeRecollectionNotFoundError,
     UnsupportedRecollectionSourceError,
     backfill_bizinfo_nationwide_regions,
+    backfill_notice_business_years,
     backfill_notice_categories,
     backfill_notice_region_codes,
     collect_all_bizinfo_notices,
@@ -276,6 +277,23 @@ async def backfill_bizinfo_region(session: AsyncSession = Depends(get_db)):
 )
 async def backfill_region_codes(session: AsyncSession = Depends(get_db)):
     result = await backfill_notice_region_codes(session)
+    return RegionCodeBackfillResult(**result)
+
+
+@router.post(
+    "/backfill-business-years",
+    response_model=RegionCodeBackfillResult,
+    summary="공고 업력 구조화 컬럼 전체 보정",
+    description=(
+        "1차 필터의 업력 축을 위해 K-Startup 공고 전체의 biz_enyy를 저장된 "
+        "원본 기준으로 다시 파싱해 target_business_years_max/"
+        "target_allows_prestartup 컬럼을 채운다(해석 A: 누적 상한). "
+        "컬럼 도입 이전에 수집된 공고를 소급 반영하는 용도이며 외부 API를 "
+        "다시 호출하지 않는다."
+    ),
+)
+async def backfill_business_years(session: AsyncSession = Depends(get_db)):
+    result = await backfill_notice_business_years(session)
     return RegionCodeBackfillResult(**result)
 
 
