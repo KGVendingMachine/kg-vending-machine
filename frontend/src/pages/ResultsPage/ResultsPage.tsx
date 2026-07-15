@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom'
+import { ComparisonReport } from '../../components/ComparisonReport/ComparisonReport'
 import { NoticeCard } from '../../components/NoticeCard/NoticeCard'
 import { getMatchLog, formatMatchLogDate, listMatchLogs } from '../../api/matchLogs'
 import type { MatchLog } from '../../api/matchLogs'
@@ -132,7 +133,8 @@ export function ResultsPage() {
   }
 
   return (
-    <div className="flex flex-1 flex-col min-h-0">
+    <>
+      <div className="no-print flex flex-1 flex-col min-h-0">
       {matchLog ? (
         <div className="flex items-center gap-2.5 border-b border-[#eef0f2] bg-primary-soft px-6 py-2.5 text-[13px]">
           <span className="font-extrabold">
@@ -236,6 +238,6 @@ export function ResultsPage() {
       </div>
 
       <ComparisonReport notices={list} matchLog={matchLog} profile={profile} />
-    </div>
+    </>
   )
 }

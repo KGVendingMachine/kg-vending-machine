@@ -94,8 +94,9 @@ export async function apiFetch<T>(
     } catch {
       // 이미 로그인 페이지라면 다시 보낼 필요가 없다 — 헤더가 모든 페이지에
       // 떠 있어 로그인 페이지에서도 getMe()가 호출되는데, 여기서 무조건
-      // 리다이렉트하면 새로고침이 반복되는 루프가 생긴다.
-      if (window.location.pathname !== PATHS.LOGIN) {
+      // 리다이렉트하면 새로고침이 반복되는 루프가 생긴다. redirectOn401이
+      // false인 호출(비로그인 방문자도 도는 백그라운드 조회)은 아예 보내지 않는다.
+      if (redirectOn401 && window.location.pathname !== PATHS.LOGIN) {
         window.location.href = PATHS.LOGIN
       }
       throw error
