@@ -1,22 +1,11 @@
 """
 scheduler.py
 
-이슈 #102: 공고 수집·정규화를 매일 새벽에 자동 실행한다.
-APScheduler를 FastAPI 앱 안에 내장하는 방식(app/main.py의 lifespan에서
-시작/종료)을 쓴다 — 서버가 1대뿐이고 배포가 잦지 않은 지금 규모에서는
-EC2 host crontab보다 git에 다 기록되는 이쪽이 관리하기 쉽다(2026-07-13
-결정, crontab -l로 기존에 아무것도 없는 것 확인함).
-
-흐름: 수집(기업마당 → K-Startup → 과학기술정보통신부, 앞 두 순서는 필수 —
-notice_collection_service.py 참고) → 아직 정규화를 시도한 적 없는 공고를
-정규화 배치로 트리거. 첨부파일 OCR은 별도 배치를 안 거친다
-— notice_normalization_service.normalize_notice(옵션4)가 후보마다
-parsed_text 없으면 자기가 알아서 다운로드+OCR까지 하므로, 정규화 전에
-OCR 배치를 따로 돌리는 건 중복 작업이다.
-
-실패 처리는 이슈 #102에서 정한 대로 로그만 남기고(부분 실패는 각 단계
-내부에서 이미 개별 격리돼 있음), 다음날 스케줄로 자연 복구한다 — 알림/
-모니터링 대시보드는 지금 팀 규모에서는 범위 밖으로 뒀다.
+이슈 #102: 공고 수집·사전 OCR·정규화를 매일 새벽에 자동 실행한다(APScheduler,
+main.py lifespan에서 시작). 흐름: 수집(전체 출처) -> 첨부파일 사전 OCR(전체
+출처) -> 정규화 배치(전체 출처). 사전 OCR을 추가한 이유(2026-07-15): 온디맨드
+방식이라 정규화/매칭 파이프라인 첫 요청이 느려졌다. 실패는 로그만 남기고
+다음날 스케줄로 자연 복구한다.
 """
 
 import logging
@@ -37,14 +26,20 @@ _NORMALIZATION_BATCH_SIZE = 30
 # 하루치가 무한정 길어지지 않게 막는다 — 못 채운 나머지는 다음날 배치가
 # 이어서 처리한다(정규화 안 된 공고는 계속 대상에 남아있으므로 유실 없음).
 _DAILY_NORMALIZATION_LIMIT = 300
+# 첨부파일 사전 OCR 하루 상한 — _DAILY_NORMALIZATION_LIMIT과 같은 이유(밀린
+# 만큼 다음날 이어서 처리).
+_DAILY_ATTACHMENT_OCR_LIMIT = 300
 
 
 async def run_daily_notice_pipeline() -> None:
-    """새벽 스케줄러가 호출하는 진입점. 수집 -> 정규화 순서로 실행한다."""
+    """새벽 스케줄러가 호출하는 진입점. 수집 -> 첨부파일 사전 OCR -> 정규화 순서로 실행한다."""
     from app.db.session import async_session_factory
 
     async with async_session_factory() as session:
         await _run_collection(session)
+
+    async with async_session_factory() as session:
+        await _run_attachment_ocr_precollection(session)
 
     async with async_session_factory() as session:
         await _run_normalization_batch(session)
@@ -94,6 +89,41 @@ async def _run_collection(session: "AsyncSession") -> None:
         logger.exception(
             "스케줄러: 과학기술정보통신부 수집 실패 — 정규화 단계는 계속 진행한다"
         )
+
+
+async def _run_attachment_ocr_precollection(session: "AsyncSession") -> None:
+    """정규화 전에 기업마당/K-Startup 첨부파일을 미리 OCR해 parsed_text를 채운다.
+
+    실제 다운로드·OCR은 precollect_notice_attachment_ocr이 기존 배치 트리거를 재사용한다.
+    """
+    from app.api.notice_attachment_precollection import (
+        precollect_notice_attachment_ocr,
+    )
+    from app.schemas.notice_attachment_precollection import (
+        NoticeAttachmentPrecollectRequest,
+    )
+
+    background_tasks = BackgroundTasks()
+    try:
+        result = await precollect_notice_attachment_ocr(
+            background_tasks,
+            request=NoticeAttachmentPrecollectRequest(limit=_DAILY_ATTACHMENT_OCR_LIMIT),
+            session=session,
+        )
+        # 요청 컨텍스트가 없어 BackgroundTasks가 자동 실행되지 않으므로 직접 실행한다.
+        await background_tasks()
+    except Exception:
+        logger.exception("스케줄러: 첨부파일 사전 OCR 트리거 실패")
+        return
+
+    if not result.notice_ids:
+        logger.info("스케줄러: 첨부파일 사전 OCR 대상 공고 없음")
+        return
+
+    logger.info(
+        "스케줄러: 첨부파일 사전 OCR 대상 %d건, 배치로 트리거 완료",
+        len(result.notice_ids),
+    )
 
 
 async def _run_normalization_batch(session: "AsyncSession") -> None:
