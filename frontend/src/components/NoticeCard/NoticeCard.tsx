@@ -75,6 +75,11 @@ export function NoticeCard({
             {notice.title}
           </div>
           <div className="mt-1 text-[13px] text-muted">{notice.org}</div>
+          {notice.businessPlanTitle ? (
+            <div className="mt-1 text-[12px] text-faint">
+              📄 {notice.businessPlanTitle} 기준 추천
+            </div>
+          ) : null}
           <div className="mt-3 flex gap-[18px] text-[13px] text-ink">
             {notice.amountLabel ? <span>💰 {notice.amountLabel}</span> : null}
             <span>🗓 {notice.dueDateLabel}</span>
