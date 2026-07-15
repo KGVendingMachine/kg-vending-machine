@@ -137,6 +137,11 @@ export function MatchDetailView({
           {targetLabel ? (
             <div className="mt-1 text-[13px] text-faint">대상 기업 {targetLabel}</div>
           ) : null}
+          {notice.businessPlanTitle ? (
+            <div className="mt-1 text-[13px] text-faint">
+              📄 {notice.businessPlanTitle} 기준 추천
+            </div>
+          ) : null}
         </div>
         {notice.score != null ? (
           <div className="border-l border-[#eef0f2] pl-8 text-center">
@@ -178,6 +183,47 @@ export function MatchDetailView({
 
       <div className="grid flex-1 grid-cols-2">
         <div className="border-r border-[#eef0f2] bg-white px-8 py-7">
+          <div className="mb-1.5 text-[15px] font-extrabold">공고 정보</div>
+          <div className="mb-6 flex flex-col gap-2 text-[13px] text-[#374151]">
+            <div>
+              <b>모집상태</b> — {notice.status ?? '확인 필요'}
+            </div>
+            <div>
+              <b>신청기간</b> —{' '}
+              {notice.applicationStartDate && notice.applicationEndDate
+                ? `${notice.applicationStartDate} ~ ${notice.applicationEndDate}`
+                : notice.applicationEndDate
+                  ? `~${notice.applicationEndDate}`
+                  : '상시 모집'}
+            </div>
+          </div>
+
+          <div className="mb-1.5 text-[15px] font-extrabold">첨부파일</div>
+          {notice.attachments.length > 0 ? (
+            <div className="mb-6 flex flex-col gap-2">
+              {notice.attachments.map((attachment, index) => (
+                <div
+                  key={`${attachment.file_url ?? attachment.file_name ?? index}`}
+                  className="flex items-center justify-between rounded border border-border px-3 py-2.5 text-[13px]"
+                >
+                  <span className="truncate">{attachment.file_name ?? '(파일명 없음)'}</span>
+                  {attachment.file_url ? (
+                    <a
+                      href={attachment.file_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="ml-3 flex-shrink-0 text-[12.5px] font-semibold text-primary no-underline"
+                    >
+                      다운로드
+                    </a>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mb-6 text-[13px] text-faint">첨부파일이 없어요.</div>
+          )}
+
           {notice.scoreBreakdown ? (
             <>
               <div className="mb-1.5 text-[15px] font-extrabold">점수 구성</div>

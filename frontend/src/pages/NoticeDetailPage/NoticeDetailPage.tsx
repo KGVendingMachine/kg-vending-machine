@@ -12,10 +12,9 @@ import type { MatchedNotice } from '../../types/notice'
 /**
  * 매칭 실행(match_log) 컨텍스트 없이 공고 하나를 보여주는 상세 페이지
  * (북마크 목록 등에서 진입). MatchDetailPage와 같은 화면(MatchDetailView)을
- * 재사용한다 — 북마크 클릭 시에는 목록에서 이미 들고 있던 점수·추천 근거
- * 스냅샷을 router state로 그대로 넘겨받아 재조회 없이 보여주고, state 없이
- * 직접 URL로 들어오면 공고 정보만 새로 조회해 보여준다(점수 관련 섹션은
- * 데이터가 없어 자연히 숨겨진다).
+ * 재사용한다. 첨부파일·신청기간 등은 북마크 스냅샷에 없어(BookmarkNoticeInfo는
+ * 요약 정보만 담는다) 공고 상세는 항상 새로 조회하고, 북마크 클릭으로 들어온
+ * 경우에는 목록에서 이미 들고 있던 점수·추천 근거 스냅샷을 그 위에 덧씌운다.
  */
 export function NoticeDetailPage() {
   const { noticeId: noticeIdParam } = useParams<{ noticeId: string }>()
@@ -28,16 +27,30 @@ export function NoticeDetailPage() {
   const stateNotice = (location.state as { notice?: MatchedNotice } | null)?.notice
 
   const { data: fetchedDetail, loading } = useFetchOnMount<NoticeDetail>(() => {
-    if (stateNotice) return null
     if (noticeId == null || Number.isNaN(noticeId)) return null
     return getNoticeDetail(noticeId)
-  }, [noticeId, stateNotice])
+  }, [noticeId])
 
   if (noticeId == null || Number.isNaN(noticeId)) {
     return <Navigate to={PATHS.BOOKMARKS} replace />
   }
 
-  const notice = stateNotice ?? (fetchedDetail ? toMatchedNotice(fetchedDetail) : null)
+  const notice: MatchedNotice | null = fetchedDetail
+    ? {
+        ...toMatchedNotice(fetchedDetail),
+        // 북마크 목록에 있던 점수·추천 근거 스냅샷을 우선한다(공고 상세
+        // API에는 매칭 컨텍스트가 없어 이 필드들이 항상 null이다).
+        ...(stateNotice
+          ? {
+              score: stateNotice.score,
+              scoreLevel: stateNotice.scoreLevel,
+              matchReasonShort: stateNotice.matchReasonShort,
+              strengths: stateNotice.strengths,
+              businessPlanTitle: stateNotice.businessPlanTitle,
+            }
+          : {}),
+      }
+    : null
 
   if (!notice) {
     if (loading) {
