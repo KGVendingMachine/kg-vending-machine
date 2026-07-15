@@ -32,14 +32,7 @@ const STEPS = [
   },
 ]
 
-const FORMATS = [
-  { name: 'PDF', desc: '텍스트·스캔' },
-  { name: 'HWP', desc: '한글 문서' },
-  { name: 'DOCX', desc: '워드' },
-  { name: 'PPTX', desc: '비전 분석' },
-  { name: '이미지', desc: 'OCR' },
-  { name: '스캔본', desc: 'OCR 폴백' },
-]
+
 
 export function LandingPage() {
   const navigate = useNavigate()
@@ -267,62 +260,6 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className="border-b border-[#ececf0] bg-[#fafbfc] px-[60px] py-[76px]">
-        <div className="mx-auto grid max-w-7xl grid-cols-2 items-center gap-14">
-          <div className="rounded-xl border border-[#e6e9ed] bg-white p-[22px]">
-            <div className="mb-4 flex justify-end">
-              <div className="max-w-[80%] rounded-lg bg-primary px-3.5 py-[11px] text-[13.5px] leading-[1.5] text-white">
-                스마트공장 사업, 자부담 없이 신청 가능해?
-              </div>
-            </div>
-            <div className="flex gap-2.5">
-              <div className="h-[30px] w-[30px] flex-shrink-0 rounded-full bg-primary" />
-              <div className="rounded-lg bg-[#f4f6f8] px-[15px] py-[13px] text-[13.5px] leading-[1.65]">
-                아니요, 해당 사업은 <b>자부담 30%</b>가 필요해요. 1.2억 기준
-                약 3,600만원의 자기부담이 발생합니다.
-                <div className="mt-2.5 flex flex-wrap gap-1.5">
-                  <span className="rounded border border-[#e6e9ed] bg-white px-[7px] py-0.5 text-[10.5px] text-[#5b6168]">
-                    📄 공고문 p.4
-                  </span>
-                  <span className="rounded border border-[#e6e9ed] bg-white px-[7px] py-0.5 text-[10.5px] text-[#5b6168]">
-                    📄 계획서 자금계획
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div>
-            <div className="text-[13px] font-bold tracking-[0.5px] text-primary">
-              대화형 도우미
-            </div>
-            <div className="mt-3 mb-4 text-[29px] leading-[1.3] font-extrabold tracking-[-0.7px]">
-              궁금한 건 채팅으로
-              <br />
-              바로 물어보세요
-            </div>
-            <div className="mb-5 text-[15.5px] leading-[1.7] text-[#5b6168]">
-              추천 결과·공고 DB·내 계획서를 근거로 답하는 AI 챗봇이 자격·마감·
-              필요서류 등 무엇이든 답해드립니다. 근거가 없는 내용은 추측하지
-              않아요.
-            </div>
-            <div className="flex flex-col gap-[11px]">
-              <div className="flex gap-2.5 text-sm text-[#454b52]">
-                <span className="font-extrabold text-primary">·</span> 항상
-                출처를 함께 제시
-              </div>
-              <div className="flex gap-2.5 text-sm text-[#454b52]">
-                <span className="font-extrabold text-primary">·</span> 공고
-                비교·우선순위 추천
-              </div>
-              <div className="flex gap-2.5 text-sm text-[#454b52]">
-                <span className="font-extrabold text-primary">·</span> 추천
-                결과를 보고서로 내보내기
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
       <section className="border-b border-[#ececf0] px-[60px] py-[76px] text-center">
         <div className="text-[13px] font-bold tracking-[0.5px] text-primary">
           한국 환경에 맞춤
@@ -337,19 +274,7 @@ export function LandingPage() {
           스캔본은 OCR로, 텍스트 적은 PPT는 이미지까지 읽어 분석합니다. 한글
           (HWP) 사업계획서도 그대로 올리면 됩니다.
         </div>
-        <div className="mx-auto grid max-w-7xl grid-cols-6 gap-3.5">
-          {FORMATS.map((format) => (
-            <div
-              className="rounded-[10px] border border-[#e6e9ed] px-2.5 py-[22px]"
-              key={format.name}
-            >
-              <div className="text-[15px] font-extrabold">{format.name}</div>
-              <div className="mt-1 text-[11px] text-[#868d95]">
-                {format.desc}
-              </div>
-            </div>
-          ))}
-        </div>
+   
       </section>
 
       <section className="bg-[#15181c] px-[60px] py-20 text-center">

@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router-dom'
 import { getMyBusinessPlan, uploadBusinessPlan } from '../../api/businessPlan'
 import type { BusinessPlanSummary } from '../../api/businessPlan'
 import { ApiError } from '../../api/client'
-import { AppHeader } from '../../components/AppHeader/AppHeader'
 import { useFetchOnMount } from '../../hooks/useFetchOnMount'
 import { PATHS } from '../../routes/paths'
 import { ANALYSIS_STATUS_LABELS } from '../../constants/analysisStatus'
@@ -110,7 +109,6 @@ export function UploadPage() {
 
   return (
     <div className="flex flex-1 flex-col">
-      <AppHeader />
       <div className="mx-auto box-border w-full max-w-[640px] px-10 py-8">
         <div className="text-[22px] font-extrabold tracking-[-0.5px]">
           사업계획서 업로드
@@ -209,15 +207,7 @@ export function UploadPage() {
           {error ? <div className="mt-3.5 text-[13px] text-danger">{error}</div> : null}
         </div>
 
-        <div className="mt-8 flex justify-between gap-2.5">
-          <button
-            type="button"
-            className="h-[46px] cursor-pointer rounded border border-border-strong bg-white px-[22px] text-[15px] font-semibold text-muted"
-            disabled={uploading}
-            onClick={() => navigate(PATHS.COMPANY_PROFILE)}
-          >
-            ← 기업 프로필
-          </button>
+        <div className="mt-8 flex justify-end gap-2.5">
           {showExistingCard && existingPlan ? (
             <button
               type="button"

@@ -1,17 +1,14 @@
 import { useMemo, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
-import { AppHeader } from '../../components/AppHeader/AppHeader'
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { NoticeCard } from '../../components/NoticeCard/NoticeCard'
-import { ComparisonReport } from '../../components/ComparisonReport/ComparisonReport'
-import { SecondaryFilteringLogPanel } from '../../components/SecondaryFilteringLogPanel/SecondaryFilteringLogPanel'
-import { getMatchLog, formatMatchLogDate } from '../../api/matchLogs'
+import { getMatchLog, formatMatchLogDate, listMatchLogs } from '../../api/matchLogs'
 import type { MatchLog } from '../../api/matchLogs'
 import { toggleBookmark } from '../../api/bookmarks'
 import { getMyCompanyProfile } from '../../api/companyProfile'
 import type { CompanyProfile } from '../../api/companyProfile'
 import { useFetchOnMount } from '../../hooks/useFetchOnMount'
 import { useMatchedNotices } from '../../hooks/useMatchedNotices'
-import { PATHS, resultDetailPath } from '../../routes/paths'
+import { PATHS, resultDetailPath, resultsPath } from '../../routes/paths'
 import { DEADLINE_FILTERS } from '../../constants/resultsFilters'
 import type { MatchedNotice } from '../../types/notice'
 import {
@@ -77,6 +74,14 @@ export function ResultsPage() {
     printWithFilename(reportFileTitle('추천공고_비교리포트'))
   }
 
+  // matchLogId 없이 진입("추천 결과" 탭 클릭 등)하면 최신 매칭 실행으로
+  // 리다이렉트한다 — "추천 결과"는 항상 마지막 분석 결과를 보여주고, 지난
+  // 기록은 이전 매칭 기록 페이지에서 고른다.
+  const { data: latestLogs, loading: loadingLatest } = useFetchOnMount<MatchLog[]>(
+    () => (validLogId == null ? listMatchLogs(1, 0) : null),
+    [validLogId],
+  )
+
   const list = matchedNotices
 
   const fieldFilters = useMemo(() => {
@@ -92,17 +97,27 @@ export function ResultsPage() {
     }))
   }, [list])
 
-  // matchLogId 없이 진입(직접 URL 입력 등)하면 보여줄 결과가 없다.
+  // matchLogId 없이 진입("추천 결과" 탭 클릭 등)하면 최신 매칭 실행으로
+  // 리다이렉트한다. 매칭 기록 자체가 없는 유저에게만 안내 화면을 보여준다.
   if (validLogId == null) {
+    if (loadingLatest) {
+      return (
+        <div className="flex flex-1 flex-col min-h-0">
+          <div className="flex flex-1 flex-col items-center justify-center gap-2.5 px-6 py-[60px] text-center">
+            <div className="text-sm leading-[1.6] text-muted">최근 매칭 결과를 불러오는 중…</div>
+          </div>
+        </div>
+      )
+    }
+    if (latestLogs && latestLogs.length > 0) {
+      return <Navigate to={resultsPath(latestLogs[0].id)} replace />
+    }
     return (
       <div className="flex flex-1 flex-col min-h-0">
-        <AppHeader />
         <div className="flex flex-1 flex-col items-center justify-center gap-2.5 px-6 py-[60px] text-center">
           <div className="text-lg font-extrabold">표시할 매칭 결과가 없어요</div>
           <div className="text-sm leading-[1.6] text-muted">
             사업계획서를 분석하고 공고 매칭을 실행하면 결과를 볼 수 있어요.
-            <br />
-            분석 페이지의 매칭 기록에서 지난 결과를 다시 열 수도 있어요.
           </div>
           <button
             type="button"
@@ -118,8 +133,6 @@ export function ResultsPage() {
 
   return (
     <div className="flex flex-1 flex-col min-h-0">
-      <div className="no-print flex flex-1 flex-col min-h-0">
-      <AppHeader />
       {matchLog ? (
         <div className="flex items-center gap-2.5 border-b border-[#eef0f2] bg-primary-soft px-6 py-2.5 text-[13px]">
           <span className="font-extrabold">
@@ -128,10 +141,15 @@ export function ResultsPage() {
           <span className="text-muted">
             {formatMatchLogDate(matchLog.created_at)} 매칭 결과
           </span>
+          <button
+            type="button"
+            className="ml-auto cursor-pointer border-0 bg-transparent p-0 text-[13px] font-semibold text-primary underline-offset-2 hover:underline"
+            onClick={() => navigate(PATHS.MATCH_HISTORY)}
+          >
+            이전 매칭 기록 보기 →
+          </button>
         </div>
       ) : null}
-
-      <SecondaryFilteringLogPanel matchLogId={validLogId} />
 
       {loading ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2.5 px-6 py-[60px] text-center">

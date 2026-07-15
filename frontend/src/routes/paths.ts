@@ -5,6 +5,7 @@ export const PATHS = {
   UPLOAD: '/upload',
   ANALYSIS: '/analysis',
   RESULTS: '/results',
+  MATCH_HISTORY: '/match-history',
   RESULT_DETAIL: '/results/:noticeId',
   NOTICE_DETAIL: '/notices/:noticeId',
   BOOKMARKS: '/bookmarks',
