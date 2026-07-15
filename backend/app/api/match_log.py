@@ -11,6 +11,7 @@ from app.repositories.business_plan_repository import get_owned_by_user
 from app.schemas.business_plan import JobStatus
 from app.schemas.match_log import (
     MatchLogCreateRequest,
+    MatchLogDeleteResponse,
     MatchLogResponse,
     MatchResultNoticeInfo,
     MatchResultResponse,
@@ -166,6 +167,28 @@ async def get_match_log(
         )
     log, title = row
     return _to_response(log, title)
+
+
+@router.delete(
+    "/{match_log_id}",
+    response_model=MatchLogDeleteResponse,
+    summary="Delete one matching run",
+)
+async def delete_match_log(
+    match_log_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    deleted = await match_log_repository.delete_owned_by_user(
+        session, match_log_id, current_user.id
+    )
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Match log not found.",
+        )
+    await session.commit()
+    return MatchLogDeleteResponse(match_log_id=match_log_id)
 
 
 @router.get(
