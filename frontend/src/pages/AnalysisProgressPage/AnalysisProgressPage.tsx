@@ -6,7 +6,7 @@ import {
   startBusinessPlanAnalysis,
 } from '../../api/businessPlanAnalysis'
 import type { AnalysisStatus } from '../../api/businessPlanAnalysis'
-import { createMatchLog, getMatchLog } from '../../api/matchLogs'
+import { createMatchLog, getActiveMatchLog, getMatchLog } from '../../api/matchLogs'
 import { ApiError } from '../../api/client'
 import { STEP_LABELS } from '../../constants/analysisSteps'
 
@@ -143,6 +143,11 @@ export function AnalysisProgressPage() {
   // 별도 취소 플래그가 필요하다.
   const matchCancelledRef = useRef(false)
   useEffect(() => {
+    // 마운트마다 false로 되돌린다 — StrictMode(dev)는 마운트 → cleanup →
+    // 재마운트로 도는데 ref는 재마운트에도 보존되므로, 리셋이 없으면 cleanup이
+    // 세운 true가 그대로 남아 이후 매칭 폴링이 첫 줄에서 조용히 빠져나가
+    // 화면이 '매칭 중'에 영구히 멈춘다.
+    matchCancelledRef.current = false
     return () => {
       matchCancelledRef.current = true
     }
@@ -255,70 +260,105 @@ export function AnalysisProgressPage() {
     setAttempt((current) => current + 1)
   }
 
+  function matchFail(message: string) {
+    if (matchCancelledRef.current) return
+    // 매칭 실행 실패는 분석 실패와 달리 완료 화면으로 되돌려 다시 시도하게 한다.
+    setPhase('analyzed')
+    setMatchError(message)
+  }
+
+  // 매칭 로그가 completed/failed가 될 때까지 폴링하고 화면 국면을 갱신한다.
+  // 새 실행(handleStartMatch)과 새로고침 후 복구(아래 useEffect)가 공유한다 —
+  // logId는 방금 만든 실행이거나 서버에서 복구한 진행 중 실행이다.
+  //
+  // 매칭(OCR·정규화·임베딩·LLM 판정)은 실측 몇 분까지 걸려(2026-07-15) 서버가
+  // 즉시 processing으로 응답하고 백그라운드에서 계속 돈다 —
+  // getBusinessPlanAnalysisStatus 폴링과 같은 패턴으로 완료를 기다린다.
+  async function pollMatchLog(logId: number) {
+    const startedAt = Date.now()
+    let consecutiveErrors = 0
+    for (;;) {
+      if (matchCancelledRef.current) return
+      if (Date.now() - startedAt > MAX_POLL_DURATION_MS) {
+        matchFail('매칭이 예상보다 오래 걸리고 있어요. 다시 시도해 주세요.')
+        return
+      }
+
+      let current
+      try {
+        current = await getMatchLog(logId)
+        consecutiveErrors = 0
+      } catch {
+        if (matchCancelledRef.current) return
+        consecutiveErrors += 1
+        if (consecutiveErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
+          matchFail(
+            '진행 상황을 확인하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.',
+          )
+          return
+        }
+        await waitForNextPoll(POLL_INTERVAL_MS)
+        continue
+      }
+
+      if (matchCancelledRef.current) return
+      if (current.run_status === 'completed') break
+      if (current.run_status === 'failed') {
+        matchFail('매칭에 실패했어요. 잠시 후 다시 시도해 주세요.')
+        return
+      }
+      await waitForNextPoll(POLL_INTERVAL_MS)
+    }
+
+    if (matchCancelledRef.current) return
+    setMatchedLogId(logId)
+    setPhase('matched')
+  }
+
   async function handleStartMatch() {
     if (businessPlanId == null || phase === 'matching') return
     setPhase('matching')
     setMatchError(null)
-    const startedAt = Date.now()
-
-    function matchFail(message: string) {
-      if (matchCancelledRef.current) return
-      // 매칭 실행 실패는 분석 실패와 달리 완료 화면으로 되돌려 다시 시도하게 한다.
-      setPhase('analyzed')
-      setMatchError(message)
-    }
 
     try {
+      // 같은 계획서로 이미 매칭이 도는 중이면 서버가 새 잡을 만들지 않고 그
+      // 진행 중 로그를 그대로 돌려준다(멱등) — 그 id를 폴링에 이어붙인다.
       const log = await createMatchLog(businessPlanId)
       console.log('공고 매칭 로그 (match_log):', log)
-
-      // 매칭(OCR·정규화·임베딩·LLM 판정)이 실측 몇 분까지 걸려(2026-07-15)
-      // 서버가 즉시 processing으로 응답하고 백그라운드에서 계속 돈다 —
-      // getBusinessPlanAnalysisStatus 폴링과 같은 패턴으로 완료를 기다린다.
-      let consecutiveErrors = 0
-      for (;;) {
-        if (matchCancelledRef.current) return
-        if (Date.now() - startedAt > MAX_POLL_DURATION_MS) {
-          matchFail('매칭이 예상보다 오래 걸리고 있어요. 다시 시도해 주세요.')
-          return
-        }
-
-        let current
-        try {
-          current = await getMatchLog(log.id)
-          consecutiveErrors = 0
-        } catch {
-          if (matchCancelledRef.current) return
-          consecutiveErrors += 1
-          if (consecutiveErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
-            matchFail(
-              '진행 상황을 확인하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.',
-            )
-            return
-          }
-          await waitForNextPoll(POLL_INTERVAL_MS)
-          continue
-        }
-
-        if (matchCancelledRef.current) return
-        if (current.run_status === 'completed') break
-        if (current.run_status === 'failed') {
-          matchFail('매칭에 실패했어요. 잠시 후 다시 시도해 주세요.')
-          return
-        }
-        await waitForNextPoll(POLL_INTERVAL_MS)
-      }
-
-      if (matchCancelledRef.current) return
-      setMatchedLogId(log.id)
-      setPhase('matched')
+      await pollMatchLog(log.id)
     } catch (err) {
-      if (matchCancelledRef.current) return
       matchFail(
         apiErrorDetail(err) ?? '매칭을 시작하지 못했어요. 잠시 후 다시 시도해 주세요.',
       )
     }
   }
+
+  // 새로고침·재접속으로 화면 state가 초기화되면 분석 완료(analyzed) 시점으로
+  // 되돌아온다. 그때 서버에 이 계획서로 진행 중인 매칭이 있으면(백엔드가 유저당
+  // 1건으로 제한) 그 로그를 폴링에 이어붙여 '매칭 중' 화면으로 복구한다 — 새
+  // 잡을 만들지 않으므로 임베딩·LLM 호출이 중복 실행되지 않는다.
+  useEffect(() => {
+    if (phase !== 'analyzed' || businessPlanId == null) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const active = await getActiveMatchLog(businessPlanId)
+        // cancelled: StrictMode 이중 실행/이탈 가드. 첫 실행의 cleanup이
+        // 세운 cancelled를 보고 빠져, 폴링 루프가 두 개 뜨지 않게 한다.
+        if (cancelled || matchCancelledRef.current || active == null) return
+        if (active.run_status === 'processing') {
+          setPhase('matching')
+          void pollMatchLog(active.id)
+        }
+      } catch {
+        // 복구용 조회 실패는 조용히 무시한다 — 사용자가 버튼으로 직접 매칭을
+        // 시작하면 되고, 복구는 어디까지나 편의 기능이다.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [phase, businessPlanId])
 
   const analyzed = phase === 'analyzed'
   const failed = phase === 'failed'
