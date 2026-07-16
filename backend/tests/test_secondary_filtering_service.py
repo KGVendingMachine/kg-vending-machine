@@ -113,3 +113,65 @@ async def test_run_secondary_filtering_skips_rd_query_when_no_rd_candidates(
     # rd_notice_ids가 없으면(빈 그룹) R&D 쪽 쿼리는 아예 안 날려야 한다.
     assert len(notice_collection.query_calls) == 1
     assert notice_collection.query_calls[0]["n_results"] == svc._N_RESULTS_PER_QUERY
+
+
+def test_merge_evidence_dedupes_and_keeps_closer_distance():
+    plan_based = [svc.EvidenceChunk(content="공통청크", distance=0.5)]
+    criterion_based = [
+        svc.EvidenceChunk(content="공통청크", distance=0.2),
+        svc.EvidenceChunk(content="새청크", distance=0.4),
+    ]
+
+    merged = svc.merge_evidence(plan_based, criterion_based)
+
+    assert [c.content for c in merged] == ["공통청크", "새청크"]
+    assert merged[0].distance == pytest.approx(0.2)  # 더 가까운 쪽이 남는다
+
+
+async def test_get_criterion_evidence_returns_empty_for_no_criteria():
+    result = await svc.get_criterion_evidence(notice_id=1, criterion_statements=[])
+    assert result == []
+
+
+async def test_get_criterion_evidence_queries_per_criterion_and_dedupes(monkeypatch):
+    async def _embed_texts(texts):
+        return [[0.1], [0.2]]
+
+    call_count = 0
+
+    def _query(query_embeddings, n_results, where):
+        nonlocal call_count
+        call_count += 1
+        assert where == {"notice_id": 42}
+        if call_count == 1:
+            return {"distances": [[0.3]], "documents": [["지역 요건 청크"]]}
+        return {
+            "distances": [[0.1]],
+            "documents": [["지역 요건 청크"]],
+        }  # 같은 청크, 더 가까움
+
+    monkeypatch.setattr(svc, "embed_texts", _embed_texts)
+    monkeypatch.setattr(
+        svc, "get_notice_collection", lambda: SimpleNamespace(query=_query)
+    )
+
+    result = await svc.get_criterion_evidence(
+        notice_id=42, criterion_statements=["요건1", "요건2"]
+    )
+
+    assert call_count == 2
+    assert len(result) == 1  # 두 쿼리 모두 같은 청크를 가리켜 중복 제거됨
+    assert result[0].distance == pytest.approx(0.1)
+
+
+async def test_get_criterion_evidence_returns_empty_on_embedding_failure(monkeypatch):
+    async def _raise(texts):
+        raise svc.AiEmbeddingError("boom")
+
+    monkeypatch.setattr(svc, "embed_texts", _raise)
+
+    result = await svc.get_criterion_evidence(
+        notice_id=1, criterion_statements=["요건1"]
+    )
+
+    assert result == []

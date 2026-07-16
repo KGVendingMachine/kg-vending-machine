@@ -15,6 +15,7 @@ services/llm_judge.py + services/score_aggregate.py 패턴을 이식한다: 정�
 이하)이 있어 이중 안전장치로 삼기 위해 0이 아니라 _EXCLUDED_SCORE_CAP을 쓴다.
 """
 
+import hashlib
 import logging
 from dataclasses import dataclass, field
 from typing import Literal
@@ -138,6 +139,39 @@ def _build_criteria(notice: NormalizedNoticeSchema) -> list[tuple[str, str, bool
         items.append((f"excl:reason:{index}", f"{reason}에 해당하지 않음", True))
 
     return items
+
+
+def build_criteria_statements(notice: NormalizedNoticeSchema) -> list[str]:
+    """_build_criteria(notice)의 문장 부분만 뽑아 공개한다(2026-07-16, RAG
+    성능 개선 검토). matching_service._judge_top_candidates가 LLM 판정 전에
+    이 문장들을 그대로 임베딩해 secondary_filtering_service.get_criterion_evidence로
+    criterion-aware evidence를 보강하는 데 쓴다 — judge_notice() 내부의
+    _build_criteria 호출과 별개로 한 번 더 계산되지만, 순수 함수라 비용은
+    없다(실제 비용은 이 문장들을 임베딩하는 embed_texts 호출 쪽에서 발생)."""
+    return [statement for _, statement, _ in _build_criteria(notice)]
+
+
+def profile_fingerprint(profile: CompanyProfile) -> str:
+    """LLM 판정 캐시 키에 넣을 프로필 스냅샷 해시(2026-07-16, RAG 성능 개선
+    검토). _company_profile_text가 참조하는 프로필 필드만 그대로 반영한다
+    (사업계획서 쪽 필드는 business_plan_id가 이미 캐시 키에 있어 여기 넣지
+    않는다) — 사용자가 이 필드 중 하나라도 바꾸면 해시가 달라져 캐시가
+    자동으로 무효화된다. 공고 재수집으로 normalized_json이 바뀌는 경우까지는
+    다루지 않는다(SecondaryFilteringJudgment 모델 docstring 참고, TBD)."""
+    raw = "|".join(
+        str(value)
+        for value in (
+            profile.company_size,
+            profile.business_type,
+            profile.region_name,
+            profile.industry_code,
+            profile.company_stage,
+            profile.business_years,
+            profile.employee_count,
+            profile.annual_revenue,
+        )
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def _company_profile_text(
