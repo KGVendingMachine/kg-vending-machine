@@ -66,29 +66,26 @@ _secondary_filtering_judge_semaphore = asyncio.Semaphore(
 # bonus(가점)는 나머지 5개와 100%를 나눠 갖지 않는다 — 그러면 가점 기회가
 # 없는 공고는 만점이 불가능해지므로, 5개만 100%로 재배분하고 가점은 위에 가산한다.
 _DEFAULT_WEIGHTS = {
-    "eligibility": 0.25 / 0.95,
-    "item_fit": 0.20 / 0.95,
-    "business_fit": 0.20 / 0.95,
-    "growth": 0.10 / 0.95,
-    "secondary": 0.20 / 0.95,
+    "eligibility": 0.30,
+    "item_fit": 0.25,
+    "business_fit": 0.25,
+    "growth": 0.20,
 }
 # R&D는 평가기준이 기술성·혁신성 위주라 성장성 겹침이 잘 안 잡혀(2026-07-16
 # 확인) 성장성 비중을 낮추고 아이템 적합도·2차필터링에 나눠 싣는다.
 _RD_WEIGHTS = {
-    "eligibility": 0.25 / 0.95,
-    "item_fit": 0.24 / 0.95,
-    "business_fit": 0.20 / 0.95,
-    "growth": 0.02 / 0.95,
-    "secondary": 0.24 / 0.95,
+    "eligibility": 0.25,
+    "item_fit": 0.35,
+    "business_fit": 0.35,
+    "growth": 0.05,
 }
 # 자금(대출·보조금)은 기술/아이템 적합성보다 신용등급·지역·기업규모 같은
 # 자격요건 충족 여부가 결정적이라 eligibility 비중을 높이고 item_fit을 낮춘다.
 _FUND_WEIGHTS = {
-    "eligibility": 0.30,
+    "eligibility": 0.35,
     "item_fit": 0.15,
-    "business_fit": 0.20,
-    "growth": 0.15,
-    "secondary": 0.20,
+    "business_fit": 0.30,
+    "growth": 0.20,
 }
 # 가점은 애매한 점수를 추천 임계값(65) 너머로 살짝 밀어주는 정도가 목적이라
 # 핵심 축(20~25%)보다 훨씬 작게 잡는다 — 순위를 가점 하나가 좌우하면 안 된다.
@@ -549,7 +546,6 @@ def _score_notice(
         + item_fit_score * weights["item_fit"]
         + business_fit_score * weights["business_fit"]
         + growth_score * weights["growth"]
-        + resolved_secondary_score * weights["secondary"]
     )
     # 가점은 base_total_score(0~100)에 가산만 한다 — 나머지 5개 항목만으로도
     # 100점을 채울 수 있어야 "가점 없는 공고는 만점 불가"라는 모순이 없다.

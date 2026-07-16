@@ -403,8 +403,13 @@ export function MatchDetailView({
           {notice.secondaryFilterJudged && notice.secondaryFilterReasons.length > 0 ? (
             <>
               <div className="mb-1.5 text-[15px] font-extrabold">
-                공고 원문 정밀 판정
+                AI 판정근거 (공고 원문)
               </div>
+              {notice.secondaryFilterScore != null ? (
+                <div className="mb-2 text-[12.5px] text-faint">
+                  판정 참고점수 {notice.secondaryFilterScore} / 100
+                </div>
+              ) : null}
               {infoInsufficientCount > 0 ? (
                 <div className="mb-2.5 flex items-center justify-between gap-2.5 rounded bg-primary-soft px-3 py-2 text-[12.5px]">
                   <span>
