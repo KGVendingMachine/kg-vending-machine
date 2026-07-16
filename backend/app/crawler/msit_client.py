@@ -12,7 +12,7 @@ _MAX_ATTACHMENT_SIZE_BYTES = 100 * 1024 * 1024
 async def fetch_msit_notices(page: int = 1) -> list[dict]:
     """과학기술정보통신부 사업공고 API에서 공고 목록 원본 응답을 가져온다.
 
-    문서와 달리 http는 400을 반환해 https + User-Agent 헤더가 필요함(2026-07-13 실측).
+    문서와 달리 http는 400을 반환해 https + User-Agent 헤더가 필요함.
     """
     settings = get_settings()
     params = {
