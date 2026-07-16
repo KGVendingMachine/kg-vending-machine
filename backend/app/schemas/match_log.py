@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.business_plan import JobStatus
 
@@ -59,8 +59,22 @@ class SecondaryFilteringReasonLog(BaseModel):
     status: str
     """"충족" / "미충족" / "정보부족" 중 하나."""
     evidence: str | None
-    is_exclusion: bool
+    group: str | None = None
+    is_exclusion: bool = False
     """True면 제외요건("~에 해당하지 않음"으로 재구성된 문장) 판정이다."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_group_compatibility(cls, data):
+        if not isinstance(data, dict):
+            return data
+
+        values = dict(data)
+        if values.get("group") is None:
+            values["group"] = "exclusion" if values.get("is_exclusion") else "eligibility"
+        if "is_exclusion" not in values:
+            values["is_exclusion"] = values.get("group") == "exclusion"
+        return values
 
 
 class SecondaryFilteringNoticeLog(BaseModel):

@@ -38,6 +38,17 @@ def _to_response(log: MatchLog, business_plan_title: str | None) -> MatchLogResp
     )
 
 
+def _amount_label(notice) -> str | None:
+    if notice.amount_label:
+        return notice.amount_label
+    normalized = notice.normalized_json or {}
+    support = normalized.get("support") if isinstance(normalized, dict) else None
+    if not isinstance(support, dict):
+        return None
+    amount = support.get("support_amount")
+    return amount if isinstance(amount, str) and amount.strip() else None
+
+
 def _result_to_response(
     item: match_log_repository.MatchResultWithNotice,
 ) -> MatchResultResponse:
@@ -54,7 +65,7 @@ def _result_to_response(
             category_name=item.category_name,
             status=item.notice.status,
             application_end_date=item.notice.application_end_date,
-            amount_label=item.notice.amount_label,
+            amount_label=_amount_label(item.notice),
             source_url=item.notice.source_url,
             apply_url=item.notice.apply_url,
         ),

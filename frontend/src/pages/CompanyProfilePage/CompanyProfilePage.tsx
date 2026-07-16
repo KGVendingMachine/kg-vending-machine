@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   getMyCompanyProfile,
   saveMyCompanyProfile,
@@ -19,6 +19,11 @@ const FIELD_INPUT_CLASS =
 
 export function CompanyProfilePage() {
   const navigate = useNavigate()
+  const location = useLocation()
+  // 마이페이지·매칭 상세 등 기존 화면에서 "정보 수정"으로 들어온 경우 저장 후
+  // 그 화면으로 되돌아간다. state가 없으면(랜딩 → 온보딩으로 처음 들어온
+  // 경우) 기존대로 업로드 화면으로 이어진다.
+  const returnTo = (location.state as { from?: string } | null)?.from ?? PATHS.UPLOAD
   const [representativeName, setRepresentativeName] = useState('')
   const [businessRegistrationNumber, setBusinessRegistrationNumber] = useState('')
   const [businessType, setBusinessType] = useState('')
@@ -86,8 +91,8 @@ export function CompanyProfilePage() {
     }
   }
 
-  function goToUpload() {
-    navigate(PATHS.UPLOAD)
+  function handleSkip() {
+    navigate(returnTo)
   }
 
   /**
@@ -120,7 +125,7 @@ export function CompanyProfilePage() {
     } finally {
       setSaving(false)
     }
-    navigate(PATHS.UPLOAD)
+    navigate(returnTo)
   }
 
   return (
@@ -270,7 +275,7 @@ export function CompanyProfilePage() {
             <button
               type="button"
               className="h-[46px] cursor-pointer rounded border border-border-strong bg-white px-[22px] text-[15px] font-semibold text-muted"
-              onClick={goToUpload}
+              onClick={handleSkip}
             >
               건너뛰기
             </button>

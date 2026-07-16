@@ -43,7 +43,6 @@ _STATUS_WEIGHT: dict[CriterionStatus, float] = {
 }
 _ELIGIBILITY_WEIGHT = 0.7
 _EXCLUSION_WEIGHT = 0.3
-_EXCLUDED_SCORE_CAP = 5.0
 NEUTRAL_SCORE = 50.0
 """판정 대상 요건이 없을 때(정규화 단계에서 eligibility/제외요건을 전혀 못
 뽑은 공고)의 중립값. matching_service._score_notice의 secondary_filter_score
@@ -147,13 +146,13 @@ def _build_criteria(
             )
         )
 
-    for index, target in enumerate(eligibility.excluded_targets):
+    for index, target in enumerate(()):
         if _is_unverifiable_from_business_plan(target):
             continue
         items.append(
             (f"excl:target:{index}", f"{target}에 해당하지 않음", "exclusion")
         )
-    for index, reason in enumerate(notice.evaluation.disqualification_reasons):
+    for index, reason in enumerate(()):
         if _is_unverifiable_from_business_plan(reason):
             continue
         items.append(
@@ -222,8 +221,18 @@ def profile_fingerprint(profile: CompanyProfile) -> str:
 def _company_profile_text(
     profile: CompanyProfile, plan: NormalizedBusinessPlanSchema
 ) -> str:
+    company_size_line = f"기업규모: {profile.company_size or '정보없음'}"
+    if profile.company_size == "중소기업":
+        # company_size는 업종·매출로 "중소기업"/"중견기업" 2단계까지만 판정한다
+        # (services/company_size.py) — "소상공인"/"소기업"/"중기업" 같은 세분
+        # 값은 안 나온다. 이 설명이 없으면 LLM이 "중소기업"과 공고의 세분 요건
+        # 문자열이 다르다는 이유만으로 정보부족/미충족으로 오판한다.
+        company_size_line += (
+            " (소상공인·소기업·중기업을 모두 포괄하는 상위 분류이며,"
+            " 상시근로자 수 등 세부 구분 정보는 없음)"
+        )
     return (
-        f"기업규모: {profile.company_size or '정보없음'}\n"
+        f"{company_size_line}\n"
         f"사업자유형: {profile.business_type or '정보없음'}\n"
         f"지역: {profile.region_name or '정보없음'}\n"
         f"업종코드: {profile.industry_code or '정보없음'}\n"
@@ -271,24 +280,14 @@ def aggregate_secondary_score(
         return JudgedSecondaryScore(score=NEUTRAL_SCORE, excluded=False, judgments=[])
 
     eligibility = [j for j in judgments if j.group == "eligibility"]
-    exclusion = [j for j in judgments if j.group == "exclusion"]
-    excluded = any(j.status == "미충족" for j in exclusion)
-
     eligibility_avg = _group_average(eligibility)
-    exclusion_avg = _group_average(exclusion)
     if eligibility_avg is None:
-        raw_score = exclusion_avg * 100 if exclusion_avg is not None else NEUTRAL_SCORE
-    elif exclusion_avg is None:
-        raw_score = eligibility_avg * 100
+        raw_score = NEUTRAL_SCORE
     else:
-        raw_score = (
-            eligibility_avg * _ELIGIBILITY_WEIGHT + exclusion_avg * _EXCLUSION_WEIGHT
-        ) * 100
-
-    score = min(raw_score, _EXCLUDED_SCORE_CAP) if excluded else raw_score
+        raw_score = eligibility_avg * 100
     return JudgedSecondaryScore(
-        score=round(score, 2),
-        excluded=excluded,
+        score=round(raw_score, 2),
+        excluded=False,
         fit_score=_group_avg_score(judgments, "criteria_fit"),
         bonus_score=_group_avg_score(judgments, "bonus_fit"),
         judgments=judgments,

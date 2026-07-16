@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { ScoreGauge } from '../ScoreGauge/ScoreGauge'
 import { PATHS } from '../../routes/paths'
 import type { MatchedNotice } from '../../types/notice'
@@ -38,6 +38,22 @@ function htmlSummaryToParagraphs(html: string): string[] {
     .filter(Boolean)
 }
 
+function secondaryReasonGroupLabel(
+  reason: MatchedNotice['secondaryFilterReasons'][number],
+): string {
+  const group = reason.group ?? (reason.is_exclusion ? 'exclusion' : 'eligibility')
+  switch (group) {
+    case 'exclusion':
+      return '검토요건'
+    case 'criteria_fit':
+      return '평가기준'
+    case 'bonus_fit':
+      return '우대조건'
+    default:
+      return '자격요건'
+  }
+}
+
 interface MatchDetailViewProps {
   notice: MatchedNotice
   /** 비교 대상 공고 목록. 매칭 실행 컨텍스트가 없으면(북마크 등) 빈 배열. */
@@ -69,6 +85,7 @@ export function MatchDetailView({
   onCompareClick,
 }: MatchDetailViewProps) {
   const navigate = useNavigate()
+  const location = useLocation()
 
   // 신청 전 체크리스트는 이 화면에서만 쓰는 로컬 진행 표시라 저장하지 않고,
   // 공고를 나갔다 들어오면 초기화된다.
@@ -264,6 +281,11 @@ export function MatchDetailView({
                       <span className="text-[11px] font-medium text-faint">
                         {item.weightLabel}
                       </span>
+                      {item.source === 'llm' ? (
+                        <span className="ml-1 text-[11px] font-medium text-primary">
+                          원문 LLM 반영
+                        </span>
+                      ) : null}
                     </span>
                     <span
                       className={
@@ -374,7 +396,11 @@ export function MatchDetailView({
                   <button
                     type="button"
                     className="shrink-0 cursor-pointer whitespace-nowrap rounded border-none bg-primary px-2.5 py-1.5 text-[12px] font-semibold text-white"
-                    onClick={() => navigate(PATHS.COMPANY_PROFILE)}
+                    onClick={() =>
+                      navigate(PATHS.COMPANY_PROFILE, {
+                        state: { from: location.pathname + location.search },
+                      })
+                    }
                   >
                     프로필 채우기
                   </button>
@@ -401,7 +427,7 @@ export function MatchDetailView({
                             : 'font-semibold text-faint'
                       }
                     >
-                      [{reason.status}]
+                      [{secondaryReasonGroupLabel(reason)} · {reason.status}]
                     </span>{' '}
                     <span className="text-[#374151]">{reason.criterion}</span>
                     {reason.evidence ? (

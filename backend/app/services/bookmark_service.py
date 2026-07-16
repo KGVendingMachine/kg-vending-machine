@@ -27,6 +27,17 @@ SOURCE_RECOMMENDATION = "recommendation"
 SOURCE_BROWSE = "browse"
 
 
+def _amount_label(notice: Notice) -> str | None:
+    if notice.amount_label:
+        return notice.amount_label
+    normalized = notice.normalized_json or {}
+    support = normalized.get("support") if isinstance(normalized, dict) else None
+    if not isinstance(support, dict):
+        return None
+    amount = support.get("support_amount")
+    return amount if isinstance(amount, str) and amount.strip() else None
+
+
 class BookmarkTargetNotFoundError(Exception):
     """담으려는 공고/추천 결과가 없거나 본인 것이 아닐 때."""
 
@@ -71,7 +82,7 @@ def _to_response(
             category_name=row.category_name,
             status=row.notice.status,
             application_end_date=row.notice.application_end_date,
-            amount_label=row.notice.amount_label,
+            amount_label=_amount_label(row.notice),
             source_url=row.notice.source_url,
             apply_url=row.notice.apply_url,
         ),

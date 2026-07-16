@@ -60,14 +60,13 @@ def test_build_criteria_only_includes_present_eligibility_fields():
     assert all(group == "eligibility" for _, _, group in items)
 
 
-def test_build_criteria_reframes_exclusion_positively():
+def test_build_criteria_does_not_judge_exclusion_from_business_plan():
     notice = _notice()
 
     items = _build_criteria(notice)
     exclusion_items = [item for item in items if item[2] == "exclusion"]
 
-    assert len(exclusion_items) == 1
-    assert exclusion_items[0][1] == "휴업 중인 기업에 해당하지 않음"
+    assert exclusion_items == []
 
 
 def test_build_criteria_omits_fit_groups_by_default():
@@ -103,7 +102,7 @@ def test_build_criteria_includes_fit_groups_when_requested():
     assert "bonus_fit" in groups
 
 
-def test_build_criteria_excludes_financially_unverifiable_items():
+def test_build_criteria_excludes_all_exclusion_items():
     # 사업계획서로 원천적으로 검증 불가능한 재무/신용 관련 제외요건은 판정
     # 대상 문장 자체를 안 만든다 — 어느 공고에서도 100% 정보부족으로만
     # 귀결돼 신호 없이 점수만 희석시키기 때문(실측, 2026-07-15).
@@ -124,7 +123,7 @@ def test_build_criteria_excludes_financially_unverifiable_items():
     items = _build_criteria(notice)
     exclusion_statements = [item[1] for item in items if item[2] == "exclusion"]
 
-    assert exclusion_statements == ["휴업 중인 기업에 해당하지 않음"]
+    assert exclusion_statements == []
 
 
 def test_company_profile_text_includes_business_type():
@@ -178,7 +177,7 @@ def test_aggregate_secondary_score_returns_neutral_when_no_judgments():
     assert result.excluded is False
 
 
-def test_aggregate_secondary_score_weights_eligibility_more_than_exclusion():
+def test_aggregate_secondary_score_ignores_exclusion_group():
     # 자격요건 전부 미충족(도메인상 부적격) + 제외요건 전부 충족(제외 대상
     # 아님)인 경우, 70/30 가중이 없으면 잘못 높게 나온다(score_aggregate.py
     # 모듈 docstring에 적힌 실측 버그와 동일한 시나리오).
@@ -198,12 +197,11 @@ def test_aggregate_secondary_score_weights_eligibility_more_than_exclusion():
 
     result = aggregate_secondary_score(judgments)
 
-    # eligibility_avg=0.0*0.7 + exclusion_avg=1.0*0.3 = 30.0
-    assert result.score == pytest.approx(30.0)
+    assert result.score == pytest.approx(0.0)
     assert result.excluded is False
 
 
-def test_aggregate_secondary_score_caps_when_exclusion_confirmed():
+def test_aggregate_secondary_score_ignores_exclusion_for_hard_cut():
     judgments = [
         CriterionJudgment(
             criterion="자격1", status="충족", evidence=None, group="eligibility"
@@ -218,8 +216,8 @@ def test_aggregate_secondary_score_caps_when_exclusion_confirmed():
 
     result = aggregate_secondary_score(judgments)
 
-    assert result.excluded is True
-    assert result.score <= judge_service._EXCLUDED_SCORE_CAP
+    assert result.excluded is False
+    assert result.score == pytest.approx(100.0)
 
 
 def test_aggregate_secondary_score_computes_fit_and_bonus_separately():

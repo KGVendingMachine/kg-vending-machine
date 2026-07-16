@@ -16,6 +16,7 @@ NOTICE_SYSTEM_PROMPT = f"""\
 - JSON 스키마에서 배열 타입인 필드는 정보가 없더라도 반드시 []로 출력하세요. 배열 필드에 null을 넣지 마세요.
 - 샘플 메타데이터에 title, source, category, status, application_start_date, application_end_date가 있으면 basic/application 필드에 우선 반영하세요.
 - 금액, 비율, 기간처럼 원문 표현이 중요한 값은 원문 의미가 보존되도록 문자열로 작성하세요.
+- support.support_amount에는 지원한도/융자한도/보조금액/최대 지원금처럼 금액으로 표현된 지원 규모를 원문 그대로 보존해 작성하세요. 예: "기업당 최대 1억원", "소요자금의 80% 이내, 최대 5억원". 금액 정보가 없으면 null로 두세요.
 - support.subsidy_rate는 정부/기관이 지원하는 비율입니다. "기업부담금", "자부담", "부가세 기업 부담" 비율을 subsidy_rate에 넣지 마세요.
 - 원문에 "90% 지원"과 "기업부담금 10% 이상"이 함께 있으면 support.subsidy_rate는 "90%"이고 support.self_payment_required는 true입니다. "10%"는 matching.caution_points에 자부담 조건으로 정리하세요.
 - business_year는 공고일, 사업기간, 접수시작일 중 확인 가능한 가장 대표적인 연도를 숫자로 작성하세요.

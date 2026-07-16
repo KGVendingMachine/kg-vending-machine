@@ -117,14 +117,14 @@ def test_score_notice_uses_lighter_growth_weight_for_rd_notices():
     assert sum(default_weights.values()) == pytest.approx(1.0)
 
 
-def test_score_notice_applies_llm_fit_score_only_for_rd_notices():
+def test_score_notice_applies_llm_fit_score_for_rd_and_fund_notices():
     """criteria_fit/bonus_fit LLM 판정(business_fit/growth/bonus 대체)은
-    R&D 공고 전용이다 — 다른 카테고리 매칭 로직에 영향을 주면 안 된다."""
+    R&D·자금 공고 전용이다 — 다른 카테고리 매칭 로직에 영향을 주면 안 된다."""
     notice = Notice(id=1, source_id=1, title="AI smart factory support")
     normalized_notice = NormalizedNoticeSchema.model_validate(_notice_json())
     profile = CompanyProfile(company_size="small company", region_name="Seoul")
 
-    non_rd_result = _score_notice(
+    default_result = _score_notice(
         plan=_plan(),
         profile=profile,
         notice=notice,
@@ -142,14 +142,44 @@ def test_score_notice_applies_llm_fit_score_only_for_rd_notices():
         llm_fit_score=90.0,
         llm_bonus_score=80.0,
     )
+    fund_result = _score_notice(
+        plan=_plan(),
+        profile=profile,
+        notice=notice,
+        normalized_notice=normalized_notice,
+        is_fund=True,
+        llm_fit_score=90.0,
+        llm_bonus_score=80.0,
+    )
 
-    assert float(non_rd_result.business_fit_score) != pytest.approx(90.0)
-    assert float(non_rd_result.bonus_score) != pytest.approx(80.0)
+    assert float(default_result.business_fit_score) != pytest.approx(90.0)
+    assert float(default_result.bonus_score) != pytest.approx(80.0)
     assert float(rd_result.business_fit_score) == pytest.approx(90.0)
     assert float(rd_result.growth_score) == pytest.approx(90.0)
     assert float(rd_result.bonus_score) == pytest.approx(80.0)
+    assert float(fund_result.business_fit_score) == pytest.approx(90.0)
+    assert float(fund_result.growth_score) == pytest.approx(90.0)
+    assert float(fund_result.bonus_score) == pytest.approx(80.0)
     assert rd_result.result_json["score_sources"]["business_fit"] == "llm"
-    assert non_rd_result.result_json["score_sources"]["business_fit"] == "keyword"
+    assert fund_result.result_json["score_sources"]["business_fit"] == "llm"
+    assert default_result.result_json["score_sources"]["business_fit"] == "keyword"
+
+
+def test_score_notice_does_not_track_llm_exclusion_as_hard_cut():
+    notice = Notice(id=1, source_id=1, title="AI smart factory support")
+    normalized_notice = NormalizedNoticeSchema.model_validate(_notice_json())
+    profile = CompanyProfile(company_size="small company", region_name="Seoul")
+
+    result = _score_notice(
+        plan=_plan(),
+        profile=profile,
+        notice=notice,
+        normalized_notice=normalized_notice,
+        secondary_filter_score=100.0,
+    )
+
+    assert float(result.total_score) > 49.0
+    assert "secondary_filter_excluded" not in result.result_json
 
 
 def test_eligibility_score_hard_cuts_institute_only_applicant_structure():

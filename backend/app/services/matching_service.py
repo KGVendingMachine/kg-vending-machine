@@ -25,6 +25,7 @@ from app.repositories.secondary_filtering_judgment_repository import (
 )
 from app.schemas.business_plan import NormalizedBusinessPlanSchema
 from app.schemas.notice_normalization import NormalizedNoticeSchema
+from app.services.company_size import SME as _SME_LABEL
 from app.services.notice_eligibility_service import get_eligible_notices
 from app.services.secondary_filtering_judge_service import (
     CriterionJudgment,
@@ -95,6 +96,15 @@ _QUALITY_REQUIRED_FIELDS: tuple[str, ...] = (
 
 _TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
 _ALL_REGIONS = {"전국", "ALL", "all", "전체", "전 지역", "nationwide"}
+
+# company_size.derive_company_size는 업종·매출만으로 "중소기업"/"중견기업"
+# 2단계까지만 판정한다(상시근로자 수까지 봐야 하는 소상공인/소기업/중기업
+# 세분은 아직 미지원). 공고 쪽 target_company_size는 원문 표현을 그대로
+# 뽑아 "소상공인"처럼 더 세분된 값이 흔한데, 프로필엔 "중소기업"만 있어
+# 문자열 그대로는 일치하지 않는다 — "중소기업"은 이 세 하위 분류를 전부
+# 포괄하는 상위 개념이므로, 세분 값이 나오면 포괄 일치로 인정한다(단, 정확한
+# 하위 분류까지는 확인 못 했다는 걸 명시해 과신하지 않게 한다).
+_SME_SUBTIER_LABELS = {"소상공인", "소기업", "중기업", _SME_LABEL}
 
 
 class MatchingNotReadyError(Exception):
@@ -309,6 +319,20 @@ def _eligibility_score(
                 "detail": f"기업 규모({profile.company_size})가 공고 대상 규모와 일치합니다.",
             }
         )
+    elif profile.company_size == _SME_LABEL and any(
+        size in _SME_SUBTIER_LABELS for size in target_sizes
+    ):
+        score += 15
+        notes.append(
+            {
+                "sign": "+",
+                "detail": (
+                    "기업 규모(중소기업)가 공고 대상 규모(소상공인/소기업/중기업 등"
+                    " 중소기업 하위 분류)를 포괄해 일치로 판단했습니다 — 정확한"
+                    " 하위 분류는 원문에서 확인이 필요합니다."
+                ),
+            }
+        )
     elif any("기업" in size for size in target_sizes):
         score += 8
         notes.append(
@@ -387,10 +411,12 @@ def _score_notice(
     normalized_notice: NormalizedNoticeSchema,
     secondary_filter_score: float | None = None,
     is_rd: bool = False,
+    is_fund: bool = False,
     llm_fit_score: float | None = None,
     llm_bonus_score: float | None = None,
 ) -> MatchResult:
-    weights = _RD_WEIGHTS if is_rd else _DEFAULT_WEIGHTS
+    use_precise_fit = is_rd or is_fund
+    weights = _RD_WEIGHTS if use_precise_fit else _DEFAULT_WEIGHTS
     plan_item_tokens = _tokens(
         plan.company.industry,
         plan.problem.background,
@@ -440,12 +466,12 @@ def _score_notice(
     growth_source = "keyword"
     bonus_source = "keyword"
     # R&D 전용: LLM이 판정한 평가기준/우대조건 점수로 단어 겹침을 대체한다.
-    if is_rd and llm_fit_score is not None:
+    if use_precise_fit and llm_fit_score is not None:
         business_fit_score = llm_fit_score
         business_fit_source = "llm"
         growth_score = llm_fit_score
         growth_source = "llm"
-    if is_rd and llm_bonus_score is not None:
+    if use_precise_fit and llm_bonus_score is not None:
         bonus_score = llm_bonus_score
         bonus_source = "llm"
     # 2차 필터링 점수(secondary_filtering_service의 임베딩 유사도, 유사도
@@ -622,7 +648,7 @@ async def _judge_top_candidates(
     profile: CompanyProfile,
     secondary_result: SecondaryFilteringResult,
     passed: list[tuple[Notice, NormalizedNoticeSchema]],
-    rd_notice_ids: set[int],
+    fit_judged_notice_ids: set[int],
 ) -> tuple[dict[int, float], dict[int, JudgedSecondaryScore]]:
     """secondary_result.scores(코사인 유사도)로 순위를 매겨 상위
     _SECONDARY_FILTERING_JUDGE_TOP_K건만 judge_notice()로 정밀 판정하고,
@@ -654,7 +680,12 @@ async def _judge_top_candidates(
         return final_scores, judged_by_notice
 
     notice_by_id = {notice.id: (notice, normalized) for notice, normalized in passed}
-    fingerprint = profile_fingerprint(profile)
+    base_fingerprint = f"{profile_fingerprint(profile)}:no-exclusion-v1"
+
+    def _judgment_fingerprint(notice_id: int) -> str:
+        if notice_id in fit_judged_notice_ids:
+            return f"{base_fingerprint}:fit"
+        return base_fingerprint
 
     # 1단계(순차, session 필요): 캐시 확인.
     to_judge: list[int] = []
@@ -663,7 +694,7 @@ async def _judge_top_candidates(
             session,
             business_plan_id=business_plan_id,
             notice_id=notice_id,
-            profile_fingerprint=fingerprint,
+            profile_fingerprint=_judgment_fingerprint(notice_id),
         )
         if cached is None:
             to_judge.append(notice_id)
@@ -693,7 +724,7 @@ async def _judge_top_candidates(
             notice_id: int,
         ) -> tuple[int, JudgedSecondaryScore | None]:
             _, normalized_notice = notice_by_id[notice_id]
-            include_fit = notice_id in rd_notice_ids
+            include_fit = notice_id in fit_judged_notice_ids
             async with _secondary_filtering_judge_semaphore:
                 # criterion-aware evidence 보강(2026-07-16, RAG 성능 개선
                 # 검토) — 사업계획서 유사도 기반 evidence만으로는 개별
@@ -731,7 +762,7 @@ async def _judge_top_candidates(
                 session,
                 business_plan_id=business_plan_id,
                 notice_id=notice_id,
-                profile_fingerprint=fingerprint,
+                profile_fingerprint=_judgment_fingerprint(notice_id),
                 score=judged.score,
                 excluded=judged.excluded,
                 fit_score=judged.fit_score,
@@ -783,9 +814,7 @@ def _build_secondary_filtering_log(
             "similarity_score": similarity_scores.get(notice.id),
             "llm_judged": notice.id in judgments,
             "secondary_filter_score": final_scores.get(notice.id),
-            "excluded": (
-                judgments[notice.id].excluded if notice.id in judgments else False
-            ),
+            "excluded": False,
             "reasons": (
                 [
                     {
@@ -793,6 +822,7 @@ def _build_secondary_filtering_log(
                         "status": judgment.status,
                         "evidence": judgment.evidence,
                         "group": judgment.group,
+                        "is_exclusion": False,
                     }
                     for judgment in judgments[notice.id].judgments
                 ]
@@ -968,11 +998,22 @@ async def _run_matching_locked(
             select(KgCategory.id).where(KgCategory.name == CategoryName.TECH)
         )
     ).scalar_one_or_none()
+    fund_category_id = (
+        await session.execute(
+            select(KgCategory.id).where(KgCategory.name == CategoryName.FUND)
+        )
+    ).scalar_one_or_none()
     rd_notice_ids = (
         {notice.id for notice, _ in passed if notice.category_id == rd_category_id}
         if rd_category_id is not None
         else set()
     )
+    fund_notice_ids = (
+        {notice.id for notice, _ in passed if notice.category_id == fund_category_id}
+        if fund_category_id is not None
+        else set()
+    )
+    fit_judged_notice_ids = rd_notice_ids | fund_notice_ids
 
     # 2차 필터링(docs/matching-pipeline.md 4단계) — 1차 하드필터
     # (get_eligible_notices) + 품질 필터 + 정량 게이트를 모두 통과한 `passed`에
@@ -984,7 +1025,7 @@ async def _run_matching_locked(
         session,
         business_plan_id=plan.id,
         candidate_notice_ids=[notice.id for notice, _ in passed],
-        rd_notice_ids=rd_notice_ids,
+        rd_notice_ids=fit_judged_notice_ids,
     )
     _mark_stage("2차필터링(임베딩+유사도검색)")
     # 유사도 상위 K건만 LLM으로 정밀 판정한다(docs/secondary-filtering-llm-judge-guide.md)
@@ -997,7 +1038,7 @@ async def _run_matching_locked(
         profile=profile,
         secondary_result=secondary_result,
         passed=passed,
-        rd_notice_ids=rd_notice_ids,
+        fit_judged_notice_ids=fit_judged_notice_ids,
     )
     _mark_stage("LLM_정밀판정")
 
@@ -1011,6 +1052,7 @@ async def _run_matching_locked(
             normalized_notice=normalized_notice,
             secondary_filter_score=final_secondary_scores.get(notice.id),
             is_rd=notice.id in rd_notice_ids,
+            is_fund=notice.id in fund_notice_ids,
             llm_fit_score=judged.fit_score if judged else None,
             llm_bonus_score=judged.bonus_score if judged else None,
         )

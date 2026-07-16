@@ -18,6 +18,7 @@ export interface ScoreBreakdownItem {
   weightLabel: string
   score: number
   max: number
+  source?: string | null
 }
 
 const SCORE_BREAKDOWN_META: Record<
@@ -127,6 +128,7 @@ function toScoreBreakdown(
     // (api/matchLogs.ts의 MatchResultJson 주석 참고).
     secondary_filter: result.result_json?.score_breakdown.secondary_filter ?? null,
   }
+  const sources = result.result_json?.score_sources ?? {}
   return (Object.keys(SCORE_BREAKDOWN_META) as ScoreBreakdownItem['key'][]).map((key) => ({
     key,
     ...SCORE_BREAKDOWN_META[key],
@@ -136,7 +138,12 @@ function toScoreBreakdown(
     label:
       key === 'secondary_filter' && judged
         ? 'AI 정밀 판정(공고 원문)'
+        : sources[key] === 'llm' && (key === 'business_fit' || key === 'growth')
+          ? `${SCORE_BREAKDOWN_META[key].label} (LLM 평가기준)`
+          : sources[key] === 'llm' && key === 'bonus'
+            ? `${SCORE_BREAKDOWN_META[key].label} (LLM 우대조건)`
         : SCORE_BREAKDOWN_META[key].label,
+    source: sources[key] ?? null,
     score: scores[key] ?? 0,
     max: 100,
   }))
@@ -173,7 +180,7 @@ export function toMatchedNotice(
     eligibilityStatus: result?.eligibility_status ?? null,
     strategySuggestion: result?.strategy_suggestion ?? null,
     secondaryFilterJudged: judged,
-    secondaryFilterExcluded: secondaryFiltering?.excluded ?? false,
+    secondaryFilterExcluded: false,
     secondaryFilterReasons: judged ? (secondaryFiltering?.reasons ?? []) : [],
     matchResultId: result?.id ?? null,
     bookmarkId: result?.bookmark_id ?? null,
