@@ -164,22 +164,63 @@ def _build_criteria(
         )
 
     if include_fit:
-        for index, industry in enumerate(eligibility.target_industries):
-            items.append(
-                (
-                    f"fit:item:{index}",
-                    f"사업 아이템(업종·기술·제품)이 다음 지원 대상 업종/분야에 해당함: {industry}",
-                    "item_fit",
+        if eligibility.target_industries:
+            for index, industry in enumerate(eligibility.target_industries):
+                items.append(
+                    (
+                        f"fit:item:{index}",
+                        f"사업 아이템(업종·기술·제품)이 다음 지원 대상 업종/분야에 해당함: {industry}",
+                        "item_fit",
+                    )
                 )
-            )
-        for index, criterion in enumerate(notice.evaluation.criteria):
-            items.append(
-                (
-                    f"fit:criteria:{index}",
-                    f"다음 평가기준에 부합하는 근거가 있음: {criterion}",
-                    "criteria_fit",
+        else:
+            # 원문에 "지원 대상 업종" 항목이 없는 공고도 아이템 적합도를
+            # 키워드 겹침으로만 두지 않도록, 공고의 분야·지원유형·매칭
+            # 키워드로 일반형 문장을 만든다.
+            item_signals = [
+                value
+                for value in (
+                    notice.basic.category,
+                    *notice.support.support_type,
+                    *notice.matching.keywords,
                 )
+                if value
+            ]
+            if item_signals:
+                items.append(
+                    (
+                        "fit:item:fallback",
+                        "사업 아이템(업종·기술·제품)이 공고의 지원 분야/유형에 해당함: "
+                        f"{', '.join(item_signals[:5])}",
+                        "item_fit",
+                    )
+                )
+        if notice.evaluation.criteria:
+            for index, criterion in enumerate(notice.evaluation.criteria):
+                items.append(
+                    (
+                        f"fit:criteria:{index}",
+                        f"다음 평가기준에 부합하는 근거가 있음: {criterion}",
+                        "criteria_fit",
+                    )
+                )
+        else:
+            # 원문에 "평가기준" 섹션이 없는 공고도 사업 정합성/성장성을 키워드
+            # 겹침으로만 두지 않도록, 공고의 매칭 시그널로 일반형 문장을 만든다.
+            signals = notice.matching.matching_signals or (
+                [notice.matching.suitable_company_profile]
+                if notice.matching.suitable_company_profile
+                else []
             )
+            if signals:
+                items.append(
+                    (
+                        "fit:criteria:fallback",
+                        "사업계획서 내용이 공고의 지원 목적·매칭 조건에 부합함: "
+                        f"{', '.join(signals[:5])}",
+                        "criteria_fit",
+                    )
+                )
         for index, condition in enumerate(notice.evaluation.preferred_conditions):
             items.append(
                 (

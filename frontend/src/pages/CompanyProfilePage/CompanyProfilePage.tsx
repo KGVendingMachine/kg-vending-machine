@@ -68,24 +68,18 @@ export function CompanyProfilePage() {
     }
   }, [])
 
-  /** 예비창업자는 사업자등록 전이므로 등록번호·설립연도·근로자수·매출 입력이 무의미하다. */
+  /** 예비창업자는 사업자등록 전이므로 등록번호·설립연도·근로자수·매출·기업단계 입력이 무의미하다. */
   const isPreFounder = businessType === '예비창업자'
-  const stageOptions = isPreFounder
-    ? COMPANY_STAGES.filter((stage) => stage === '예비창업자')
-    : businessType
-      ? COMPANY_STAGES.filter((stage) => stage !== '예비창업자')
-      : COMPANY_STAGES
+  const stageOptions = isPreFounder ? [] : COMPANY_STAGES
 
   function handleBusinessTypeChange(value: string) {
     setBusinessType(value)
     if (value === '예비창업자') {
-      setCompanyStage('예비창업자')
+      setCompanyStage('')
       setBusinessRegistrationNumber('')
       setFoundedYear('')
       setEmployeeCount('')
       setAnnualRevenue('')
-    } else if (value && companyStage === '예비창업자') {
-      setCompanyStage('')
     }
   }
 

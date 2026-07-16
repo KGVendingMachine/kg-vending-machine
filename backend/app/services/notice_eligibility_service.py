@@ -28,9 +28,8 @@ from app.services.notice_business_years import notice_allows_company
 
 logger = logging.getLogger(__name__)
 
-# 기업측 예비창업 판정에 쓰는 값들.
+# 기업측 예비창업 판정에 쓰는 값.
 _PRESTARTUP_BUSINESS_TYPE = "예비창업자"
-_PRESTARTUP_STAGE = "예비창업자"
 
 
 @dataclass(frozen=True)
@@ -116,14 +115,14 @@ def _full_years(founded: date, today: date) -> int:
 
 def _derive_is_prestartup(
     business_type: str | None,
-    company_stage: str | None,
     registration_status: str | None,
 ) -> bool:
     """기업이 예비창업(사업자등록 전)인지. 프로필 값이 없으면 사업계획서
-    분석값(business_registration_status)에 '예비' 신호가 있는지로 폴백."""
+    분석값(business_registration_status)에 '예비' 신호가 있는지로 폴백.
+
+    company_stage는 안 본다 — 예비창업자는 business_type만으로 표현하고
+    company_stage는 사업자등록 이후 축(초기창업/중소기업)이라 무관하다."""
     if business_type == _PRESTARTUP_BUSINESS_TYPE:
-        return True
-    if company_stage == _PRESTARTUP_STAGE:
         return True
     if registration_status and "예비" in registration_status:
         return True
@@ -185,7 +184,6 @@ async def get_eligible_notices(
 
     is_prestartup = _derive_is_prestartup(
         profile.business_type,
-        profile.company_stage,
         company_analysis.get("business_registration_status"),
     )
     business_years = _derive_business_years(

@@ -113,8 +113,10 @@ def test_score_notice_uses_lighter_growth_weight_for_rd_notices():
     assert rd_weights["growth"] < default_weights["growth"]
     assert rd_weights["item_fit"] > default_weights["item_fit"]
     assert rd_weights["secondary"] > default_weights["secondary"]
-    assert sum(rd_weights.values()) == pytest.approx(1.0)
-    assert sum(default_weights.values()) == pytest.approx(1.0)
+    # bonus는 나머지 5개와 나눠 갖는 비율이 아니라 base_total_score 위에
+    # 가산되는 별도 값이라, "나머지 5개"만 합이 1.0이어야 한다.
+    assert sum(v for k, v in rd_weights.items() if k != "bonus") == pytest.approx(1.0)
+    assert sum(v for k, v in default_weights.items() if k != "bonus") == pytest.approx(1.0)
 
 
 def test_score_notice_applies_llm_fit_score_for_rd_and_fund_notices():
@@ -132,6 +134,8 @@ def test_score_notice_applies_llm_fit_score_for_rd_and_fund_notices():
         is_rd=False,
         llm_fit_score=90.0,
         llm_bonus_score=80.0,
+        llm_fit_count=3,
+        llm_bonus_count=3,
     )
     rd_result = _score_notice(
         plan=_plan(),
@@ -141,6 +145,8 @@ def test_score_notice_applies_llm_fit_score_for_rd_and_fund_notices():
         is_rd=True,
         llm_fit_score=90.0,
         llm_bonus_score=80.0,
+        llm_fit_count=3,
+        llm_bonus_count=3,
     )
     fund_result = _score_notice(
         plan=_plan(),
@@ -150,6 +156,8 @@ def test_score_notice_applies_llm_fit_score_for_rd_and_fund_notices():
         is_fund=True,
         llm_fit_score=90.0,
         llm_bonus_score=80.0,
+        llm_fit_count=3,
+        llm_bonus_count=3,
     )
 
     assert float(default_result.business_fit_score) != pytest.approx(90.0)

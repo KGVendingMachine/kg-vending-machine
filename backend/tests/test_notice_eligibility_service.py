@@ -131,10 +131,9 @@ def test_full_years_floor_before_birthday():
 
 
 def test_derive_is_prestartup():
-    assert _derive_is_prestartup("예비창업자", None, None)
-    assert _derive_is_prestartup(None, "예비창업자", None)
-    assert _derive_is_prestartup(None, None, "예비창업자")  # 분석값 폴백
-    assert not _derive_is_prestartup("법인사업자", "초기창업", None)
+    assert _derive_is_prestartup("예비창업자", None)
+    assert _derive_is_prestartup(None, "예비창업자")  # 분석값 폴백
+    assert not _derive_is_prestartup("법인사업자", None)
 
 
 def test_derive_business_years_precedence():

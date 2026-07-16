@@ -50,31 +50,49 @@ logger = logging.getLogger(__name__)
 # 공고는 판정 없이 기존 코사인 유사도 점수를 그대로 쓴다.
 _SECONDARY_FILTERING_JUDGE_TOP_K = 20
 
+# R&D/자금은 유사도가 낮게 나오기 쉬워 전체 후보와 한 풀에서 경쟁하면 top-K
+# 밖으로 밀려 LLM 판정을 아예 못 받을 수 있다 — 카테고리 안에서만 따로
+# 순위를 매겨 최소 이만큼은 보장한다.
+_FIT_CATEGORY_JUDGE_TOP_K = 10
+
+# 종합점수(total_score) 상위 이 순위 안에 든 R&D/자금 공고는, 1차 판정(유사도
+# top-K)에서 빠졌더라도 키워드 폴백 점수만으로 최종 노출되지 않도록 재판정한다.
+_FINAL_RERANK_JUDGE_TOP_N = 20
+
 _secondary_filtering_judge_semaphore = asyncio.Semaphore(
     get_settings().SECONDARY_FILTERING_JUDGE_CONCURRENCY_LIMIT
 )
 
-# total_score 가중치. 성장성(growth)은 사업계획서의 확장전략·자금계획 vs 공고의
-# 평가기준을 단어 겹침으로 재는데, R&D(기술개발) 공고는 평가기준이 보통
-# "연구개발목표·기술성·혁신성" 위주라 겹칠 단어가 거의 없어 대부분 중립값(50점)
-# 으로 죽는 가중치였다(2026-07-16 확인). R&D는 성장성 비중을 낮추고, 그만큼을
-# 실제로 의미 있는 신호인 아이템 적합도·AI 정밀판정(secondary)에 나눠 싣는다.
+# bonus(가점)는 나머지 5개와 100%를 나눠 갖지 않는다 — 그러면 가점 기회가
+# 없는 공고는 만점이 불가능해지므로, 5개만 100%로 재배분하고 가점은 위에 가산한다.
 _DEFAULT_WEIGHTS = {
-    "eligibility": 0.25,
-    "item_fit": 0.20,
+    "eligibility": 0.25 / 0.95,
+    "item_fit": 0.20 / 0.95,
+    "business_fit": 0.20 / 0.95,
+    "growth": 0.10 / 0.95,
+    "secondary": 0.20 / 0.95,
+}
+# R&D는 평가기준이 기술성·혁신성 위주라 성장성 겹침이 잘 안 잡혀(2026-07-16
+# 확인) 성장성 비중을 낮추고 아이템 적합도·2차필터링에 나눠 싣는다.
+_RD_WEIGHTS = {
+    "eligibility": 0.25 / 0.95,
+    "item_fit": 0.24 / 0.95,
+    "business_fit": 0.20 / 0.95,
+    "growth": 0.02 / 0.95,
+    "secondary": 0.24 / 0.95,
+}
+# 자금(대출·보조금)은 기술/아이템 적합성보다 신용등급·지역·기업규모 같은
+# 자격요건 충족 여부가 결정적이라 eligibility 비중을 높이고 item_fit을 낮춘다.
+_FUND_WEIGHTS = {
+    "eligibility": 0.30,
+    "item_fit": 0.15,
     "business_fit": 0.20,
-    "growth": 0.10,
-    "bonus": 0.05,
+    "growth": 0.15,
     "secondary": 0.20,
 }
-_RD_WEIGHTS = {
-    "eligibility": 0.25,
-    "item_fit": 0.24,
-    "business_fit": 0.20,
-    "growth": 0.02,
-    "bonus": 0.05,
-    "secondary": 0.24,
-}
+# 가점은 애매한 점수를 추천 임계값(65) 너머로 살짝 밀어주는 정도가 목적이라
+# 핵심 축(20~25%)보다 훨씬 작게 잡는다 — 순위를 가점 하나가 좌우하면 안 된다.
+_BONUS_WEIGHT = 0.03
 
 # run_matching() 전체 동시 실행 상한. 매칭 한 건 안에서도 임베딩·LLM 판정이
 # 각자 세마포어 한도만큼 동시 호출하므로, 서로 다른 유저의 매칭이 겹치면 그
@@ -158,6 +176,29 @@ def _overlap_score(left: set[str], right: set[str], *, default: float = 50.0) ->
     if base == 0:
         return default
     return min(100.0, 35.0 + (overlap / base) * 65.0)
+
+
+# LLM 판정 문장이 1~2개뿐이면 그 소수 판정 하나로 점수가 0/100으로 극단적으로
+# 튄다 — 문장 수가 이 값 이상이어야 LLM 점수를 100% 신뢰하고, 적으면 그만큼
+# 키워드 점수를 섞어 완화한다.
+_LLM_FULL_CONFIDENCE_CRITERIA_COUNT = 3
+
+
+def _confidence_blend(
+    llm_score: float | None, criteria_count: int, keyword_score: float
+) -> tuple[float, bool]:
+    """판정 문장 개수로 신뢰도를 매겨 LLM 점수와 키워드 점수를 블렌드한다.
+    (점수, LLM이 실제로 반영됐는지) 튜플을 반환한다."""
+    if llm_score is None or criteria_count == 0:
+        return keyword_score, False
+    confidence = min(criteria_count / _LLM_FULL_CONFIDENCE_CRITERIA_COUNT, 1.0)
+    return confidence * llm_score + (1 - confidence) * keyword_score, True
+
+
+def _group_judgment_count(judged: JudgedSecondaryScore | None, group: str) -> int:
+    if judged is None:
+        return 0
+    return sum(1 for j in judged.judgments if j.group == group)
 
 
 def _industry_candidate_tokens(plan: NormalizedBusinessPlanSchema) -> set[str]:
@@ -410,9 +451,14 @@ def _score_notice(
     llm_fit_score: float | None = None,
     llm_bonus_score: float | None = None,
     llm_item_fit_score: float | None = None,
+    llm_fit_count: int = 0,
+    llm_bonus_count: int = 0,
+    llm_item_fit_count: int = 0,
 ) -> MatchResult:
     use_precise_fit = is_rd or is_fund
-    weights = _RD_WEIGHTS if use_precise_fit else _DEFAULT_WEIGHTS
+    # R&D/자금은 가중치 재배분 이유가 서로 달라 각자 전용 프리셋을 쓴다
+    # (R&D는 성장성 신호 약화, 자금은 자격요건 우선) — LLM 정밀판정 자체는 둘 다 받는다.
+    weights = _RD_WEIGHTS if is_rd else (_FUND_WEIGHTS if is_fund else _DEFAULT_WEIGHTS)
     plan_item_tokens = _tokens(
         plan.company.industry,
         plan.problem.background,
@@ -453,28 +499,43 @@ def _score_notice(
     item_fit_score = (base_item_fit_score * 0.70) + (field_match_score * 0.30)
     business_fit_score = _overlap_score(plan_item_tokens, notice_matching_tokens)
     growth_score = _overlap_score(plan_growth_tokens, notice_matching_tokens)
+    # 가점은 "있으면 더 주는" 추가 점수라 다른 항목과 달리 근거가 없으면
+    # 중립(50 근처)이 아니라 0으로 둔다 — 우대조건이 없는 공고에서 가점 받을
+    # 게 없는 게 당연한 상태이지, 판단을 못 한 게 아니기 때문이다.
     bonus_score = _overlap_score(
         _tokens(plan.solution.differentiators, plan.team.capabilities),
         _tokens(normalized_notice.evaluation.preferred_conditions),
-        default=45.0,
+        default=0.0,
     )
     item_fit_source = "keyword"
     business_fit_source = "keyword"
     growth_source = "keyword"
     bonus_source = "keyword"
-    # R&D+자금 전용: LLM이 판정한 아이템 적합도/평가기준/우대조건 점수로
-    # 단어 겹침을 대체한다.
-    if use_precise_fit and llm_item_fit_score is not None:
-        item_fit_score = llm_item_fit_score
-        item_fit_source = "llm"
-    if use_precise_fit and llm_fit_score is not None:
-        business_fit_score = llm_fit_score
-        business_fit_source = "llm"
-        growth_score = llm_fit_score
-        growth_source = "llm"
-    if use_precise_fit and llm_bonus_score is not None:
-        bonus_score = llm_bonus_score
-        bonus_source = "llm"
+    # R&D+자금 전용: LLM이 판정한 아이템 적합도/평가기준/우대조건 점수를 반영한다.
+    # 판정 문장이 적으면(_LLM_FULL_CONFIDENCE_CRITERIA_COUNT 미만) 그만큼
+    # 키워드 점수를 섞어, 문장 1개짜리 판정이 0/100으로 극단적으로 튀는 걸 막는다.
+    if use_precise_fit:
+        item_fit_score, item_fit_used = _confidence_blend(
+            llm_item_fit_score, llm_item_fit_count, item_fit_score
+        )
+        if item_fit_used:
+            item_fit_source = "llm"
+        blended_fit_score, fit_used = _confidence_blend(
+            llm_fit_score, llm_fit_count, business_fit_score
+        )
+        if fit_used:
+            business_fit_score = blended_fit_score
+            business_fit_source = "llm"
+            growth_score, growth_used = _confidence_blend(
+                llm_fit_score, llm_fit_count, growth_score
+            )
+            if growth_used:
+                growth_source = "llm"
+        bonus_score, bonus_used = _confidence_blend(
+            llm_bonus_score, llm_bonus_count, bonus_score
+        )
+        if bonus_used:
+            bonus_source = "llm"
     # 2차 필터링 점수(secondary_filtering_service의 임베딩 유사도, 유사도
     # 상위 후보는 secondary_filtering_judge_service의 LLM 판정 점수로 대체됨)
     # 근거가 없는 공고(첨부파일 없음, 임베딩 실패, 판정 대상 요건 없음 등)는
@@ -483,14 +544,16 @@ def _score_notice(
         secondary_filter_score if secondary_filter_score is not None else 50.0
     )
 
-    total_score = (
+    base_total_score = (
         eligibility_score * weights["eligibility"]
         + item_fit_score * weights["item_fit"]
         + business_fit_score * weights["business_fit"]
         + growth_score * weights["growth"]
-        + bonus_score * weights["bonus"]
         + resolved_secondary_score * weights["secondary"]
     )
+    # 가점은 base_total_score(0~100)에 가산만 한다 — 나머지 5개 항목만으로도
+    # 100점을 채울 수 있어야 "가점 없는 공고는 만점 불가"라는 모순이 없다.
+    total_score = min(100.0, base_total_score + bonus_score * _BONUS_WEIGHT)
     if eligibility_status == "likely_ineligible":
         total_score = min(total_score, 49.0)
 
@@ -502,6 +565,7 @@ def _score_notice(
         business_fit_score=business_fit_score,
         growth_score=growth_score,
         matched_keywords=matched_keywords,
+        notice=normalized_notice,
     )
     weakness = _weakness(cautions, item_fit_score, business_fit_score, normalized_notice)
     strategy = _strategy_suggestion(normalized_notice, growth_score)
@@ -526,7 +590,10 @@ def _score_notice(
             "growth": round(growth_score, 2),
             "bonus": round(bonus_score, 2),
             "secondary_filter": round(resolved_secondary_score, 2),
-            "weights": weights,
+            # bonus는 weights 딕셔너리에 없다 — 나머지 항목과 나눠 갖는 비율이
+            # 아니라 base_total_score 위에 가산되는 고정값(_BONUS_WEIGHT)이라서,
+            # 화면 표시용으로만 여기 같이 담아 보낸다.
+            "weights": {**weights, "bonus": _BONUS_WEIGHT},
         },
         # 각 점수가 LLM 판정(R&D+자금)에서 왔는지 키워드 겹침 fallback인지 표시.
         "score_sources": {
@@ -579,6 +646,7 @@ def _strengths(
     business_fit_score: float,
     growth_score: float,
     matched_keywords: list[str],
+    notice: NormalizedNoticeSchema,
 ) -> list[str]:
     strengths: list[str] = []
     if item_fit_score >= 65:
@@ -593,18 +661,31 @@ def _strengths(
                 f"사업 아이템 적합도가 {item_fit_score:.0f}점으로 높게 나타났습니다."
             )
     if business_fit_score >= 65:
+        signal = notice.matching.suitable_company_profile
+        reason = f" 공고가 찾는 기업상({signal})과 사업계획서 내용이 겹칩니다." if signal else ""
         strengths.append(
-            f"사업계획서 내용이 공고의 지원 시그널과 잘 맞습니다"
-            f" (사업 정합성 {business_fit_score:.0f}점)."
+            f"사업 정합성이 {business_fit_score:.0f}점으로 높습니다.{reason}"
         )
     if growth_score >= 65:
-        strengths.append(
-            f"성장 전략이 공고의 지원 목적과 부합합니다 (성장성 {growth_score:.0f}점)."
+        criteria = notice.evaluation.criteria[:2]
+        reason = (
+            f" 평가기준({', '.join(criteria)})에 부합하는 성장 전략이 사업계획서에 있습니다."
+            if criteria
+            else ""
         )
+        strengths.append(f"성장성이 {growth_score:.0f}점으로 높습니다.{reason}")
     if not strengths:
+        signals = notice.matching.matching_signals[:2]
+        hint = (
+            f" 공고가 보는 핵심 조건({', '.join(signals)})과의 연관성을 사업계획서에"
+            " 더 구체적으로 담으면 점수를 올릴 수 있습니다."
+            if signals
+            else ""
+        )
         strengths.append(
             f"아이템 적합도 {item_fit_score:.0f}점 · 사업 정합성 {business_fit_score:.0f}점 · "
-            f"성장성 {growth_score:.0f}점으로, 기본 자격요건 수준에서 검토가 가능합니다."
+            f"성장성 {growth_score:.0f}점으로, 세 항목 모두 뚜렷한 강점 기준(65점)에는"
+            f" 못 미칩니다.{hint}"
         )
     return strengths
 
@@ -651,6 +732,29 @@ def _strategy_suggestion(
     )
 
 
+def _rank_judge_candidates(
+    secondary_result: SecondaryFilteringResult,
+    fit_category_groups: list[set[int]] | None,
+) -> list[int]:
+    """전체 유사도 상위 _SECONDARY_FILTERING_JUDGE_TOP_K건 + R&D/자금
+    카테고리 안에서만 다시 뽑은 상위 _FIT_CATEGORY_JUDGE_TOP_K건을 합친다.
+    R&D/자금을 하나로 합쳐서 뽑으면 한쪽 유사도가 체계적으로 높을 때 다른
+    쪽이 밀릴 수 있어 카테고리별로 따로 뽑는다."""
+    scores = secondary_result.scores
+    general_top = sorted(scores, key=lambda nid: scores[nid], reverse=True)[
+        :_SECONDARY_FILTERING_JUDGE_TOP_K
+    ]
+    fit_top: list[int] = []
+    for group in fit_category_groups or []:
+        group_candidates = [nid for nid in scores if nid in group]
+        fit_top.extend(
+            sorted(group_candidates, key=lambda nid: scores[nid], reverse=True)[
+                :_FIT_CATEGORY_JUDGE_TOP_K
+            ]
+        )
+    return list(dict.fromkeys(general_top + fit_top))
+
+
 async def _judge_top_candidates(
     *,
     session: AsyncSession,
@@ -661,11 +765,38 @@ async def _judge_top_candidates(
     secondary_result: SecondaryFilteringResult,
     passed: list[tuple[Notice, NormalizedNoticeSchema]],
     fit_judged_notice_ids: set[int],
+    fit_category_groups: list[set[int]] | None = None,
 ) -> tuple[dict[int, float], dict[int, JudgedSecondaryScore]]:
-    """secondary_result.scores(코사인 유사도)로 순위를 매겨 상위
-    _SECONDARY_FILTERING_JUDGE_TOP_K건만 judge_notice()로 정밀 판정하고,
-    최종 secondary_filter_score(판정된 공고는 판정 점수, 나머지는 기존
-    유사도 점수)와 판정 근거를 반환한다.
+    """1차 판정 대상(_rank_judge_candidates)을 뽑아 _judge_notice_ids로 판정한다."""
+    ranked_notice_ids = _rank_judge_candidates(secondary_result, fit_category_groups)
+    return await _judge_notice_ids(
+        session=session,
+        log_id=log_id,
+        business_plan_id=business_plan_id,
+        plan=plan,
+        profile=profile,
+        secondary_result=secondary_result,
+        passed=passed,
+        fit_judged_notice_ids=fit_judged_notice_ids,
+        ranked_notice_ids=ranked_notice_ids,
+    )
+
+
+async def _judge_notice_ids(
+    *,
+    session: AsyncSession,
+    log_id: int,
+    business_plan_id: int,
+    plan: NormalizedBusinessPlanSchema,
+    profile: CompanyProfile,
+    secondary_result: SecondaryFilteringResult,
+    passed: list[tuple[Notice, NormalizedNoticeSchema]],
+    fit_judged_notice_ids: set[int],
+    ranked_notice_ids: list[int],
+) -> tuple[dict[int, float], dict[int, JudgedSecondaryScore]]:
+    """ranked_notice_ids로 지정된 공고만 judge_notice()로 정밀 판정한다(순위
+    계산 자체는 호출자 책임 — _judge_top_candidates의 1차 판정과
+    _run_matching_locked의 최종 상위권 보정 판정이 이 함수를 공유한다).
 
     판정 결과는 (business_plan_id, notice_id, 프로필 스냅샷) 기준으로
     secondary_filtering_judgment 테이블에 캐싱한다(2026-07-16, RAG 성능
@@ -683,11 +814,6 @@ async def _judge_top_candidates(
     final_scores = dict(secondary_result.scores)
     judged_by_notice: dict[int, JudgedSecondaryScore] = {}
 
-    ranked_notice_ids = sorted(
-        secondary_result.scores,
-        key=lambda notice_id: secondary_result.scores[notice_id],
-        reverse=True,
-    )[:_SECONDARY_FILTERING_JUDGE_TOP_K]
     if not ranked_notice_ids:
         return final_scores, judged_by_notice
 
@@ -696,9 +822,9 @@ async def _judge_top_candidates(
 
     def _judgment_fingerprint(notice_id: int) -> str:
         if notice_id in fit_judged_notice_ids:
-            # item_fit 판정 그룹 추가로 캐시 형태가 바뀌어 버전을 올렸다 — 이
-            # 태그 없이는 item_fit 없는 옛 캐시가 그대로 재사용된다.
-            return f"{base_fingerprint}:fit-v2"
+            # 판정 기준(item_fit 추가, criteria_fit/item_fit 폴백 질문 추가)이
+            # 바뀔 때마다 버전을 올린다 — 안 올리면 구조가 다른 옛 캐시가 재사용된다.
+            return f"{base_fingerprint}:fit-v4"
         return base_fingerprint
 
     # 1단계(순차, session 필요): 캐시 확인.
@@ -726,6 +852,11 @@ async def _judge_top_candidates(
             fit_score=float(cached.fit_score) if cached.fit_score is not None else None,
             bonus_score=(
                 float(cached.bonus_score) if cached.bonus_score is not None else None
+            ),
+            item_fit_score=(
+                float(cached.item_fit_score)
+                if cached.item_fit_score is not None
+                else None
             ),
             judgments=cached_judgments,
         )
@@ -781,6 +912,7 @@ async def _judge_top_candidates(
                 excluded=judged.excluded,
                 fit_score=judged.fit_score,
                 bonus_score=judged.bonus_score,
+                item_fit_score=judged.item_fit_score,
                 judgments=[asdict(j) for j in judged.judgments],
             )
 
@@ -1053,6 +1185,7 @@ async def _run_matching_locked(
         secondary_result=secondary_result,
         passed=passed,
         fit_judged_notice_ids=fit_judged_notice_ids,
+        fit_category_groups=[rd_notice_ids, fund_notice_ids],
     )
     _mark_stage("LLM_정밀판정")
 
@@ -1070,6 +1203,9 @@ async def _run_matching_locked(
             llm_fit_score=judged.fit_score if judged else None,
             llm_bonus_score=judged.bonus_score if judged else None,
             llm_item_fit_score=judged.item_fit_score if judged else None,
+            llm_fit_count=_group_judgment_count(judged, "criteria_fit"),
+            llm_bonus_count=_group_judgment_count(judged, "bonus_fit"),
+            llm_item_fit_count=_group_judgment_count(judged, "item_fit"),
         )
         result.recommendation_run_id = log.id
         if result.eligibility_status in eligibility_counts:
@@ -1091,6 +1227,62 @@ async def _run_matching_locked(
         )
     _mark_stage("점수산출")
 
+    scored.sort(key=lambda item: item.result.total_score or Decimal("0"), reverse=True)
+
+    # 최종 보정: 1차 판정(유사도 top-K)에 못 든 R&D/자금 공고가 키워드 폴백
+    # 점수만으로 종합점수 상위 _FINAL_RERANK_JUDGE_TOP_N위 안에 들면, 그
+    # 공고만 다시 LLM으로 판정해 점수를 실제 근거 기반으로 갱신한다.
+    rerun_ids = [
+        item.notice.id
+        for item in scored[:_FINAL_RERANK_JUDGE_TOP_N]
+        if item.notice.id in fit_judged_notice_ids
+        and item.notice.id not in secondary_judgments
+    ]
+    if rerun_ids:
+        rerun_scores, rerun_judgments = await _judge_notice_ids(
+            session=session,
+            log_id=log.id,
+            business_plan_id=plan.id,
+            plan=normalized_plan,
+            profile=profile,
+            secondary_result=secondary_result,
+            passed=passed,
+            fit_judged_notice_ids=fit_judged_notice_ids,
+            ranked_notice_ids=rerun_ids,
+        )
+        final_secondary_scores.update(rerun_scores)
+        secondary_judgments.update(rerun_judgments)
+
+        passed_by_id = {notice.id: (notice, nn) for notice, nn in passed}
+        scored_by_id = {item.notice.id: index for index, item in enumerate(scored)}
+        for notice_id in rerun_ids:
+            judged = secondary_judgments.get(notice_id)
+            notice, normalized_notice = passed_by_id[notice_id]
+            result = _score_notice(
+                plan=normalized_plan,
+                profile=profile,
+                notice=notice,
+                normalized_notice=normalized_notice,
+                secondary_filter_score=final_secondary_scores.get(notice_id),
+                is_rd=notice_id in rd_notice_ids,
+                is_fund=notice_id in fund_notice_ids,
+                llm_fit_score=judged.fit_score if judged else None,
+                llm_bonus_score=judged.bonus_score if judged else None,
+                llm_item_fit_score=judged.item_fit_score if judged else None,
+            )
+            result.recommendation_run_id = log.id
+            scored[scored_by_id[notice_id]] = ScoredNotice(notice=notice, result=result)
+        scored.sort(key=lambda item: item.result.total_score or Decimal("0"), reverse=True)
+        logger.info(
+            "최종 보정 [match_log_id=%s]: 종합점수 상위 %d위 안에 든 미판정 R&D/"
+            "자금 공고 %d건 재판정 완료 (notice_id=%s)",
+            log.id,
+            _FINAL_RERANK_JUDGE_TOP_N,
+            len(rerun_ids),
+            rerun_ids,
+        )
+    _mark_stage("최종보정_재판정")
+
     log.secondary_filtering_log = _build_secondary_filtering_log(
         passed=passed,
         secondary_result=secondary_result,
@@ -1106,7 +1298,6 @@ async def _run_matching_locked(
         len(secondary_judgments),
     )
 
-    scored.sort(key=lambda item: item.result.total_score or Decimal("0"), reverse=True)
     selected = [item.result for item in scored[:max_results]]
 
     logger.info(

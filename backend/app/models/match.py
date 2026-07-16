@@ -124,6 +124,8 @@ class SecondaryFilteringJudgment(Base):
     """criteria_fit(평가기준) 그룹 판정 평균*100. 판정 대상 없으면 NULL(R&D 전용)."""
     bonus_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     """bonus_fit(우대조건) 그룹 판정 평균*100. 의미는 fit_score와 동일."""
+    item_fit_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    """item_fit(아이템 적합도) 그룹 판정 평균*100. 의미는 fit_score와 동일."""
     judgments: Mapped[list] = mapped_column(JSONB, nullable=False)
     """CriterionJudgment 목록(criterion/status/evidence/group)."""
     judged_at: Mapped[datetime] = mapped_column(

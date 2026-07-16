@@ -49,6 +49,8 @@ function secondaryReasonGroupLabel(
       return '평가기준'
     case 'bonus_fit':
       return '우대조건'
+    case 'item_fit':
+      return '아이템 적합도'
     default:
       return '자격요건'
   }

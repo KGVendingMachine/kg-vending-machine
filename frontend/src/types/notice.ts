@@ -129,26 +129,38 @@ function toScoreBreakdown(
     secondary_filter: result.result_json?.score_breakdown.secondary_filter ?? null,
   }
   const sources = result.result_json?.score_sources ?? {}
-  return (Object.keys(SCORE_BREAKDOWN_META) as ScoreBreakdownItem['key'][]).map((key) => ({
-    key,
-    ...SCORE_BREAKDOWN_META[key],
-    // secondary_filter만 유사도 검색 상위 후보로 뽑혀 LLM이 실제 판정한
-    // 경우와 임베딩 유사도만 쓴 경우를 라벨로 구분한다 — 나머지 항목은 항상
-    // 규칙 기반 점수라 고정 라벨을 그대로 쓴다.
-    label:
-      key === 'secondary_filter' && judged
-        ? 'AI 정밀 판정(공고 원문)'
-        : sources[key] === 'llm' && key === 'item_fit'
-          ? `${SCORE_BREAKDOWN_META[key].label} (LLM 업종 판정)`
-          : sources[key] === 'llm' && (key === 'business_fit' || key === 'growth')
-            ? `${SCORE_BREAKDOWN_META[key].label} (LLM 평가기준)`
-            : sources[key] === 'llm' && key === 'bonus'
-              ? `${SCORE_BREAKDOWN_META[key].label} (LLM 우대조건)`
-              : SCORE_BREAKDOWN_META[key].label,
-    source: sources[key] ?? null,
-    score: scores[key] ?? 0,
-    max: 100,
-  }))
+  // score_breakdown.weights는 backend weights 딕셔너리 키(secondary)를 쓰는데
+  // 화면 쪽 키는 secondary_filter라 여기서만 매핑한다.
+  const weights = result.result_json?.score_breakdown.weights ?? {}
+  const weightKeyByBreakdownKey: Record<ScoreBreakdownItem['key'], string> = {
+    eligibility: 'eligibility',
+    item_fit: 'item_fit',
+    business_fit: 'business_fit',
+    growth: 'growth',
+    bonus: 'bonus',
+    secondary_filter: 'secondary',
+  }
+  return (Object.keys(SCORE_BREAKDOWN_META) as ScoreBreakdownItem['key'][]).map((key) => {
+    const weight = weights[weightKeyByBreakdownKey[key]]
+    return {
+      key,
+      ...SCORE_BREAKDOWN_META[key],
+      // R&D/자금 공고는 실제로 쓰인 가중치가 기본값과 달라(성장성↓, 아이템
+      // 적합도·2차필터링↑) 있으면 그 값을, 없으면 고정 라벨을 보여준다.
+      weightLabel:
+        weight != null ? `가중 ${Math.round(weight * 100)}%` : SCORE_BREAKDOWN_META[key].weightLabel,
+      // secondary_filter만 유사도 검색 상위 후보로 뽑혀 LLM이 실제 판정한
+      // 경우와 임베딩 유사도만 쓴 경우를 라벨로 구분한다 — 나머지 항목은 항상
+      // 규칙 기반 점수라 고정 라벨을 그대로 쓴다.
+      label:
+        key === 'secondary_filter' && judged
+          ? 'AI 정밀 판정(공고 원문)'
+          : SCORE_BREAKDOWN_META[key].label,
+      source: sources[key] ?? null,
+      score: scores[key] ?? 0,
+      max: 100,
+    }
+  })
 }
 
 export function toMatchedNotice(

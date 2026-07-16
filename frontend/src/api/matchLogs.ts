@@ -96,6 +96,9 @@ export interface MatchResultJson {
     growth: number
     bonus: number
     secondary_filter: number
+    /** R&D/자금 공고는 성장성 비중을 낮추고 아이템 적합도·2차필터링에 더
+     * 싣는 등 가중치가 다르다 — 실제로 쓰인 값(0~1)을 그대로 담는다. */
+    weights?: Partial<Record<string, number>>
   }
   score_sources?: Partial<Record<string, string>>
   /** 2차 필터링 근거(임베딩 유사도)가 실제로 있었는지. false면 secondary_filter는
