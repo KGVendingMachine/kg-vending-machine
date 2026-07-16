@@ -23,9 +23,7 @@ from app.repositories.notice_repository import get_notice_target_types_by_ids
 # 값 기준(일반인/대학생/청소년/대학/연구기관). 여기 없는 값은 기업성일 수
 # 있으므로 "확실히 비기업"인 것만 넣는다 — 잘못 거르는 위험을 최소화하려는
 # 것이라, 목록을 넓히기보다 실측으로 확인된 값만 보수적으로 추가한다.
-NON_COMPANY_TARGET_TYPES = frozenset(
-    {"일반인", "대학생", "청소년", "대학", "연구기관"}
-)
+NON_COMPANY_TARGET_TYPES = frozenset({"일반인", "대학생", "청소년", "대학", "연구기관"})
 
 # 신청주체 컷을 적용할 사업자유형(실제 사업체가 있는 경우). 예비창업자는
 # 제외한다(위 모듈 docstring의 예비창업자 예외 참고).
