@@ -20,6 +20,17 @@ class MatchLogResponse(BaseModel):
     completed_at: datetime | None
 
 
+class ActiveMatchLogResponse(BaseModel):
+    """GET /match-logs/active — 진행 중 매칭 복구용 최소 응답.
+
+    새로고침·재접속 시 프론트가 폴링을 이어붙이는 데 필요한 건 id(폴 대상)와
+    run_status(진행 중 확인).
+    """
+
+    id: int
+    run_status: JobStatus
+
+
 class MatchLogDeleteResponse(BaseModel):
     match_log_id: int
     deleted: bool = True

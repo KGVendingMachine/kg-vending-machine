@@ -9,6 +9,7 @@ from app.api.match_log import (
     _run_matching_job,
     create_match_log,
     delete_match_log,
+    get_active_match_log,
     list_match_results,
 )
 from app.models.business_plan import BusinessPlan
@@ -368,6 +369,66 @@ async def test_create_match_log_rejects_when_different_plan_already_processing(
             session=db_session,
         )
     assert exc_info.value.status_code == 409
+
+
+async def test_get_active_match_log_returns_processing_log_for_plan(db_session):
+    """새로고침 복구용 — 진행 중인 매칭이 있으면 그 로그를 돌려줘 프론트가
+    폴링을 이어붙일 수 있어야 한다."""
+    user = await _make_user(db_session, "match-active-user")
+    profile = CompanyProfile(user_id=user.id)
+    db_session.add(profile)
+    await db_session.flush()
+    plan = await _make_plan(db_session, profile)
+
+    created = await create_match_log(
+        payload=MatchLogCreateRequest(business_plan_id=plan.id),
+        background_tasks=BackgroundTasks(),
+        current_user=user,
+        session=db_session,
+    )
+
+    active = await get_active_match_log(
+        business_plan_id=plan.id, current_user=user, session=db_session
+    )
+    assert active is not None
+    assert active.id == created.id
+    assert active.run_status == JobStatus.PROCESSING
+
+
+async def test_get_active_match_log_none_when_nothing_processing(db_session):
+    user = await _make_user(db_session, "match-active-none-user")
+    profile = CompanyProfile(user_id=user.id)
+    db_session.add(profile)
+    await db_session.flush()
+    plan = await _make_plan(db_session, profile)
+
+    active = await get_active_match_log(
+        business_plan_id=plan.id, current_user=user, session=db_session
+    )
+    assert active is None
+
+
+async def test_get_active_match_log_ignores_other_plan(db_session):
+    """다른 계획서 매칭이 도는 중이면, 이 계획서 기준으로는 없음(null)으로
+    보여 프론트가 잘못된 로그를 폴링하지 않게 한다."""
+    user = await _make_user(db_session, "match-active-other-plan-user")
+    profile = CompanyProfile(user_id=user.id)
+    db_session.add(profile)
+    await db_session.flush()
+    plan_a = await _make_plan(db_session, profile)
+    plan_b = await _make_plan(db_session, profile)
+
+    await create_match_log(
+        payload=MatchLogCreateRequest(business_plan_id=plan_a.id),
+        background_tasks=BackgroundTasks(),
+        current_user=user,
+        session=db_session,
+    )
+
+    active = await get_active_match_log(
+        business_plan_id=plan_b.id, current_user=user, session=db_session
+    )
+    assert active is None
 
 
 async def test_delete_match_log_removes_log_and_children(db_session):

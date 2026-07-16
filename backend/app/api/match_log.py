@@ -12,6 +12,7 @@ from app.repositories import match_log_repository
 from app.repositories.business_plan_repository import get_owned_by_user
 from app.schemas.business_plan import JobStatus
 from app.schemas.match_log import (
+    ActiveMatchLogResponse,
     MatchLogCreateRequest,
     MatchLogDeleteResponse,
     MatchLogResponse,
@@ -228,6 +229,36 @@ async def list_match_logs(
         session, current_user.id, limit=limit, offset=offset
     )
     return [_to_response(log, title) for log, title in rows]
+
+
+@router.get(
+    "/active",
+    response_model=ActiveMatchLogResponse | None,
+    summary="Get my in-progress matching run (for resume after refresh)",
+    description=(
+        "현재 유저가 진행 중(processing)인 매칭 로그를 반환한다. 없으면 null. "
+        "새로고침·재접속으로 화면이 초기화돼도 진행 중이던 매칭 폴링을 "
+        "이어붙이는 데 쓴다 — create_match_log의 중복 방지와 같은 "
+        "get_processing_by_user 기준이라 유저당 최대 1건이다. business_plan_id를 "
+        "주면 그 계획서 매칭일 때만 반환한다(다른 계획서가 도는 중이면 null). "
+        "이 경로는 '/{match_log_id}'보다 먼저 선언돼야 'active'가 id로 파싱되지 않는다."
+    ),
+)
+async def get_active_match_log(
+    business_plan_id: int | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    existing = await match_log_repository.get_processing_by_user(
+        session, current_user.id
+    )
+    if existing is None:
+        return None
+    if business_plan_id is not None and existing.business_plan_id != business_plan_id:
+        return None
+    return ActiveMatchLogResponse(
+        id=existing.id, run_status=JobStatus(existing.run_status)
+    )
 
 
 @router.get(
