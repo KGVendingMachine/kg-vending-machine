@@ -1,6 +1,6 @@
 # 공고 매칭 파이프라인 (설계 초안)
 
-사업계획서를 업로드한 뒤 정부지원사업 공고와 매칭시키는 전체 흐름을 정리한다. 아직 구현 전 설계 단계이며, 미정 항목은 "TBD"로 표시했다.
+사업계획서를 업로드한 뒤 정부지원사업 공고와 매칭시키는 전체 흐름을 정리한다. 1~5단계는 최초 설계 초안이고, 실제 구현은 "구현 현황" 절을 따른다. 남은 미정 항목은 "TBD"로 표시했다.
 
 ## 전체 흐름 요약
 
@@ -17,31 +17,37 @@
 
 프론트에는 [분석 진행 상태 화면](../frontend/src/pages/AnalysisProgressPage)의 "매칭 스코어링" 한 단계로만 보이지만, 백엔드 내부에서는 아래처럼 여러 단계로 나뉜다. **각 단계의 중간 산출물(후보 수, 필터링 사유, 유사도 점수 등)은 프론트에 노출되지 않더라도 반드시 로그로 남긴다** — 결과 정확도를 튜닝하려면 어느 단계에서 좋은 공고가 걸러졌는지 추적할 수 있어야 하기 때문이다.
 
-## 구현 현황 (2026-07-13)
+## 구현 현황 (2026-07-15 갱신)
 
-아래는 설계 초안이고, **실제로 병합된 구현(PR #88, `91ae029`)은 이보다 단순하다.**
-"1차 필터링"이라는 이름의 별도 엔드포인트는 없다 — 진입점은 `POST /match-logs`
-하나뿐이고 (`app/api/match_log.py:57-103`의 `create_match_log` → 완료된
-사업계획서를 기준으로 `app/services/matching_service.py`의 `run_matching()`
-호출), 3~5단계에서 설계한 필터링/스코어링이 그 안에서 아래처럼 합쳐져 있다.
+진입점은 여전히 `POST /match-logs` 하나뿐이고(`app/api/match_log.py`의
+`create_match_log` → `app/services/matching_service.py`의 `run_matching()`
+호출) 아래 단계들이 그 안에서 순차 실행된다. 2026-07-15 팀 합의로 1차
+필터링과 2차 필터링의 담당·경계가 아래처럼 명확해졌다(과거 절과 달리 각각
+별도 서비스/엔드포인트로 존재한다).
 
-- **품질 필터링** (`_quality_errors`, `matching_service.py:107`) — 후보 공고를
-  순회하며 정규화 JSON(`normalized_json`)에 제목·지원요약·지원유형·매칭키워드
-  등 필수 필드가 비어 있으면 그 공고를 건너뛴다.
-- **자격요건(적격성) 필터링** (`_eligibility_score`, `matching_service.py:125`) —
-  지역/기업규모/업력단계를 기준으로 점수를 매겨 `eligible`/`needs_review`/
-  `likely_ineligible` 상태를 부여한다. `likely_ineligible`이면
-  `matching_service.py:237`에서 총점을 49점 이하로 강제 캡한다.
-- 이 두 필터를 통과·반영한 결과를 `total_score` 내림차순 정렬 후 상위
-  `max_results`건만 반환한다(`matching_service.py:362-363`).
+- **1차 필터링 — 자격요건 하드필터** (`notice_eligibility_service.get_eligible_notices()`,
+  `GET /api/eligible-notices/me`, 설계는 [`first-filtering.md`](./first-filtering.md)) —
+  공고 API 원본 데이터(정규화 컬럼, PDF 미열람)만으로 지역·대상(기업형태
+  게이트)·업력·신청기간 4축을 검사해 명시적으로 탈락시킨다(permissive 원칙 —
+  제한 정보가 없으면 통과). `run_matching()`은 이 결과의 `notice_ids`로
+  `match_log_repository.list_normalized_notice_candidates()`를 좁혀서 호출한다.
+- **품질 필터링** (`_quality_errors`) — 1차를 통과한 후보 중 정규화 JSON에
+  제목·지원요약·지원유형·매칭키워드 등 필수 필드가 비어 있으면 건너뛴다.
+- **2차 필터링 — RAG 유사도 검색 + LLM Judge** (`secondary_filtering_service.run_secondary_filtering()`
+  + `secondary_filtering_judge_service`, 설계는
+  [`secondary-filtering-llm-judge-guide.md`](./secondary-filtering-llm-judge-guide.md)) —
+  품질 필터까지 통과한 후보에 한해 공고 PDF 청크를 Chroma에 임베딩하고
+  사업계획서 임베딩과 유사도 검색, 상위 K건만 LLM이 요건 문장 단위로
+  충족/미충족/정보부족을 판정해 가중 집계한다.
+- **소프트 자격요건 점수** (`_eligibility_score`) — 1차 하드필터를 통과한
+  후보에 한해 지역/기업규모/업력단계로 감점형 점수를 매겨 `total_score`에
+  반영한다(하드필터가 안 보는 `기업규모` 축까지 포함 — 하드필터와 역할이
+  겹치지 않는 보완 관계).
+- 위 결과를 `total_score` 내림차순 정렬 후 상위 `max_results`건만 반환한다.
 
-즉 아래 3~5단계에서 설계한 **"원본 JSON 1차 필터링 → PDF OCR·벡터 DB 2차
-필터링 → LLM 매칭 스코어링"의 3단계 파이프라인은 아직 구현되지 않았다.**
-현재 점수는 벡터 검색이나 LLM 호출 없이, 사업계획서와 공고 정규화 JSON
-필드 간 토큰 겹침(자카드 유사도 방식)만으로 산출하는 규칙 기반 스코어링이다
-(`item_fit_score`/`business_fit_score`/`growth_score`/`bonus_score`,
-`matching_service.py`의 `_overlap_score`). 아래 3~5단계 서술은 앞으로 구현할
-목표 설계로 남겨두고, 실제 구현이 이 문서를 따라잡으면 이 절은 지운다.
+아래 1~5단계 설계 초안은 위 구현과 세부 명칭·순서가 다를 수 있다(예: 원래
+3단계로 계획했던 "원본 JSON 유사도 기반 1차 필터링"은 실제로는 하드필터
+방식으로 구현됐다) — 세부는 위 구현 현황과 각 링크된 문서를 우선한다.
 
 ## 1단계 — 회원가입 · 프로필 입력
 

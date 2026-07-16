@@ -2,9 +2,10 @@
 services/secondary_filtering_service.py
 
 2차 필터링(docs/matching-pipeline.md 4단계)의 유사도 검색·스코어링 부분.
-1차 필터링(품질·자격요건, matching_service._quality_errors/_eligibility_score)을
-통과한 공고 후보군을, 사업계획서 청크 임베딩으로 Chroma에서 검색해 공고별
-유사도 점수를 산출한다.
+1차 하드필터(지역/대상/업력/기간, notice_eligibility_service.get_eligible_notices,
+docs/first-filtering.md) + 품질 필터(matching_service._quality_errors)를 통과한
+공고 후보군을, 사업계획서 청크 임베딩으로 Chroma에서 검색해 공고별 유사도
+점수를 산출한다.
 
 matching_service.run_matching()이 공유 세션 안에서 후보를 순회하며 호출하므로,
 공고·사업계획서 임베딩이 아직 없으면 여기서 바로 만든다(온디맨드 —
@@ -87,8 +88,12 @@ def _similarity_to_score(distance: float) -> float:
     hnsw:space="cosine" 설정 기준)를 기존 스코어링 관례(35~100 스케일,
     matching_service._overlap_score 참고)와 맞춘 0~100 점수로 바꾼다.
 
-    변환식 자체는 TBD(docs/matching-pipeline.md 미정 항목) — 실제 검색 결과
-    분포를 보고 조정이 필요하다.
+    현재 역할: (1) matching_service._judge_top_candidates()가 LLM 판정 대상
+    상위 _SECONDARY_FILTERING_JUDGE_TOP_K건을 뽑는 랭킹 기준, (2) 그 K건 밖의
+    공고는 LLM 판정을 받지 않으므로 이 값이 그대로 최종 secondary_filter_score로
+    쓰인다. (2)에 한해 변환식 자체는 여전히 휴리스틱(실제 검색 결과 분포를
+    보고 조정이 필요할 수 있음) — 상위 K건(랭킹용 (1))의 최종 점수에는
+    영향이 없다(LLM 판정 결과인 aggregate_secondary_score가 대신 쓰인다).
     """
     similarity = 1.0 - distance
     return max(0.0, min(100.0, 35.0 + similarity * 65.0))

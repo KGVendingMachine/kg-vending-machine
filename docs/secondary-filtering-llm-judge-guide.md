@@ -2,7 +2,11 @@
 
 `bizSupportNavigator`(별도 레포, 이 프로젝트 루트에 참고용으로 클론됨) 코드를 참고해
 현재 2차 필터링(`docs/matching-pipeline.md` 4단계)을 어떻게 바꿀지 정리한 설계
-문서다. **아직 구현 전이며, 이 문서 승인 후 실제 코드 변경을 진행한다.**
+문서다.
+
+**구현 완료(PR #116, 2026-07-14 develop 병합).** 아래 "목표 설계"는 실제
+`secondary_filtering_judge_service.py`/`secondary_filtering_judge_client.py`에
+거의 그대로 반영됐다. "미정 항목"의 실제 해소 결과는 문서 하단을 참고.
 
 ## 왜 바꾸는가 (현재 문제)
 
@@ -37,6 +41,14 @@ Chroma에 넣고 **코사인 거리 → 35~100 사이 숫자**로 바꾸는 것�
 | `services/orchestrator.py` (LangGraph) | 위 단계를 그래프로 연결 | 이 저장소는 LangGraph를 쓰지 않고 `run_matching()` 안에서 순차 `await` 체인이다. **LangGraph 도입은 범위 밖 — 기존 방식대로 함수 호출 체인 유지.** |
 
 ## OCR은 언제, 어떻게 반영되는가 (중요 — 이번 변경의 전제 조건)
+
+> **2026-07-15 갱신**: 아래 문단은 "1차 필터링이라는 이름의 별도 엔드포인트는
+> 없다"던 당시(2026-07-13) 기준 설명이다. 지금은 `notice_eligibility_service.
+> get_eligible_notices()`(`GET /api/eligible-notices/me`, [`first-filtering.md`](./first-filtering.md))가
+> 실제 1차 필터링 엔드포인트로 존재한다. 다만 **"그 결과를 자동으로 OCR
+> 배치에 넘기는 연결 코드가 없다"는 아래 결론 자체는 여전히 유효** — 1차
+> 필터링은 신청기간이 지나지 않은 전체 저장 공고를 대상으로 하지, OCR
+> 배치 트리거 자동화까지 포함하지 않는다.
 
 **설계 의도: OCR은 1차 필터링 통과 후보만을 대상으로 한다.** `POST
 /internal/notices/ocr/batch`의 목적이 바로 이것이라고 코드 주석에 명시돼
@@ -239,28 +251,26 @@ score = 0 if any(exclusion judgment == "미충족") else round(raw_score)
 | API 응답 스키마 | `SecondaryFilteringLogResponse`, `MatchResultJson` | 필드 추가(`reasons`)만 있고 기존 필드 제거 없음 — 하위 호환 |
 | DB 마이그레이션 | - | 불필요 (JSONB 컬럼 재사용) |
 
-## 미정 항목 (TBD — 구현 착수 전 결정 필요)
+## 미정 항목 (TBD) — 실제 해소 결과 (2026-07-15)
 
-1. **LLM 호출 비용/지연 감수 범위** — 1차 필터링 통과 후보 전부에 LLM 판정을
-   돌릴지, 아니면 코사인 유사도 상위 K건으로 한 번 더 좁힌 뒤에만 판정할지.
-   bizSupportNavigator는 `rag_search`의 `limit`(기본 10)으로 이미 좁혀진
-   candidate에만 `llm_judge`를 돌린다 — 이 저장소도 동일하게 "1차 통과 후보"가
-   아니라 "1차 통과 + 유사도 상위 K건"만 LLM 판정 대상으로 좁히는 걸 권장.
-2. **제외요건 확정 시 캡 값** — `0`(bizSupportNavigator 그대로) vs 낮은 양수(예: `5.0`,
-   기존 `likely_ineligible` 49점 캡과의 정합성 고려).
-3. **사용할 모델** — `OPENAI_MODEL`(gpt-4o-mini) 재사용 vs 판정 정확도를 위한
-   상위 모델 분리. 정규화(`notice_normalization_service`)와 같은 계정/쿼터를
-   공유하게 되므로 동시 호출 총량(정규화 배치 + 매칭 판정)이 겹칠 때 레이트리밋
-   위험 재평가 필요(`notice_normalization_service.py:48-56`에 기록된 과거
-   타임아웃 실측 사례 참고).
-4. **`extra_facts`(사용자 채팅 답변) 도입 여부** — bizSupportNavigator는 채팅으로
-   보완 답변을 모아 재판정에 반영하는 Milestone 7 기능이 있다(`llm_judge.py`
-   docstring). 이 저장소에는 그런 채팅 플로우 자체가 없으므로 **이번 범위에서는
-   가져오지 않는다** — 별도 논의 필요 시 후속 문서로 분리.
-5. **캐싱 여부** — 임베딩은 "성공만 영구 캐싱"하는 규칙이 이미 있다
-   (`docs/matching-pipeline.md` 4단계 "벡터 DB 캐싱 규칙"). LLM 판정 결과도
-   같은 방식으로 캐싱할지(공고+사업계획서 조합이 같으면 재사용), 아니면
-   회사 프로필이 바뀔 수 있으니 매번 재호출할지 결정 필요.
+1. **LLM 호출 비용/지연 감수 범위** — **해소.** "1차 통과 + 유사도 상위 K건"으로
+   확정(`matching_service._SECONDARY_FILTERING_JUDGE_TOP_K = 15`). K건 밖의
+   공고는 LLM 판정 없이 코사인 유사도 점수를 그대로 쓴다.
+2. **제외요건 확정 시 캡 값** — **해소.** `5.0`으로 확정
+   (`secondary_filtering_judge_service._EXCLUDED_SCORE_CAP`). 기존
+   `likely_ineligible` 49점 캡과 별개의 이중 안전장치로 유지.
+3. **사용할 모델** — **해소.** `OPENAI_MODEL`(gpt-4o-mini) 재사용, 전용 모델
+   분리는 하지 않음. 동시 호출은 `SECONDARY_FILTERING_JUDGE_CONCURRENCY_LIMIT`
+   (기본 10) 세마포어로 제한.
+4. **`extra_facts`(사용자 채팅 답변) 도입 여부** — **Non-goal로 확정, 미도입.**
+   아래 "이번 변경에 포함하지 않는 것" 참고.
+5. **캐싱 여부** — **아직 미해결, 의도적 보류.** 현재 `judge_criteria()`는
+   매 `run_matching()` 호출마다(=사용자가 매칭을 다시 돌릴 때마다) 상위 K건
+   전부 재판정한다(캐싱 없음). 2026-07-15 기준으로도 결정되지 않았고, 2차
+   필터링 완료 범위(1차 하드필터와의 연동)와는 별개의 후속 과제로 남긴다 —
+   구현하려면 공고+사업계획서+기업프로필 조합을 캐시 키로 삼아야 하는데,
+   기업 프로필은 사용자가 언제든 수정할 수 있어 임베딩과 달리 "성공하면
+   영구 캐싱"이 그대로 적용되지 않는다(무효화 조건을 새로 설계해야 함).
 
 ## 이번 변경에 포함하지 않는 것 (Non-goals)
 
