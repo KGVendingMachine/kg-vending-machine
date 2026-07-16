@@ -1,11 +1,15 @@
 """
 scheduler.py
 
-이슈 #102: 공고 수집·사전 OCR·정규화를 매일 새벽에 자동 실행한다(APScheduler,
-main.py lifespan에서 시작). 흐름: 수집(전체 출처) -> 첨부파일 사전 OCR(전체
-출처) -> 정규화 배치(전체 출처). 사전 OCR을 추가한 이유(2026-07-15): 온디맨드
-방식이라 정규화/매칭 파이프라인 첫 요청이 느려졌다. 실패는 로그만 남기고
-다음날 스케줄로 자연 복구한다.
+이슈 #102: 공고 수집·사전 OCR·정규화·임베딩을 매일 새벽에 자동 실행한다
+(APScheduler, main.py lifespan에서 시작). 흐름: 수집(전체 출처) -> 첨부파일
+사전 OCR(전체 출처) -> 정규화 배치(전체 출처) -> 임베딩 백로그. 사전 OCR을
+추가한 이유(2026-07-15): 온디맨드 방식이라 정규화/매칭 파이프라인 첫 요청이
+느려졌다. 임베딩 백로그를 추가한 이유(2026-07-16): 같은 이유로, 공고 임베딩도
+온디맨드로 두면 실제 매칭 요청 안에서 처음 보는 공고를 그 자리에서
+다운로드·OCR·임베딩하느라 매칭 소요시간(정상 케이스도 ~2분)의 상당 부분을
+차지하는 걸 실측함 — 미리 다 임베딩해두면 매칭 시점엔 캐시 히트만 남는다.
+실패는 로그만 남기고 다음날 스케줄로 자연 복구한다.
 """
 
 import logging
@@ -29,10 +33,14 @@ _DAILY_NORMALIZATION_LIMIT = 300
 # 첨부파일 사전 OCR 하루 상한 — _DAILY_NORMALIZATION_LIMIT과 같은 이유(밀린
 # 만큼 다음날 이어서 처리).
 _DAILY_ATTACHMENT_OCR_LIMIT = 300
+# 임베딩 백로그 하루 상한 — 위 두 상한과 같은 이유. 이미 임베딩된 공고는
+# ensure_notice_embedded가 건너뛰므로, 밀린 게 없으면 사실상 바로 끝난다.
+_DAILY_EMBEDDING_LIMIT = 500
 
 
 async def run_daily_notice_pipeline() -> None:
-    """새벽 스케줄러가 호출하는 진입점. 수집 -> 첨부파일 사전 OCR -> 정규화 순서로 실행한다."""
+    """새벽 스케줄러가 호출하는 진입점.
+    수집 -> 첨부파일 사전 OCR -> 정규화 -> 임베딩 백로그 순서로 실행한다."""
     from app.db.session import async_session_factory
 
     async with async_session_factory() as session:
@@ -43,6 +51,9 @@ async def run_daily_notice_pipeline() -> None:
 
     async with async_session_factory() as session:
         await _run_normalization_batch(session)
+
+    async with async_session_factory() as session:
+        await _run_embedding_backlog(session)
 
 
 async def _run_collection(session: "AsyncSession") -> None:
@@ -170,3 +181,25 @@ async def _run_normalization_batch(session: "AsyncSession") -> None:
             )
 
     logger.info("스케줄러: 정규화 배치 트리거 완료")
+
+
+async def _run_embedding_backlog(session: "AsyncSession") -> None:
+    """정규화 완료된 공고를 미리 임베딩해, 매칭 요청 중 온디맨드 임베딩으로
+    지연되는 걸 막는다(2026-07-16, 겹친 매칭 요청 지연을 조사하다 발견)."""
+    from app.api.notice_embedding_backlog import start_embedding_backlog
+    from app.schemas.notice_embedding_backlog import EmbeddingBacklogTriggerRequest
+
+    background_tasks = BackgroundTasks()
+    try:
+        result = await start_embedding_backlog(
+            background_tasks,
+            request=EmbeddingBacklogTriggerRequest(limit=_DAILY_EMBEDDING_LIMIT),
+            session=session,
+        )
+        # 요청 컨텍스트가 없어 BackgroundTasks가 자동 실행되지 않으므로 직접 실행한다.
+        await background_tasks()
+    except Exception:
+        logger.exception("스케줄러: 임베딩 백로그 트리거 실패")
+        return
+
+    logger.info("스케줄러: 임베딩 백로그 대상 %d건, 배치로 트리거 완료", result.total)

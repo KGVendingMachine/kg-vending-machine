@@ -3,15 +3,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.models.business_plan import BusinessPlan
+from app.models.category import CategoryName, KgCategory
 from app.models.company import CompanyProfile
 from app.models.match import MatchLog, MatchResult
 from app.models.notice import Notice
@@ -39,6 +42,14 @@ _SECONDARY_FILTERING_JUDGE_TOP_K = 15
 
 _secondary_filtering_judge_semaphore = asyncio.Semaphore(
     get_settings().SECONDARY_FILTERING_JUDGE_CONCURRENCY_LIMIT
+)
+
+# run_matching() 전체 동시 실행 상한. 매칭 한 건 안에서도 임베딩·LLM 판정이
+# 각자 세마포어 한도만큼 동시 호출하므로, 서로 다른 유저의 매칭이 겹치면 그
+# 한도가 곱절로 늘어 OpenAI 레이트리밋에 걸린다(match_log.py의 유저별 중복
+# 실행 방지와 별개로, 여기서 유저가 달라도 겹치는 것 자체를 막는다).
+_matching_pipeline_semaphore = asyncio.Semaphore(
+    get_settings().MATCHING_PIPELINE_CONCURRENCY_LIMIT
 )
 
 _QUALITY_REQUIRED_FIELDS: tuple[str, ...] = (
@@ -218,6 +229,15 @@ def _parse_notice(notice: Notice) -> NormalizedNoticeSchema | None:
 def _eligibility_score(
     profile: CompanyProfile, notice: NormalizedNoticeSchema
 ) -> tuple[float, str, list[str]]:
+    """소프트 자격요건 점수(감점형, total_score 구성요소).
+
+    run_matching()의 get_eligible_notices()(지역/대상/업력/기간 하드필터,
+    docs/first-filtering.md)와 검사 축이 겹치지만 목적이 다르다 — 하드필터는
+    통과 못 하면 아예 후보에서 빠지고, 이 함수는 이미 하드필터를 통과한
+    공고에 한해 기업규모(company_size, 하드필터가 안 보는 축)까지 포함해
+    감점형으로 재차 점수를 매긴다. 중복이 아니라 보완 관계이므로 하드필터
+    도입 후에도 그대로 유지한다.
+    """
     score = 55.0
     cautions: list[str] = []
 
@@ -266,6 +286,29 @@ def _eligibility_score(
         status = "needs_review"
     else:
         status = "likely_ineligible"
+
+    # R&D 공고 실측(300건) 기준 80%가 컨소시엄/연구기관 신청구조를 갖는데,
+    # 그중 "대학·출연연 전용"(기업이 아예 참여 불가)인 공고까지 매칭 후보에
+    # 그대로 올라가고 있었다. 이건 감점이 아니라 확실한 하드 컷이어야 한다 —
+    # 지역/규모/단계가 아무리 잘 맞아도 회사가 신청 자체를 할 수 없는
+    # 공고이므로, 다른 요인과 무관하게 무조건 likely_ineligible로 강제한다.
+    if notice.eligibility.applicant_structure == "컨소시엄·기관 전용(기업 참여 불가)":
+        score = min(score, 20.0)
+        status = "likely_ineligible"
+        cautions.append(
+            "이 공고는 대학·연구기관 전용으로 보입니다 — 기업 단독/참여 신청이"
+            " 불가능할 수 있으니 원문을 확인하세요."
+        )
+    elif notice.eligibility.applicant_structure == "컨소시엄 필요(기업 주관/참여 가능)":
+        # 사업계획서는 "이 회사가 지금 파트너를 구했는지"를 알려주지 않는다
+        # (그건 신청 시점의 섭외 상황이지, 회사의 기술/업종 정보가 아니다).
+        # 그래서 점수는 그대로 두되(기술 적합성 자체는 여전히 유효한 신호),
+        # "파트너를 구해야 신청 가능하다"는 걸 놓치지 않도록 반드시 안내한다.
+        cautions.append(
+            "이 공고는 컨소시엄(공동 신청) 구성이 필요합니다 — 대학·연구소·"
+            "타 기업 등 파트너를 먼저 구해야 신청할 수 있습니다."
+        )
+
     return score, status, cautions
 
 
@@ -353,13 +396,13 @@ def _score_notice(
     weakness = _weakness(cautions, item_fit_score, business_fit_score)
     strategy = _strategy_suggestion(normalized_notice, growth_score)
 
-    logger.info(
-        "🧠 AI 정밀 판정 근거 (notice_id=%s): 💪 강점=%s | ⚠️ 주의=%s | 💡 제안=%s",
-        notice.id,
-        strengths,
-        weakness,
-        strategy,
-    )
+    # logger.info(
+    #     "🧠 AI 정밀 판정 근거 (notice_id=%s): 💪 강점=%s | ⚠️ 주의=%s | 💡 제안=%s",
+    #     notice.id,
+    #     strengths,
+    #     weakness,
+    #     strategy,
+    # )
 
     result_json = {
         "notice_quality": {"status": "passed", "missing_fields": []},
@@ -620,12 +663,40 @@ async def run_matching(
     profile: CompanyProfile,
     max_results: int,
 ) -> list[MatchResult]:
+    """매칭 파이프라인 진입점. 전체 동시 실행 개수를 세마포어로 제한해, 서로
+    다른 유저의 매칭이 겹쳐 OpenAI 호출 한도를 나눠 쓰는 걸 막는다."""
+    async with _matching_pipeline_semaphore:
+        return await _run_matching_locked(
+            session, log=log, plan=plan, profile=profile, max_results=max_results
+        )
+
+
+async def _run_matching_locked(
+    session: AsyncSession,
+    *,
+    log: MatchLog,
+    plan: BusinessPlan,
+    profile: CompanyProfile,
+    max_results: int,
+) -> list[MatchResult]:
+    # 매칭이 느려질 때 추측 대신 로그로 바로 어느 단계인지 짚을 수 있도록,
+    # 주요 단계 경계마다 소요 시간을 재서 마지막에 한 줄로 남긴다(2026-07-16).
+    stage_started_at = time.monotonic()
+    stage_durations: dict[str, float] = {}
+
+    def _mark_stage(name: str) -> None:
+        nonlocal stage_started_at
+        now = time.monotonic()
+        stage_durations[name] = now - stage_started_at
+        stage_started_at = now
+
     normalized_plan = _parse_business_plan(plan)
     eligibility_result = await get_eligible_notices(session, profile)
     candidates = await match_log_repository.list_normalized_notice_candidates(
         session,
         notice_ids=eligibility_result.notice_ids,
     )
+    _mark_stage("1차_하드필터+후보조회")
     logger.info(
         "매칭 시작 (match_log_id=%s, business_plan_id=%s): 1차 하드필터 통과 "
         "%d건 중 정규화 완료 후보 공고 %d건 (축별 집계=%s)",
@@ -646,17 +717,27 @@ async def run_matching(
             "매칭할 수 있는 공고가 없습니다. 공고 정규화가 완료된 뒤 다시 시도해주세요."
         )
 
-    # docs/matching-pipeline.md "로깅 요구사항" — 1차 필터링(품질 필터 +
-    # 자격요건 필터) 단계는 별도 엔드포인트 없이 이 루프 안에 통합돼 있어,
-    # 어느 기준에서 몇 건이 걸러졌는지는 로그로만 추적할 수 있다.
+    # docs/matching-pipeline.md "로깅 요구사항" — 1차 하드필터(지역/대상/업력/
+    # 기간, docs/first-filtering.md)는 위 get_eligible_notices()에서 이미
+    # 끝났고, 여기서부터는 그 결과 위에 품질 필터(정규화 필수 필드 존재 여부)
+    # 만 이 루프 안에서 추가로 적용한다. 어느 기준에서 몇 건이 걸러졌는지는
+    # 로그로만 추적할 수 있다.
     quality_failed: dict[int, list[str]] = {}
     parse_failed_ids: list[int] = []
+    quantitative_failed: dict[int, str] = {}
     eligibility_counts: dict[str, int] = {
         "eligible": 0,
         "needs_review": 0,
         "likely_ineligible": 0,
     }
 
+    # PPT 원래 설계("2차 필터링 · 정량 적합도 평가 — 임계값 이상만 통과")를
+    # 실제로 구현한 게이트. _eligibility_score(신청주체 구조·지역·기업규모·
+    # 단계)를 임베딩·LLM 판정(비용이 큰 RAG·LLM 단계) 이전에 먼저 계산해,
+    # likely_ineligible로 확정된 후보는 여기서 걸러낸다 — 그래야 RAG·LLM
+    # 호출 자체가 줄어 PPT가 말한 비용 효율이 실현된다. 이전엔 이 점수를
+    # _score_notice에서 맨 마지막에만 계산해서, 명백히 안 맞는 공고까지
+    # 전부 임베딩·LLM 호출을 거친 뒤에야 낮은 점수로 걸러졌다.
     passed: list[tuple[Notice, NormalizedNoticeSchema]] = []
     for notice in candidates:
         quality_errors = _quality_errors(notice.normalized_json or {})
@@ -669,11 +750,30 @@ async def run_matching(
             parse_failed_ids.append(notice.id)
             continue
 
+        _, eligibility_status, _ = _eligibility_score(profile, normalized_notice)
+        if eligibility_status == "likely_ineligible":
+            quantitative_failed[notice.id] = (
+                normalized_notice.eligibility.applicant_structure or "자격요건 불일치"
+            )
+            continue
+
         passed.append((notice, normalized_notice))
+
+    _mark_stage("품질필터+정량게이트")
+
+    if quantitative_failed:
+        logger.info(
+            "2차 필터링(정량 게이트) [match_log_id=%s] 자격요건 미달로 %d건 제외"
+            " (RAG·LLM 단계 진입 전): %s",
+            log.id,
+            len(quantitative_failed),
+            quantitative_failed,
+        )
 
     if not passed:
         logger.warning(
-            "매칭 불가 (match_log_id=%s): 후보 %d건 전부 품질 기준 미달 또는 파싱 실패",
+            "매칭 불가 (match_log_id=%s): 후보 %d건 전부 품질 기준 미달·파싱 실패·"
+            "자격요건 미달(정량 게이트)로 제외됨",
             log.id,
             len(candidates),
         )
@@ -681,16 +781,34 @@ async def run_matching(
             "매칭 기준을 충족하는 공고가 없습니다. 공고 정규화 품질을 확인해주세요."
         )
 
-    # 2차 필터링(docs/matching-pipeline.md 4단계) — 1차 필터링(품질+자격요건)을
-    # 통과한 후보에 한해서만 공고 PDF 임베딩·유사도 검색을 수행한다(전체
-    # 후보를 다 임베딩하면 비용이 크므로, 3단계에서 명백히 무관한 공고를
-    # 먼저 제거하는 것과 같은 이유). 임베딩이 없거나 실패한 공고는 결과에서
-    # 빠지고 _score_notice가 중립값으로 처리한다.
+    # R&D(기술개발) 공고는 지원자격·평가기준이 원문에 길게 나열되는 경우가
+    # 많아, 2차 필터링(임베딩 유사도 검색)에서 일반 공고보다 더 넓게 훑어야
+    # 자격요건 근거를 놓치지 않는다 — run_secondary_filtering에 넘길
+    # notice_id 집합을 여기서 category_id로 가려낸다.
+    rd_category_id = (
+        await session.execute(
+            select(KgCategory.id).where(KgCategory.name == CategoryName.TECH)
+        )
+    ).scalar_one_or_none()
+    rd_notice_ids = (
+        {notice.id for notice, _ in passed if notice.category_id == rd_category_id}
+        if rd_category_id is not None
+        else set()
+    )
+
+    # 2차 필터링(docs/matching-pipeline.md 4단계) — 1차 하드필터
+    # (get_eligible_notices) + 품질 필터 + 정량 게이트를 모두 통과한 `passed`에
+    # 한해서만 공고 PDF 임베딩·유사도 검색을 수행한다(전체 후보를 다 임베딩하면
+    # 비용이 크므로, 명백히 무관하거나 자격 미달인 공고를 먼저 제거하는 것과
+    # 같은 이유). 임베딩이 없거나 실패한 공고는 결과에서 빠지고 _score_notice가
+    # 중립값으로 처리한다.
     secondary_result = await run_secondary_filtering(
         session,
         business_plan_id=plan.id,
         candidate_notice_ids=[notice.id for notice, _ in passed],
+        rd_notice_ids=rd_notice_ids,
     )
+    _mark_stage("2차필터링(임베딩+유사도검색)")
     # 유사도 상위 K건만 LLM으로 정밀 판정한다(docs/secondary-filtering-llm-judge-guide.md)
     # — final_scores는 판정된 공고는 판정 점수, 나머지는 기존 유사도 점수를 담는다.
     final_secondary_scores, secondary_judgments = await _judge_top_candidates(
@@ -700,6 +818,7 @@ async def run_matching(
         secondary_result=secondary_result,
         passed=passed,
     )
+    _mark_stage("LLM_정밀판정")
 
     scored: list[ScoredNotice] = []
     for notice, normalized_notice in passed:
@@ -728,6 +847,7 @@ async def run_matching(
             result.eligibility_status,
             (result.result_json or {}).get("matched_keywords"),
         )
+    _mark_stage("점수산출")
 
     log.secondary_filtering_log = _build_secondary_filtering_log(
         passed=passed,
@@ -794,6 +914,7 @@ async def run_matching(
     )
 
     await match_log_repository.replace_results(session, log.id, selected)
+    _mark_stage("결과저장")
 
     log.run_status = "completed"
     log.completed_at = _now_naive()
@@ -810,5 +931,11 @@ async def run_matching(
             )
             for item in scored[:max_results]
         ],
+    )
+    logger.info(
+        "매칭 단계별 소요시간 (match_log_id=%s, 총 %.1f초): %s",
+        log.id,
+        sum(stage_durations.values()),
+        {name: round(seconds, 2) for name, seconds in stage_durations.items()},
     )
     return selected

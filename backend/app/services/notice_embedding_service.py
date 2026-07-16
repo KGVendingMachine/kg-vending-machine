@@ -31,13 +31,16 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.chroma_client import get_notice_collection
 from app.ai.embedding_client import embed_texts
-from app.models.notice import NoticeChunk
+from app.models.category import CategoryName, KgCategory
+from app.models.notice import Notice, NoticeAttachment, NoticeChunk
 from app.repositories import notice_repository
 from app.services.notice_ocr_service import ensure_notice_attachment_ocr
+from app.services.rd_notice_chunking import chunk_rd_notice_text
 from app.services.text_chunking import chunk_text
 
 logger = logging.getLogger(__name__)
@@ -49,6 +52,20 @@ class NoticeEmbeddingResult:
     chunk_count: int
     skipped_reason: str | None = None
     """embedded가 False일 때만 값이 있다. 현재는 "no_text" 하나뿐."""
+
+
+async def _is_rd_notice(session: AsyncSession, notice_id: int) -> bool:
+    """R&D(기술개발) 카테고리 공고인지 확인한다.
+    이 경우만 rd_notice_chunking의 섹션 기반 청킹을 쓴다(그 외는 범용 chunk_text)."""
+    notice = await session.get(Notice, notice_id)
+    if notice is None or notice.category_id is None:
+        return False
+    rd_category_id = (
+        await session.execute(
+            select(KgCategory.id).where(KgCategory.name == CategoryName.TECH)
+        )
+    ).scalar_one_or_none()
+    return rd_category_id is not None and notice.category_id == rd_category_id
 
 
 async def _chunks_exist_in_chroma(chunks: list[NoticeChunk]) -> bool:
@@ -66,19 +83,32 @@ async def _chunks_exist_in_chroma(chunks: list[NoticeChunk]) -> bool:
     return len(response.get("ids") or []) == len(chunks)
 
 
+def _chunks_are_stale(chunks: list[NoticeChunk], target: NoticeAttachment) -> bool:
+    """원문(첨부파일)이 청크보다 나중에 갱신됐으면(재수집 등) 낡은 청크로 본다.
+    2줄 요약: created_at 기준으로 최신 청크 시각과 첨부파일 updated_at을 비교한다."""
+    latest_chunk_at = max(chunk.created_at for chunk in chunks)
+    return target.updated_at > latest_chunk_at
+
+
 async def ensure_notice_embedded(
     session: AsyncSession, notice_id: int
 ) -> NoticeEmbeddingResult:
-    """공고 하나의 2차 필터링 임베딩이 준비돼 있는지 확인하고, 없으면 만든다.
+    """공고 하나의 2차 필터링 임베딩이 준비돼 있는지 확인하고, 없거나 낡았으면 만든다.
 
     커밋은 하지 않는다(flush만) — 매칭 파이프라인의 공유 세션 안에서 여러 공고를
     순회하며 호출될 수 있어(secondary_filtering_service), 호출자가 트랜잭션
     경계를 관리한다(match_log_repository.create/replace_results와 동일한 규칙).
     """
+    target = await ensure_notice_attachment_ocr(session, notice_id)
+    if target is None or not target.parsed_text:
+        return NoticeEmbeddingResult(
+            embedded=False, chunk_count=0, skipped_reason="no_text"
+        )
+
     existing = await notice_repository.get_notice_chunks_by_notice_id(
         session, notice_id
     )
-    if existing:
+    if existing and not _chunks_are_stale(existing, target):
         if await _chunks_exist_in_chroma(existing):
             return NoticeEmbeddingResult(embedded=True, chunk_count=len(existing))
         logger.warning(
@@ -88,14 +118,18 @@ async def ensure_notice_embedded(
             notice_id,
             len(existing),
         )
-
-    target = await ensure_notice_attachment_ocr(session, notice_id)
-    if target is None or not target.parsed_text:
-        return NoticeEmbeddingResult(
-            embedded=False, chunk_count=0, skipped_reason="no_text"
+    elif existing:
+        logger.info(
+            "공고 %s의 원문이 청크보다 최신이라 재임베딩한다 (재수집 등으로 "
+            "첨부파일이 갱신된 경우로 추정)",
+            notice_id,
         )
 
-    chunks = chunk_text(target.parsed_text, chunk_type="attachment")
+    chunks = (
+        chunk_rd_notice_text(target.parsed_text)
+        if await _is_rd_notice(session, notice_id)
+        else chunk_text(target.parsed_text, chunk_type="attachment")
+    )
     if not chunks:
         return NoticeEmbeddingResult(
             embedded=False, chunk_count=0, skipped_reason="no_text"

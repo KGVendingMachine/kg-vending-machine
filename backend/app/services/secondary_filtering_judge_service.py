@@ -59,6 +59,28 @@ class JudgedSecondaryScore:
     judgments: list[CriterionJudgment] = field(default_factory=list)
 
 
+# 사업계획서·기업 프로필 어디에도 안 나오고, 세무서·신용평가사 실시간 조회
+# 없이는 사업계획서 텍스트만으로 절대 판단할 수 없는 제외요건 키워드. 이런
+# 항목은 어떤 공고에서도 100% "정보부족"으로 귀결되거나(실측, 2026-07-15
+# 스크린샷 — "재무 요건 불충족", "신용유의정보", "자본잠식" 전부 정보부족)
+# LLM이 근거 없이 낙관적으로 "충족"을 찍는 식으로만 답이 나온다 — 어느 쪽이든
+# 실제 매칭 품질 신호가 아니라 모든 공고에 똑같이 끼는 잡음이라, 판정 대상
+# 문장 자체를 만들지 않고 애초에 제외한다.
+_UNVERIFIABLE_KEYWORDS = (
+    "신용",
+    "재무",
+    "자본잠식",
+    "체납",
+    "부채비율",
+    "재무제표",
+    "결산",
+)
+
+
+def _is_unverifiable_from_business_plan(statement: str) -> bool:
+    return any(keyword in statement for keyword in _UNVERIFIABLE_KEYWORDS)
+
+
 def _build_criteria(notice: NormalizedNoticeSchema) -> list[tuple[str, str, bool]]:
     """(criterion_id, statement, is_exclusion) 목록을 만든다.
 
@@ -67,7 +89,8 @@ def _build_criteria(notice: NormalizedNoticeSchema) -> list[tuple[str, str, bool
     채우면 신호만 희석된다. exclusion 쪽(제외대상, 실격사유)은
     bizSupportNavigator llm_judge.py 관례와 동일하게 "~에 해당하지 않음"으로
     긍정 재구성해, 충족/미충족의 의미(둘 다 "이 기업에 좋음"이 충족)를
-    eligibility와 통일한다.
+    eligibility와 통일한다. 신용·재무 상태처럼 사업계획서로 원천적으로
+    검증 불가능한 문장은 같은 이유(신호 희석 방지)로 아예 만들지 않는다.
     """
     items: list[tuple[str, str, bool]] = []
     eligibility = notice.eligibility
@@ -106,8 +129,12 @@ def _build_criteria(notice: NormalizedNoticeSchema) -> list[tuple[str, str, bool
         )
 
     for index, target in enumerate(eligibility.excluded_targets):
+        if _is_unverifiable_from_business_plan(target):
+            continue
         items.append((f"excl:target:{index}", f"{target}에 해당하지 않음", True))
     for index, reason in enumerate(notice.evaluation.disqualification_reasons):
+        if _is_unverifiable_from_business_plan(reason):
+            continue
         items.append((f"excl:reason:{index}", f"{reason}에 해당하지 않음", True))
 
     return items
@@ -118,6 +145,7 @@ def _company_profile_text(
 ) -> str:
     return (
         f"기업규모: {profile.company_size or '정보없음'}\n"
+        f"사업자유형: {profile.business_type or '정보없음'}\n"
         f"지역: {profile.region_name or '정보없음'}\n"
         f"업종코드: {profile.industry_code or '정보없음'}\n"
         f"사업 단계: {profile.company_stage or '정보없음'}\n"

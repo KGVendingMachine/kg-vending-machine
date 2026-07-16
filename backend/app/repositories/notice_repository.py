@@ -834,6 +834,29 @@ async def get_notice_ids_pending_normalization(
     return list(result.scalars().all())
 
 
+async def get_notice_ids_completed_normalization(
+    session: AsyncSession, limit: int
+) -> list[int]:
+    """정규화 완료(completed)된 공고 id를 마감 임박순으로 가져온다 (임베딩
+    백로그 배치용 — 매칭 시점에 온디맨드로 임베딩하는 대신 미리 벡터 DB에
+    적재해두면, 실제 매칭 요청에서 해당 공고를 후보로 만날 때 임베딩을
+    새로 만들 필요가 없다).
+
+    is_actionable=False(마감·중단된 공고)는 어차피 매칭 후보가 될 일이 없어
+    제외한다 — 임베딩 비용만 쓰고 안 쓰일 공고를 걸러내는 목적.
+    """
+    result = await session.execute(
+        select(Notice.id)
+        .where(
+            Notice.normalization_status == "completed",
+            Notice.is_actionable.is_not(False),
+        )
+        .order_by(Notice.application_end_date.asc().nulls_last(), Notice.id.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
 async def get_notice_ids_pending_attachment_ocr(
     session: AsyncSession, limit: int, exclude_source_names: set[str]
 ) -> list[int]:

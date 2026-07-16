@@ -13,6 +13,7 @@ ai/secondary_filtering_judge_client.py
 """
 
 import logging
+from typing import Any
 
 from openai import (
     APIConnectionError,
@@ -22,7 +23,7 @@ from openai import (
     OpenAIError,
     RateLimitError,
 )
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, field_validator
 
 from app.core.config import get_settings
 
@@ -48,9 +49,13 @@ _SYSTEM_PROMPT = """\
 - "~에 해당하지 않음" 형태로 재구성된 제외요건 문장은, 기업이 실제로 그 \
 제외 대상에 해당하면 "미충족"(제외 대상에 해당함), 해당하지 않으면 "충족"으로 \
 판단하라.
-- 각 판정에 근거가 된 문장을 evidence에 짧게 남겨라(근거를 찾지 못했으면 null).
-- 아래 JSON 형식으로만 응답하라. 다른 텍스트는 포함하지 마라.
-{"judgments": [{"criterion_id": "문자열", "status": "충족|미충족|정보부족", "evidence": "문자열 또는 null"}]}
+- 각 판정에 근거가 된 문장을 evidence에 짧게 남겨라. 근거를 찾지 못했으면 evidence는
+JSON null 값으로 두어라 — "null"이라는 글자를 따옴표로 감싼 문자열로 쓰지 마라.
+- 아래 JSON 형식으로만 응답하라. 다른 텍스트는 포함하지 마라. 예시:
+{"judgments": [
+  {"criterion_id": "elig:region", "status": "충족", "evidence": "서울 소재 기업 대상"},
+  {"criterion_id": "elig:size", "status": "정보부족", "evidence": null}
+]}
 """
 
 
@@ -58,10 +63,24 @@ class AiJudgeError(Exception):
     """LLM 판정 호출이 (재시도 끝에도) 실패했을 때. 원인은 __cause__로 확인."""
 
 
+def _coerce_null_string_to_none(value: Any) -> Any:
+    """LLM이 프롬프트 지시를 무시하고 evidence 없음을 JSON null 대신
+    문자열 "null"로 출력하는 경우가 실측으로 확인됨(2026-07-15, 화면에
+    "— null"이 그대로 노출됨) — 프롬프트를 고쳐도 완전히 막을 보장이 없어
+    스키마에서 방어적으로 한 번 더 걸러낸다."""
+    if isinstance(value, str) and value.strip().lower() == "null":
+        return None
+    return value
+
+
 class _JudgedCriterionResponse(BaseModel):
     criterion_id: str
     status: str
     evidence: str | None = None
+
+    _coerce_evidence = field_validator("evidence", mode="before")(
+        _coerce_null_string_to_none
+    )
 
 
 class _JudgeResponse(BaseModel):
@@ -91,7 +110,7 @@ def _build_user_prompt(
         f"[공고문 발췌]\n{evidence_block}\n\n"
         f"[판정할 요건]\n{criteria_block}"
     )
-    print("##### build_userpormpt()", result)
+    logger.debug("secondary_filtering_judge_client 판정 프롬프트: %s", result)
     return result
 
 

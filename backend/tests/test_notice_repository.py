@@ -25,6 +25,7 @@ from app.repositories.notice_repository import (
     get_notice_regions,
     get_notice_regions_by_ids,
     get_kg_category_id,
+    get_notice_ids_completed_normalization,
     get_notice_ids_pending_normalization,
     get_notice_target_types,
     get_notices_missing_category,
@@ -266,6 +267,69 @@ async def test_get_notice_ids_pending_normalization_respects_limit(db_session):
         await _create_notice(db_session, source, external_id=f"limit-{i}")
 
     result = await get_notice_ids_pending_normalization(db_session, limit=2)
+
+    assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# get_notice_ids_completed_normalization (임베딩 백로그 배치용, 2026-07-15)
+# ---------------------------------------------------------------------------
+
+
+async def test_get_notice_ids_completed_normalization_excludes_pending_and_inactionable(
+    db_session,
+):
+    """completed인 공고 중에서도 is_actionable=False(마감·중단)는 제외돼야
+    한다 — 임베딩 백로그가 어차피 매칭 후보가 될 수 없는 공고까지 미리
+    임베딩해 비용만 쓰는 걸 막는 목적."""
+    source = await _create_source(db_session, "임베딩백로그출처")
+    completed_id = await _create_notice(db_session, source, external_id="embed-완료")
+    pending_id = await _create_notice(db_session, source, external_id="embed-대기")
+    inactionable_id = await _create_notice(
+        db_session, source, external_id="embed-마감", is_actionable=False
+    )
+
+    await update_notice_normalization(
+        db_session,
+        completed_id,
+        normalized_json={"basic": {}},
+        normalization_status="completed",
+        normalization_error=None,
+        normalized_at=datetime(2026, 1, 1),
+    )
+    await update_notice_normalization(
+        db_session,
+        inactionable_id,
+        normalized_json={"basic": {}},
+        normalization_status="completed",
+        normalization_error=None,
+        normalized_at=datetime(2026, 1, 1),
+    )
+
+    result = await get_notice_ids_completed_normalization(db_session, limit=100_000)
+
+    assert completed_id in result
+    assert pending_id not in result
+    assert inactionable_id not in result
+
+
+async def test_get_notice_ids_completed_normalization_respects_limit(db_session):
+    source = await _create_source(db_session, "임베딩백로그제한출처")
+    ids = [
+        await _create_notice(db_session, source, external_id=f"embed-limit-{i}")
+        for i in range(3)
+    ]
+    for notice_id in ids:
+        await update_notice_normalization(
+            db_session,
+            notice_id,
+            normalized_json={"basic": {}},
+            normalization_status="completed",
+            normalization_error=None,
+            normalized_at=datetime(2026, 1, 1),
+        )
+
+    result = await get_notice_ids_completed_normalization(db_session, limit=2)
 
     assert len(result) == 2
 

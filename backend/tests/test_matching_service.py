@@ -1,8 +1,18 @@
+import asyncio
+
+import pytest
+
 from app.models.company import CompanyProfile
 from app.models.notice import Notice
 from app.schemas.business_plan import NormalizedBusinessPlanSchema
 from app.schemas.notice_normalization import NormalizedNoticeSchema
-from app.services.matching_service import _quality_errors, _score_notice
+from app.services import matching_service
+from app.services.matching_service import (
+    _eligibility_score,
+    _quality_errors,
+    _score_notice,
+    run_matching,
+)
 
 
 def _plan() -> NormalizedBusinessPlanSchema:
@@ -73,3 +83,68 @@ def test_score_notice_returns_recommendation_breakdown():
     assert result.eligibility_status in {"eligible", "needs_review"}
     assert result.result_json["notice_quality"]["status"] == "passed"
     assert result.summary_reason
+
+
+def test_eligibility_score_hard_cuts_institute_only_applicant_structure():
+    # 지역/규모가 완벽히 일치해도, 신청주체가 대학·출연연 전용이면 기업은
+    # 애초에 신청 자체를 못 하므로 다른 조건과 무관하게 무조건 탈락시켜야
+    # 한다(R&D 공고 실측 300건 기준 80%가 컨소시엄/연구기관 구조).
+    notice_json = _notice_json()
+    notice_json["eligibility"][
+        "applicant_structure"
+    ] = "컨소시엄·기관 전용(기업 참여 불가)"
+    normalized_notice = NormalizedNoticeSchema.model_validate(notice_json)
+    profile = CompanyProfile(company_size="small company", region_name="Seoul")
+
+    score, status, cautions = _eligibility_score(profile, normalized_notice)
+
+    assert score <= 20.0
+    assert status == "likely_ineligible"
+    assert any("대학·연구기관 전용" in caution for caution in cautions)
+
+
+def test_eligibility_score_warns_but_does_not_cut_open_consortium():
+    # 컨소시엄이 필요해도 기업이 주관/참여 가능한 구조면 하드컷하지 않는다
+    # — 파트너 섭외 여부는 신청 시점 상황이지 사업계획서로 알 수 있는 정보가
+    # 아니므로, 점수는 그대로 두고 안내 문구만 추가한다.
+    notice_json = _notice_json()
+    notice_json["eligibility"][
+        "applicant_structure"
+    ] = "컨소시엄 필요(기업 주관/참여 가능)"
+    normalized_notice = NormalizedNoticeSchema.model_validate(notice_json)
+    profile = CompanyProfile(company_size="small company", region_name="Seoul")
+
+    score, status, cautions = _eligibility_score(profile, normalized_notice)
+
+    assert status != "likely_ineligible"
+    assert any("컨소시엄(공동 신청) 구성이 필요" in caution for caution in cautions)
+
+
+@pytest.mark.anyio
+async def test_run_matching_limits_global_concurrency(monkeypatch):
+    """서로 다른 유저의 매칭이 겹쳐도 실제 실행은 세마포어 한도만큼만
+    동시에 돈다(2026-07-16, 겹친 요청 하나가 21분 걸린 걸 실측해 추가)."""
+    monkeypatch.setattr(
+        matching_service, "_matching_pipeline_semaphore", asyncio.Semaphore(1)
+    )
+    concurrent = 0
+    max_concurrent = 0
+
+    async def _fake_locked(session, *, log, plan, profile, max_results):
+        nonlocal concurrent, max_concurrent
+        concurrent += 1
+        max_concurrent = max(max_concurrent, concurrent)
+        await asyncio.sleep(0.05)
+        concurrent -= 1
+        return []
+
+    monkeypatch.setattr(matching_service, "_run_matching_locked", _fake_locked)
+
+    await asyncio.gather(
+        *(
+            run_matching(None, log=None, plan=None, profile=None, max_results=10)
+            for _ in range(3)
+        )
+    )
+
+    assert max_concurrent == 1

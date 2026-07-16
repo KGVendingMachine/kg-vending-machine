@@ -18,6 +18,7 @@ from app.services.secondary_filtering_judge_service import (
     NEUTRAL_SCORE,
     CriterionJudgment,
     _build_criteria,
+    _company_profile_text,
     aggregate_secondary_score,
     judge_notice,
 )
@@ -33,7 +34,7 @@ def _notice(**eligibility_overrides) -> NormalizedNoticeSchema:
                 "target_company_size": ["소기업"],
                 **eligibility_overrides,
             },
-            "evaluation": {"disqualification_reasons": ["세금 체납"]},
+            "evaluation": {"disqualification_reasons": ["휴업 중인 기업"]},
         }
     )
 
@@ -64,7 +65,43 @@ def test_build_criteria_reframes_exclusion_positively():
     exclusion_items = [item for item in items if item[2]]
 
     assert len(exclusion_items) == 1
-    assert exclusion_items[0][1] == "세금 체납에 해당하지 않음"
+    assert exclusion_items[0][1] == "휴업 중인 기업에 해당하지 않음"
+
+
+def test_build_criteria_excludes_financially_unverifiable_items():
+    # 사업계획서로 원천적으로 검증 불가능한 재무/신용 관련 제외요건은 판정
+    # 대상 문장 자체를 안 만든다 — 어느 공고에서도 100% 정보부족으로만
+    # 귀결돼 신호 없이 점수만 희석시키기 때문(실측, 2026-07-15).
+    notice = NormalizedNoticeSchema.model_validate(
+        {
+            "eligibility": {
+                "target_regions": ["서울"],
+                "excluded_targets": [
+                    "최근 1년 신용유의정보가 있는 기업",
+                    "최근회계연도 전액 자본잠식 기업",
+                    "국세·지방세 체납 기업",
+                    "휴업 중인 기업",
+                ],
+            },
+        }
+    )
+
+    items = _build_criteria(notice)
+    exclusion_statements = [item[1] for item in items if item[2]]
+
+    assert exclusion_statements == ["휴업 중인 기업에 해당하지 않음"]
+
+
+def test_company_profile_text_includes_business_type():
+    # business_type(사업자유형)이 빠져 있으면, 프론트에서 사용자가 채워도
+    # LLM 판정에 절대 반영이 안 된다(실측, 2026-07-15) — 반드시 포함돼야 함.
+    profile = CompanyProfile(
+        company_size="소기업", business_type="법인사업자", region_name="서울"
+    )
+
+    text = _company_profile_text(profile, _plan())
+
+    assert "법인사업자" in text
 
 
 def test_aggregate_secondary_score_returns_neutral_when_no_judgments():

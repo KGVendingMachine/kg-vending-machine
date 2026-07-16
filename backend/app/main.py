@@ -24,6 +24,24 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+async def _recover_stale_match_logs() -> None:
+    """이전 프로세스에서 processing인 채로 멈춰버린 매칭 로그를 failed로 정리한다.
+    BackgroundTasks는 같은 워커 프로세스에서 도는데, 그 프로세스가 재배포나
+    dev --reload 재시작으로 죽으면 알림 없이 processing에 영원히 남는다
+    (2026-07-15 확인 — match_log_id 145/146/157이 몇 시간~하루 동안 멈춰있었음)."""
+    from app.db.session import async_session_factory
+    from app.repositories import match_log_repository
+
+    async with async_session_factory() as session:
+        recovered = await match_log_repository.mark_stale_processing_as_failed(session)
+        await session.commit()
+        if recovered:
+            logger.info(
+                "서버 기동: 이전 프로세스에서 멈춘 매칭 로그 %d건을 failed로 정리",
+                recovered,
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 이슈 #102: 공고 수집·정규화를 매일 새벽 3시(KST)에 자동 실행한다.
@@ -31,6 +49,8 @@ async def lifespan(app: FastAPI):
     # 배포도 잦지 않은 지금 규모라, EC2 host crontab보다 앱에 내장해
     # git으로 다 추적되는 이쪽을 택했다(app/scheduler.py 참고).
     from app.scheduler import run_daily_notice_pipeline
+
+    await _recover_stale_match_logs()
 
     scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
     scheduler.add_job(

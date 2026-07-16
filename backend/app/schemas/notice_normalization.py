@@ -73,6 +73,11 @@ class NoticeEligibilityInfo(BaseModel):
     business_age_max: int | None = None
     required_status: list[str] = Field(default_factory=list)
     excluded_targets: list[str] = Field(default_factory=list)
+    applicant_structure: str | None = None
+    """신청 주체 구조. "단독 신청 가능" / "컨소시엄 필요(기업 주관/참여 가능)" /
+    "컨소시엄·기관 전용(기업 참여 불가)" 중 하나. R&D 공고 실측(300건) 기준
+    80%가 컨소시엄/연구기관 신청구조라, 그중 기업이 아예 참여 불가능한
+    공고를 매칭 후보에서 걸러내기 위한 필드."""
     extra: dict[str, Any] = Field(default_factory=dict)
 
     _normalize_lists = field_validator(

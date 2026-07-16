@@ -58,6 +58,51 @@ def _first_phone(raw_text: str) -> str | None:
     return match.group(0) if match else None
 
 
+_APPLICANT_STRUCTURE_SOLO = "단독 신청 가능"
+_APPLICANT_STRUCTURE_CONSORTIUM_OPEN = "컨소시엄 필요(기업 주관/참여 가능)"
+_APPLICANT_STRUCTURE_INSTITUTE_ONLY = "컨소시엄·기관 전용(기업 참여 불가)"
+
+_SOLO_HINT_KEYWORDS = ("단독 신청", "단독으로 신청", "개별 기업")
+_CONSORTIUM_HINT_KEYWORDS = (
+    "컨소시엄",
+    "공동연구",
+    "공동 연구",
+    "주관기관",
+    "참여기관",
+)
+_COMPANY_HINT_KEYWORDS = ("기업", "중소기업", "중견기업", "벤처기업", "스타트업")
+
+
+def _enrich_applicant_structure(
+    raw_text: str, normalized: NormalizedNoticeSchema
+) -> None:
+    """LLM이 못 채운 경우의 규칙 기반 폴백.
+
+    "단독 신청" 명시가 있으면 단독, 컨소시엄 힌트 자체가 없으면(대부분의
+    비R&D 공고) 단독으로 본다. 컨소시엄 힌트가 있으면, 기업 관련 단어도
+    같이 있는지로 기업 참여 가능 여부를 가른다 — 「국가연구개발혁신법」상
+    기업도 연구개발기관 자격이 있어, "컨소시엄"이라는 단어만으로 기업을
+    배제하지 않는다.
+    """
+    if normalized.eligibility.applicant_structure:
+        return
+
+    has_solo_hint = any(keyword in raw_text for keyword in _SOLO_HINT_KEYWORDS)
+    has_consortium_hint = any(
+        keyword in raw_text for keyword in _CONSORTIUM_HINT_KEYWORDS
+    )
+    has_company_hint = any(keyword in raw_text for keyword in _COMPANY_HINT_KEYWORDS)
+
+    if has_solo_hint or not has_consortium_hint:
+        normalized.eligibility.applicant_structure = _APPLICANT_STRUCTURE_SOLO
+    elif has_company_hint:
+        normalized.eligibility.applicant_structure = (
+            _APPLICANT_STRUCTURE_CONSORTIUM_OPEN
+        )
+    else:
+        normalized.eligibility.applicant_structure = _APPLICANT_STRUCTURE_INSTITUTE_ONLY
+
+
 def _enrich_support_types(raw_text: str, normalized: NormalizedNoticeSchema) -> None:
     support_text = "\n".join([raw_text, *normalized.support.support_content])
     rules = (
@@ -194,6 +239,7 @@ def enrich_normalized_notice(
 
     _enrich_support_types(raw_text, normalized)
     _enrich_support_rates(raw_text, normalized)
+    _enrich_applicant_structure(raw_text, normalized)
 
     if normalized.support.summary and not normalized.support.support_content:
         normalized.support.support_content.append(normalized.support.summary)

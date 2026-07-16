@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { PATHS, resultsPath } from '../../routes/paths'
 import {
@@ -6,7 +6,7 @@ import {
   startBusinessPlanAnalysis,
 } from '../../api/businessPlanAnalysis'
 import type { AnalysisStatus } from '../../api/businessPlanAnalysis'
-import { createMatchLog, listMatchResults } from '../../api/matchLogs'
+import { createMatchLog, getMatchLog } from '../../api/matchLogs'
 import { ApiError } from '../../api/client'
 import { STEP_LABELS } from '../../constants/analysisSteps'
 
@@ -41,10 +41,6 @@ const PHASE_PERCENT: Record<Phase, number> = {
   matched: 100,
   failed: 100,
 }
-
-// 매칭 스텁이 즉시 끝나 단계 전환이 안 보이므로, "공고 매칭" 단계를 최소 이
-// 시간은 노출한다. 실제 스코어링이 붙으면(폴링 전환) 제거한다.
-const MIN_MATCHING_VISIBLE_MS = 1200
 
 interface LogLine {
   text: string
@@ -108,6 +104,23 @@ function apiErrorDetail(error: unknown): string | null {
   return null
 }
 
+// 백그라운드 탭은 브라우저가 setTimeout을 스로틀링해 폴링이 실제로는 몇 분씩
+// 밀릴 수 있다 — 탭이 다시 보이는 순간엔 대기를 끊고 바로 재확인하게 한다.
+function waitForNextPoll(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(finish, ms)
+    function onVisible() {
+      if (document.visibilityState === 'visible') finish()
+    }
+    function finish() {
+      clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      resolve()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+  })
+}
+
 export function AnalysisProgressPage() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -124,6 +137,16 @@ export function AnalysisProgressPage() {
   // 방금 실행으로 만들어진 매칭 로그 id. 매칭 완료 시 "결과 보기" 버튼이
   // 이 id 기준으로 결과 페이지로 보낸다.
   const [matchedLogId, setMatchedLogId] = useState<number | null>(null)
+
+  // handleStartMatch는 useEffect가 아니라 버튼 클릭으로 시작하는 긴 폴링
+  // 루프라, 언마운트(페이지 이탈) 후에도 setState가 계속 불리는 걸 막으려면
+  // 별도 취소 플래그가 필요하다.
+  const matchCancelledRef = useRef(false)
+  useEffect(() => {
+    return () => {
+      matchCancelledRef.current = true
+    }
+  }, [])
 
   useEffect(() => {
     // 업로드를 거치지 않고 직접 들어오면 분석할 대상이 없다 → 업로드로 되돌린다.
@@ -183,6 +206,15 @@ export function AnalysisProgressPage() {
       timer = setTimeout(poll, POLL_INTERVAL_MS)
     }
 
+    // 백그라운드 탭에서 setTimeout이 스로틀링되는 동안 화면이 멈춰 보이는 걸
+    // 막는다 — 탭이 다시 보이면 예약된 타이머를 끊고 바로 재확인한다.
+    function onVisible() {
+      if (document.visibilityState !== 'visible' || cancelled || timer == null) return
+      clearTimeout(timer)
+      poll()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
     async function run() {
       try {
         if (attempt === 0) {
@@ -213,6 +245,7 @@ export function AnalysisProgressPage() {
     return () => {
       cancelled = true
       if (timer) clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [businessPlanId, navigate, attempt])
 
@@ -227,21 +260,61 @@ export function AnalysisProgressPage() {
     setPhase('matching')
     setMatchError(null)
     const startedAt = Date.now()
+
+    function matchFail(message: string) {
+      if (matchCancelledRef.current) return
+      // 매칭 실행 실패는 분석 실패와 달리 완료 화면으로 되돌려 다시 시도하게 한다.
+      setPhase('analyzed')
+      setMatchError(message)
+    }
+
     try {
       const log = await createMatchLog(businessPlanId)
       console.log('공고 매칭 로그 (match_log):', log)
-      const results = await listMatchResults(log.id)
-      console.log('공고 매칭 결과 (match_results):', results)
-      const remain = MIN_MATCHING_VISIBLE_MS - (Date.now() - startedAt)
-      if (remain > 0) {
-        await new Promise((resolve) => setTimeout(resolve, remain))
+
+      // 매칭(OCR·정규화·임베딩·LLM 판정)이 실측 몇 분까지 걸려(2026-07-15)
+      // 서버가 즉시 processing으로 응답하고 백그라운드에서 계속 돈다 —
+      // getBusinessPlanAnalysisStatus 폴링과 같은 패턴으로 완료를 기다린다.
+      let consecutiveErrors = 0
+      for (;;) {
+        if (matchCancelledRef.current) return
+        if (Date.now() - startedAt > MAX_POLL_DURATION_MS) {
+          matchFail('매칭이 예상보다 오래 걸리고 있어요. 다시 시도해 주세요.')
+          return
+        }
+
+        let current
+        try {
+          current = await getMatchLog(log.id)
+          consecutiveErrors = 0
+        } catch {
+          if (matchCancelledRef.current) return
+          consecutiveErrors += 1
+          if (consecutiveErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
+            matchFail(
+              '진행 상황을 확인하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.',
+            )
+            return
+          }
+          await waitForNextPoll(POLL_INTERVAL_MS)
+          continue
+        }
+
+        if (matchCancelledRef.current) return
+        if (current.run_status === 'completed') break
+        if (current.run_status === 'failed') {
+          matchFail('매칭에 실패했어요. 잠시 후 다시 시도해 주세요.')
+          return
+        }
+        await waitForNextPoll(POLL_INTERVAL_MS)
       }
+
+      if (matchCancelledRef.current) return
       setMatchedLogId(log.id)
       setPhase('matched')
     } catch (err) {
-      // 매칭 실행 실패는 분석 실패와 달리 완료 화면으로 되돌려 다시 시도하게 한다.
-      setPhase('analyzed')
-      setMatchError(
+      if (matchCancelledRef.current) return
+      matchFail(
         apiErrorDetail(err) ?? '매칭을 시작하지 못했어요. 잠시 후 다시 시도해 주세요.',
       )
     }

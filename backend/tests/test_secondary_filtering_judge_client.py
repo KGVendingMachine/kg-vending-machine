@@ -78,6 +78,26 @@ async def test_judge_criteria_returns_status_and_evidence_on_success():
     assert client.chat.completions.create.call_count == 1
 
 
+async def test_judge_criteria_coerces_string_null_evidence_to_none():
+    # LLM이 프롬프트 지시를 무시하고 evidence 없음을 JSON null 대신 문자열
+    # "null"로 출력하는 경우가 실측으로 확인됨(2026-07-15, 화면에 "— null"이
+    # 그대로 노출됨) — None으로 정규화돼야 프론트가 조건부 렌더링을 건너뛴다.
+    string_null_json = (
+        '{"judgments": [{"criterion_id": "elig:size", "status": "정보부족", '
+        '"evidence": "null"}]}'
+    )
+    client = _fake_client([_fake_response(string_null_json)])
+
+    result = await judge_criteria(
+        company_profile_text="기업 정보",
+        criteria=[("elig:size", "기업 규모 요건")],
+        evidence_texts=[],
+        client=client,
+    )
+
+    assert result["elig:size"] == ("정보부족", None)
+
+
 async def test_judge_criteria_normalizes_unknown_status_to_information_lacking():
     unknown_status_json = '{"judgments": [{"criterion_id": "elig:region", "status": "모름", "evidence": null}]}'
     client = _fake_client([_fake_response(unknown_status_json)])
