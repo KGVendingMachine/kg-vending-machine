@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -19,15 +19,24 @@ from app.models.company import CompanyProfile
 from app.models.match import MatchLog, MatchResult
 from app.models.notice import Notice
 from app.repositories import match_log_repository
+from app.repositories.secondary_filtering_judgment_repository import (
+    get_cached_judgment,
+    save_judgment,
+)
 from app.schemas.business_plan import NormalizedBusinessPlanSchema
 from app.schemas.notice_normalization import NormalizedNoticeSchema
 from app.services.notice_eligibility_service import get_eligible_notices
 from app.services.secondary_filtering_judge_service import (
+    CriterionJudgment,
     JudgedSecondaryScore,
+    build_criteria_statements,
     judge_notice,
+    profile_fingerprint,
 )
 from app.services.secondary_filtering_service import (
     SecondaryFilteringResult,
+    get_criterion_evidence,
+    merge_evidence,
     run_secondary_filtering,
 )
 
@@ -523,7 +532,9 @@ def _strategy_suggestion(
 
 async def _judge_top_candidates(
     *,
+    session: AsyncSession,
     log_id: int,
+    business_plan_id: int,
     plan: NormalizedBusinessPlanSchema,
     profile: CompanyProfile,
     secondary_result: SecondaryFilteringResult,
@@ -533,6 +544,19 @@ async def _judge_top_candidates(
     _SECONDARY_FILTERING_JUDGE_TOP_K건만 judge_notice()로 정밀 판정하고,
     최종 secondary_filter_score(판정된 공고는 판정 점수, 나머지는 기존
     유사도 점수)와 판정 근거를 반환한다.
+
+    판정 결과는 (business_plan_id, notice_id, 프로필 스냅샷) 기준으로
+    secondary_filtering_judgment 테이블에 캐싱한다(2026-07-16, RAG 성능
+    개선 검토 — 같은 사업계획서로 매칭을 반복 실행해도 LLM을 다시 부르지
+    않기 위함). 프로필이 바뀌면 profile_fingerprint가 달라져 자동으로
+    캐시 미스가 난다(profile_fingerprint 참고).
+
+    캐시 확인/저장(session 필요)은 순차로, 실제 LLM 판정(session 없음)만
+    병렬로 실행한다 — secondary_filtering_service의 임베딩 확인이 공유
+    세션 대신 공고별 독립 세션(async_session_factory)을 쓰는 것과 달리,
+    여기는 세션이 필요한 조회/저장을 아예 병렬 구간 밖으로 뺀다(캐시
+    체크는 가벼운 단건 조회라 별도 세션을 새로 여는 비용이 더 크다고
+    판단).
     """
     final_scores = dict(secondary_result.scores)
     judged_by_notice: dict[int, JudgedSecondaryScore] = {}
@@ -546,29 +570,82 @@ async def _judge_top_candidates(
         return final_scores, judged_by_notice
 
     notice_by_id = {notice.id: (notice, normalized) for notice, normalized in passed}
+    fingerprint = profile_fingerprint(profile)
 
-    async def _judge_one(notice_id: int) -> None:
-        _, normalized_notice = notice_by_id[notice_id]
-        async with _secondary_filtering_judge_semaphore:
-            judged = await judge_notice(
-                profile=profile,
-                plan=plan,
-                notice=normalized_notice,
-                evidence=secondary_result.evidence.get(notice_id, []),
-            )
-        if judged is not None:
+    # 1단계(순차, session 필요): 캐시 확인.
+    to_judge: list[int] = []
+    for notice_id in ranked_notice_ids:
+        cached = await get_cached_judgment(
+            session,
+            business_plan_id=business_plan_id,
+            notice_id=notice_id,
+            profile_fingerprint=fingerprint,
+        )
+        if cached is None:
+            to_judge.append(notice_id)
+            continue
+        judged = JudgedSecondaryScore(
+            score=float(cached.score),
+            excluded=cached.excluded,
+            judgments=[CriterionJudgment(**item) for item in cached.judgments],
+        )
+        final_scores[notice_id] = judged.score
+        judged_by_notice[notice_id] = judged
+
+    if to_judge:
+        # 2단계(병렬, session 없음): 캐시 미스만 실제로 LLM 판정.
+        async def _judge_one(
+            notice_id: int,
+        ) -> tuple[int, JudgedSecondaryScore | None]:
+            _, normalized_notice = notice_by_id[notice_id]
+            async with _secondary_filtering_judge_semaphore:
+                # criterion-aware evidence 보강(2026-07-16, RAG 성능 개선
+                # 검토) — 사업계획서 유사도 기반 evidence만으로는 개별
+                # 요건(지역/제외대상 등)과 무관한 근거가 섞일 수 있어, 요건
+                # 문장 자체로 한 번 더 검색해 병합한다.
+                criterion_statements = build_criteria_statements(normalized_notice)
+                criterion_evidence = await get_criterion_evidence(
+                    notice_id, criterion_statements
+                )
+                evidence = merge_evidence(
+                    secondary_result.evidence.get(notice_id, []), criterion_evidence
+                )
+                judged = await judge_notice(
+                    profile=profile,
+                    plan=plan,
+                    notice=normalized_notice,
+                    evidence=evidence,
+                )
+            return notice_id, judged
+
+        judged_results = await asyncio.gather(
+            *(_judge_one(notice_id) for notice_id in to_judge)
+        )
+
+        # 3단계(순차, session 필요): 새로 판정한 결과만 캐시에 저장.
+        for notice_id, judged in judged_results:
+            if judged is None:
+                continue
             final_scores[notice_id] = judged.score
             judged_by_notice[notice_id] = judged
-
-    await asyncio.gather(*(_judge_one(notice_id) for notice_id in ranked_notice_ids))
+            await save_judgment(
+                session,
+                business_plan_id=business_plan_id,
+                notice_id=notice_id,
+                profile_fingerprint=fingerprint,
+                score=judged.score,
+                excluded=judged.excluded,
+                judgments=[asdict(j) for j in judged.judgments],
+            )
 
     logger.info(
         "2차 필터링 LLM 판정 [match_log_id=%s] 완료: 유사도 상위 %d건 중 판정 "
-        "%d건 (나머지는 정규화 단계에서 판정 가능한 자격/제외 요건이 없어 "
-        "유사도 점수를 그대로 사용)",
+        "%d건(캐시 재사용 %d건) (나머지는 정규화 단계에서 판정 가능한 자격/"
+        "제외 요건이 없어 유사도 점수를 그대로 사용)",
         log_id,
         len(ranked_notice_ids),
         len(judged_by_notice),
+        len(ranked_notice_ids) - len(to_judge),
     )
     return final_scores, judged_by_notice
 
@@ -812,7 +889,9 @@ async def _run_matching_locked(
     # 유사도 상위 K건만 LLM으로 정밀 판정한다(docs/secondary-filtering-llm-judge-guide.md)
     # — final_scores는 판정된 공고는 판정 점수, 나머지는 기존 유사도 점수를 담는다.
     final_secondary_scores, secondary_judgments = await _judge_top_candidates(
+        session=session,
         log_id=log.id,
+        business_plan_id=plan.id,
         plan=normalized_plan,
         profile=profile,
         secondary_result=secondary_result,
