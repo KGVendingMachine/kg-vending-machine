@@ -42,6 +42,29 @@ export function getMatchLog(matchLogId: number): Promise<MatchLog> {
   return apiFetch<MatchLog>(`/api/match-logs/${matchLogId}`)
 }
 
+/**
+ * 진행 중 매칭 복구용 최소 응답(backend/app/schemas/match_log.py
+ * ActiveMatchLogResponse). 폴링을 이어붙이는 데 필요한 id·run_status만 담는다.
+ */
+export interface ActiveMatchLog {
+  id: number
+  run_status: JobStatus
+}
+
+/**
+ * 이 사업계획서로 지금 진행 중(processing)인 매칭 로그를 조회한다. 없으면 null.
+ * 새로고침·재접속으로 화면 state가 초기화돼도 진행 중이던 매칭 폴링을 이어붙여
+ * 복구하는 데 쓴다(서버는 유저당 진행 중 매칭을 1건으로 제한하며, 다른 계획서가
+ * 도는 중이면 이 계획서 기준으로는 null을 준다).
+ */
+export function getActiveMatchLog(
+  businessPlanId: number,
+): Promise<ActiveMatchLog | null> {
+  return apiFetch<ActiveMatchLog | null>(
+    `/api/match-logs/active?business_plan_id=${businessPlanId}`,
+  )
+}
+
 /** backend/app/schemas/match_log.py MatchLogDeleteResponse */
 export interface MatchLogDeleteResponse {
   match_log_id: number
