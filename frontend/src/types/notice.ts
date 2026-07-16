@@ -138,11 +138,13 @@ function toScoreBreakdown(
     label:
       key === 'secondary_filter' && judged
         ? 'AI 정밀 판정(공고 원문)'
-        : sources[key] === 'llm' && (key === 'business_fit' || key === 'growth')
-          ? `${SCORE_BREAKDOWN_META[key].label} (LLM 평가기준)`
-          : sources[key] === 'llm' && key === 'bonus'
-            ? `${SCORE_BREAKDOWN_META[key].label} (LLM 우대조건)`
-        : SCORE_BREAKDOWN_META[key].label,
+        : sources[key] === 'llm' && key === 'item_fit'
+          ? `${SCORE_BREAKDOWN_META[key].label} (LLM 업종 판정)`
+          : sources[key] === 'llm' && (key === 'business_fit' || key === 'growth')
+            ? `${SCORE_BREAKDOWN_META[key].label} (LLM 평가기준)`
+            : sources[key] === 'llm' && key === 'bonus'
+              ? `${SCORE_BREAKDOWN_META[key].label} (LLM 우대조건)`
+              : SCORE_BREAKDOWN_META[key].label,
     source: sources[key] ?? null,
     score: scores[key] ?? 0,
     max: 100,

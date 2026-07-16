@@ -32,9 +32,11 @@ from app.services.secondary_filtering_service import EvidenceChunk
 logger = logging.getLogger(__name__)
 
 CriterionStatus = Literal["충족", "미충족", "정보부족"]
-CriterionGroup = Literal["eligibility", "exclusion", "criteria_fit", "bonus_fit"]
-"""eligibility/exclusion은 자격요건 축(기존과 동일). criteria_fit/bonus_fit은
-적합도 축(신규, R&D 전용) — business_fit_score/growth_score/bonus_score 대체."""
+CriterionGroup = Literal[
+    "eligibility", "exclusion", "criteria_fit", "bonus_fit", "item_fit"
+]
+"""eligibility/exclusion은 자격요건 축. criteria_fit/bonus_fit/item_fit은
+적합도 축(R&D+자금 전용)."""
 
 _STATUS_WEIGHT: dict[CriterionStatus, float] = {
     "충족": 1.0,
@@ -67,6 +69,8 @@ class JudgedSecondaryScore:
     None — matching_service가 이 경우 기존 키워드 겹침 점수를 그대로 쓴다."""
     bonus_score: float | None = None
     """bonus_fit 그룹(우대조건) 판정의 단순 평균*100. 의미는 fit_score와 동일."""
+    item_fit_score: float | None = None
+    """item_fit 그룹(사업 아이템·업종 부합) 판정의 단순 평균*100. fit_score와 동일한 의미."""
     judgments: list[CriterionJudgment] = field(default_factory=list)
 
 
@@ -160,6 +164,14 @@ def _build_criteria(
         )
 
     if include_fit:
+        for index, industry in enumerate(eligibility.target_industries):
+            items.append(
+                (
+                    f"fit:item:{index}",
+                    f"사업 아이템(업종·기술·제품)이 다음 지원 대상 업종/분야에 해당함: {industry}",
+                    "item_fit",
+                )
+            )
         for index, criterion in enumerate(notice.evaluation.criteria):
             items.append(
                 (
@@ -223,10 +235,8 @@ def _company_profile_text(
 ) -> str:
     company_size_line = f"기업규모: {profile.company_size or '정보없음'}"
     if profile.company_size == "중소기업":
-        # company_size는 업종·매출로 "중소기업"/"중견기업" 2단계까지만 판정한다
-        # (services/company_size.py) — "소상공인"/"소기업"/"중기업" 같은 세분
-        # 값은 안 나온다. 이 설명이 없으면 LLM이 "중소기업"과 공고의 세분 요건
-        # 문자열이 다르다는 이유만으로 정보부족/미충족으로 오판한다.
+        # "중소기업"은 소상공인/소기업/중기업 세분값을 포괄하는 상위 개념임을
+        # LLM에 명시해, 세분 불일치로 오판하지 않게 한다.
         company_size_line += (
             " (소상공인·소기업·중기업을 모두 포괄하는 상위 분류이며,"
             " 상시근로자 수 등 세부 구분 정보는 없음)"
@@ -290,6 +300,7 @@ def aggregate_secondary_score(
         excluded=False,
         fit_score=_group_avg_score(judgments, "criteria_fit"),
         bonus_score=_group_avg_score(judgments, "bonus_fit"),
+        item_fit_score=_group_avg_score(judgments, "item_fit"),
         judgments=judgments,
     )
 

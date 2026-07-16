@@ -97,13 +97,8 @@ _QUALITY_REQUIRED_FIELDS: tuple[str, ...] = (
 _TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
 _ALL_REGIONS = {"전국", "ALL", "all", "전체", "전 지역", "nationwide"}
 
-# company_size.derive_company_size는 업종·매출만으로 "중소기업"/"중견기업"
-# 2단계까지만 판정한다(상시근로자 수까지 봐야 하는 소상공인/소기업/중기업
-# 세분은 아직 미지원). 공고 쪽 target_company_size는 원문 표현을 그대로
-# 뽑아 "소상공인"처럼 더 세분된 값이 흔한데, 프로필엔 "중소기업"만 있어
-# 문자열 그대로는 일치하지 않는다 — "중소기업"은 이 세 하위 분류를 전부
-# 포괄하는 상위 개념이므로, 세분 값이 나오면 포괄 일치로 인정한다(단, 정확한
-# 하위 분류까지는 확인 못 했다는 걸 명시해 과신하지 않게 한다).
+# "중소기업"은 소상공인/소기업/중기업을 포괄하는 상위 개념이라, 공고가 세분
+# 값을 요구해도 포괄 일치로 인정한다.
 _SME_SUBTIER_LABELS = {"소상공인", "소기업", "중기업", _SME_LABEL}
 
 
@@ -414,6 +409,7 @@ def _score_notice(
     is_fund: bool = False,
     llm_fit_score: float | None = None,
     llm_bonus_score: float | None = None,
+    llm_item_fit_score: float | None = None,
 ) -> MatchResult:
     use_precise_fit = is_rd or is_fund
     weights = _RD_WEIGHTS if use_precise_fit else _DEFAULT_WEIGHTS
@@ -462,10 +458,15 @@ def _score_notice(
         _tokens(normalized_notice.evaluation.preferred_conditions),
         default=45.0,
     )
+    item_fit_source = "keyword"
     business_fit_source = "keyword"
     growth_source = "keyword"
     bonus_source = "keyword"
-    # R&D 전용: LLM이 판정한 평가기준/우대조건 점수로 단어 겹침을 대체한다.
+    # R&D+자금 전용: LLM이 판정한 아이템 적합도/평가기준/우대조건 점수로
+    # 단어 겹침을 대체한다.
+    if use_precise_fit and llm_item_fit_score is not None:
+        item_fit_score = llm_item_fit_score
+        item_fit_source = "llm"
     if use_precise_fit and llm_fit_score is not None:
         business_fit_score = llm_fit_score
         business_fit_source = "llm"
@@ -502,7 +503,7 @@ def _score_notice(
         growth_score=growth_score,
         matched_keywords=matched_keywords,
     )
-    weakness = _weakness(cautions, item_fit_score, business_fit_score)
+    weakness = _weakness(cautions, item_fit_score, business_fit_score, normalized_notice)
     strategy = _strategy_suggestion(normalized_notice, growth_score)
 
     # logger.info(
@@ -527,9 +528,9 @@ def _score_notice(
             "secondary_filter": round(resolved_secondary_score, 2),
             "weights": weights,
         },
-        # 각 점수가 LLM 판정(R&D 전용)에서 왔는지 키워드 겹침 fallback인지 표시.
+        # 각 점수가 LLM 판정(R&D+자금)에서 왔는지 키워드 겹침 fallback인지 표시.
         "score_sources": {
-            "item_fit": "keyword",
+            "item_fit": item_fit_source,
             "business_fit": business_fit_source,
             "growth": growth_source,
             "bonus": bonus_source,
@@ -609,18 +610,29 @@ def _strengths(
 
 
 def _weakness(
-    cautions: list[str], item_fit_score: float, business_fit_score: float
+    cautions: list[str],
+    item_fit_score: float,
+    business_fit_score: float,
+    notice: NormalizedNoticeSchema,
 ) -> str | None:
     weakness: list[str] = []
     weakness.extend(cautions[:3])
     if item_fit_score < 50:
-        weakness.append(
-            f"아이템 적합도가 {item_fit_score:.0f}점으로 낮아 관련 근거 보완이 필요합니다."
+        keywords = notice.matching.keywords[:3]
+        hint = (
+            f" 사업계획서에 {', '.join(keywords)} 관련 내용을 구체적으로 추가하세요."
+            if keywords
+            else " 사업 아이템과 공고 지원 분야의 연관성을 더 구체적으로 서술하세요."
         )
+        weakness.append(f"아이템 적합도가 {item_fit_score:.0f}점으로 낮습니다.{hint}")
     if business_fit_score < 50:
-        weakness.append(
-            f"사업 정합성이 {business_fit_score:.0f}점으로 낮아 사업계획서 내용 보완이 필요합니다."
+        signals = notice.matching.matching_signals[:2]
+        hint = (
+            f" 공고가 요구하는 조건({', '.join(signals)})에 맞춰 사업계획서 내용을 보강하세요."
+            if signals
+            else " 공고의 지원 목적·평가기준에 맞춰 사업계획서 내용을 보강하세요."
         )
+        weakness.append(f"사업 정합성이 {business_fit_score:.0f}점으로 낮습니다.{hint}")
     return "; ".join(weakness) if weakness else None
 
 
@@ -1055,6 +1067,7 @@ async def _run_matching_locked(
             is_fund=notice.id in fund_notice_ids,
             llm_fit_score=judged.fit_score if judged else None,
             llm_bonus_score=judged.bonus_score if judged else None,
+            llm_item_fit_score=judged.item_fit_score if judged else None,
         )
         result.recommendation_run_id = log.id
         if result.eligibility_status in eligibility_counts:

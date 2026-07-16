@@ -91,11 +91,10 @@ export function MatchDetailView({
   // 공고를 나갔다 들어오면 초기화된다.
   const [checkedItems, setCheckedItems] = useState<Set<string>>(new Set())
 
-  // 기업 프로필(매출액·상시근로자수·기업규모·사업자유형 등)이 비어 있으면
-  // 판정에 쓸 근거가 없어 "정보부족"만 나온다 — 프로필을 채우면 해결되는
-  // 문제라는 걸 알려준다(정보부족 판정 개수를 세서, 하나라도 있을 때만).
+  // group이 "eligibility"인 항목만 프로필 필드로 판정한다 — criteria_fit/
+  // bonus_fit/item_fit은 프로필을 채워도 해결 안 되므로 여기서 제외한다.
   const infoInsufficientCount = notice.secondaryFilterReasons.filter(
-    (reason) => reason.status === '정보부족',
+    (reason) => reason.status === '정보부족' && reason.group === 'eligibility',
   ).length
 
   function toggleChecklistItem(label: string) {
