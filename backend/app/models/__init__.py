@@ -1,7 +1,12 @@
 from app.models.business_plan import BusinessPlan, BusinessPlanChunk
 from app.models.category import CategoryMapping, CategoryName, KgCategory
 from app.models.company import CompanyProfile
-from app.models.match import MatchLog, MatchReport, MatchResult
+from app.models.match import (
+    MatchLog,
+    MatchReport,
+    MatchResult,
+    SecondaryFilteringJudgment,
+)
 from app.models.notice import (
     Notice,
     NoticeAttachment,
@@ -25,6 +30,7 @@ __all__ = [
     "MatchLog",
     "MatchReport",
     "MatchResult",
+    "SecondaryFilteringJudgment",
     "Notice",
     "NoticeAttachment",
     "NoticeBookmark",

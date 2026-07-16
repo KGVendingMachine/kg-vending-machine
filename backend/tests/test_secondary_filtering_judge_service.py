@@ -19,7 +19,9 @@ from app.services.secondary_filtering_judge_service import (
     CriterionJudgment,
     _build_criteria,
     aggregate_secondary_score,
+    build_criteria_statements,
     judge_notice,
+    profile_fingerprint,
 )
 
 pytestmark = pytest.mark.anyio
@@ -65,6 +67,31 @@ def test_build_criteria_reframes_exclusion_positively():
 
     assert len(exclusion_items) == 1
     assert exclusion_items[0][1] == "세금 체납에 해당하지 않음"
+
+
+def test_profile_fingerprint_changes_when_relevant_field_changes():
+    base = CompanyProfile(company_size="소기업", region_name="서울")
+    changed = CompanyProfile(company_size="중기업", region_name="서울")
+
+    assert profile_fingerprint(base) != profile_fingerprint(changed)
+
+
+def test_profile_fingerprint_is_stable_for_same_values():
+    a = CompanyProfile(company_size="소기업", region_name="서울")
+    b = CompanyProfile(company_size="소기업", region_name="서울")
+
+    assert profile_fingerprint(a) == profile_fingerprint(b)
+
+
+def test_build_criteria_statements_matches_build_criteria_sentences():
+    """criterion-aware evidence(2026-07-16)가 임베딩할 문장 목록이
+    judge_notice가 실제로 판정하는 요건 문장과 정확히 같아야 한다."""
+    notice = _notice()
+
+    statements = build_criteria_statements(notice)
+    expected = [statement for _, statement, _ in _build_criteria(notice)]
+
+    assert statements == expected
 
 
 def test_aggregate_secondary_score_returns_neutral_when_no_judgments():

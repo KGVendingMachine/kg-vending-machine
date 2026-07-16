@@ -34,13 +34,17 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.chroma_client import get_notice_collection
-from app.ai.embedding_client import embed_texts
+from app.ai.embedding_client import AiEmbeddingError, embed_texts
 from app.models.notice import NoticeChunk
 from app.repositories import notice_repository
 from app.services.notice_ocr_service import ensure_notice_attachment_ocr
-from app.services.text_chunking import chunk_text
+from app.services.text_chunking import TextChunk, chunk_text
 
 logger = logging.getLogger(__name__)
+
+# 공고 정규화 배치와 동일한 값(notice_normalization_service._NOTICE_LLM_CONCURRENCY_LIMIT)
+# — 계정 전체 동시 호출 한도가 실측된 적 없어 같은 보수적 기본값으로 시작.
+_EMBEDDING_CONCURRENCY_LIMIT = 10
 
 
 @dataclass(frozen=True)
@@ -48,7 +52,13 @@ class NoticeEmbeddingResult:
     embedded: bool
     chunk_count: int
     skipped_reason: str | None = None
-    """embedded가 False일 때만 값이 있다. 현재는 "no_text" 하나뿐."""
+    """embedded가 False일 때만 값이 있다. "no_text" 또는 "embedding_failed"."""
+
+
+@dataclass(frozen=True)
+class _PendingEmbedding:
+    notice_id: int
+    chunks: list[TextChunk]
 
 
 async def _chunks_exist_in_chroma(chunks: list[NoticeChunk]) -> bool:
@@ -137,3 +147,143 @@ async def ensure_notice_embedded(
         "공고 임베딩 완료 (notice_id=%s): 청크 %d건", notice_id, len(saved_rows)
     )
     return NoticeEmbeddingResult(embedded=True, chunk_count=len(saved_rows))
+
+
+async def ensure_notices_embedded(
+    session: AsyncSession, notice_ids: list[int]
+) -> dict[int, NoticeEmbeddingResult]:
+    """여러 공고의 2차 필터링 임베딩을 한 번에 준비한다(2026-07-16, RAG 성능
+    개선 검토 — secondary_filtering_service의 순차 루프가 병목이라 병렬화).
+
+    ensure_notice_embedded와 달리, 세션이 필요한 작업(캐시 확인·OCR·DB
+    쓰기)은 절대 병렬화하지 않고 순차로 실행한다 — SQLAlchemy AsyncSession은
+    동시 접근이 공식적으로 지원되지 않는다. 세션이 필요 없는 임베딩 API
+    호출(embed_texts)만 세마포어로 동시 실행한다. 이 원칙은
+    notice_normalization_service._resolve_candidate_text/_try_normalize_candidate가
+    세션을 아예 받지 않고, DB 쓰기 직전에 session.commit()으로 커넥션을
+    반납한 뒤에야 LLM 호출을 병렬화하는 것과 동일하다(그쪽 주석에 배치
+    트리거 다건 동시 실행 시 커넥션 풀 고갈을 실제로 재현한 적 있다고
+    기록돼 있음).
+
+    ensure_notice_embedded와 달리 임베딩 실패(AiEmbeddingError)나 저장 실패를
+    예외로 던지지 않고 skipped_reason="embedding_failed"인 결과로 돌려준다 —
+    호출자(run_secondary_filtering)가 공고 하나의 실패로 전체 매칭이
+    중단되지 않도록 이미 개별 격리하고 있어, 그 계약을 여기서 그대로
+    구현한다(기존에는 이 함수를 호출하는 쪽의 try/except AiEmbeddingError로
+    격리했었는데, Chroma upsert 실패 같은 AiEmbeddingError가 아닌 예외는
+    잡히지 않고 전체 매칭을 중단시키는 허점이 있었다 — 이번에 같이 없앤다).
+
+    커밋은 하지 않는다(flush만) — ensure_notice_embedded와 동일하게 호출자가
+    트랜잭션 경계를 관리한다.
+    """
+    results: dict[int, NoticeEmbeddingResult] = {}
+    pending: list[_PendingEmbedding] = []
+
+    # 1단계(순차, session 필요): 캐시 확인 + OCR + 청킹.
+    for notice_id in notice_ids:
+        existing = await notice_repository.get_notice_chunks_by_notice_id(
+            session, notice_id
+        )
+        if existing:
+            if await _chunks_exist_in_chroma(existing):
+                results[notice_id] = NoticeEmbeddingResult(
+                    embedded=True, chunk_count=len(existing)
+                )
+                continue
+            logger.warning(
+                "공고 %s의 notice_chunk 캐시(%d건)는 있지만 Chroma에 벡터가 없어 "
+                "재임베딩한다 (벡터 DB 유실·볼륨 교체 등으로 캐시 정합성이 깨진 "
+                "경우로 추정)",
+                notice_id,
+                len(existing),
+            )
+
+        target = await ensure_notice_attachment_ocr(session, notice_id)
+        if target is None or not target.parsed_text:
+            results[notice_id] = NoticeEmbeddingResult(
+                embedded=False, chunk_count=0, skipped_reason="no_text"
+            )
+            continue
+
+        chunks = chunk_text(target.parsed_text, chunk_type="attachment")
+        if not chunks:
+            results[notice_id] = NoticeEmbeddingResult(
+                embedded=False, chunk_count=0, skipped_reason="no_text"
+            )
+            continue
+
+        pending.append(_PendingEmbedding(notice_id=notice_id, chunks=chunks))
+
+    if not pending:
+        return results
+
+    # 2단계(병렬, session 없음): 임베딩 API 호출만 세마포어로 동시 실행.
+    semaphore = asyncio.Semaphore(_EMBEDDING_CONCURRENCY_LIMIT)
+
+    async def _embed_one(
+        item: _PendingEmbedding,
+    ) -> tuple[_PendingEmbedding, list[list[float]] | None]:
+        async with semaphore:
+            try:
+                vectors = await embed_texts([c.chunk_text for c in item.chunks])
+            except AiEmbeddingError:
+                logger.warning(
+                    "공고 임베딩 실패로 2차 필터링에서 제외 (notice_id=%s)",
+                    item.notice_id,
+                )
+                return item, None
+            return item, vectors
+
+    embedded = await asyncio.gather(*(_embed_one(item) for item in pending))
+
+    # 3단계(순차, session 필요): DB 쓰기 + Chroma upsert.
+    collection = get_notice_collection()
+    for item, vectors in embedded:
+        if vectors is None:
+            results[item.notice_id] = NoticeEmbeddingResult(
+                embedded=False, chunk_count=0, skipped_reason="embedding_failed"
+            )
+            continue
+
+        saved_rows = await notice_repository.replace_notice_chunks(
+            session,
+            item.notice_id,
+            [(chunk.chunk_type, chunk.chunk_text) for chunk in item.chunks],
+        )
+        try:
+            # chromadb의 PersistentClient는 동기 API라, 이벤트 루프를 막지
+            # 않도록 스레드로 넘긴다(ensure_notice_embedded와 동일한 이유).
+            await asyncio.to_thread(
+                collection.upsert,
+                ids=[str(row.id) for row in saved_rows],
+                embeddings=vectors,
+                documents=[row.chunk_text for row in saved_rows],
+                metadatas=[{"notice_id": item.notice_id} for _ in saved_rows],
+            )
+        except Exception:
+            # session.rollback() 대신 이 공고의 청크 행만 지운다
+            # (ensure_notice_embedded와 동일한 이유 — 공유 세션의 다른
+            # 미커밋 변경을 건드리지 않기 위함). 단, 여기서는 재발생시키지
+            # 않고 이 공고만 건너뛴다 — 공고 하나의 Chroma 실패로 나머지
+            # 후보 전부의 결과가 날아가면 안 되기 때문.
+            await notice_repository.replace_notice_chunks(session, item.notice_id, [])
+            logger.warning(
+                "공고 %s Chroma 저장 실패로 2차 필터링에서 제외",
+                item.notice_id,
+                exc_info=True,
+            )
+            results[item.notice_id] = NoticeEmbeddingResult(
+                embedded=False, chunk_count=0, skipped_reason="embedding_failed"
+            )
+            continue
+
+        logger.info(
+            "공고 임베딩 완료 (notice_id=%s): 청크 %d건",
+            item.notice_id,
+            len(saved_rows),
+        )
+        results[item.notice_id] = NoticeEmbeddingResult(
+            embedded=True, chunk_count=len(saved_rows)
+        )
+
+    return results
