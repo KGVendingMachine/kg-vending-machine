@@ -21,11 +21,11 @@ BUSINESS_TYPES = ("개인사업자", "법인사업자", "예비창업자")
 
 # 기업 단계 (company_stage 컬럼). 소상공인은 단계가 아니라 규모라 여기 두지
 # 않는다 — 규모는 company_size로 별도 산출한다(services/company_size.py).
-COMPANY_STAGES = ("예비창업", "초기창업", "도약")
+COMPANY_STAGES = ("예비창업자", "초기창업", "중소기업")
 
 # 예비창업자만 가질 수 있는 기업 단계. business_type과의 정합성 검증에 사용.
 PRE_FOUNDER_TYPE = "예비창업자"
-PRE_FOUNDER_STAGE = "예비창업"
+PRE_FOUNDER_STAGE = "예비창업자"
 
 # 시/도 이름 → 행정표준코드(법정동코드 시도 2자리).
 # 강원(51)·전북(52)은 특별자치도 승격 이후 코드를 사용한다(구 42·45 아님).
@@ -93,7 +93,7 @@ class CompanyProfileUpdate(BaseModel):
     business_type: str | None = Field(
         None, description="개인사업자 / 법인사업자 / 예비창업자"
     )
-    company_stage: str | None = Field(None, description="예비창업 / 초기창업 / 도약")
+    company_stage: str | None = Field(None, description="예비창업자 / 초기창업 / 중소기업")
     industry_code: str | None = Field(None, description="KSIC 대분류 코드 (A~S)")
     region_name: str | None = Field(None, description="사업장 시/도 이름")
     founded_year: int | None = Field(None, ge=1900, description="설립연도 (예: 2021)")
@@ -156,7 +156,7 @@ class CompanyProfileUpdate(BaseModel):
         if is_pre_founder != is_pre_founder_stage:
             raise ValueError(
                 "사업자유형과 기업 단계 조합이 올바르지 않습니다"
-                "(예비창업자는 기업 단계가 예비창업이어야 하고, 그 외에는 예비창업일 수 없습니다)"
+                "(예비창업자는 기업 단계가 예비창업자여야 하고, 그 외에는 예비창업자일 수 없습니다)"
             )
         return self
 

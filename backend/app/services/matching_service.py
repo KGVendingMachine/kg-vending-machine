@@ -696,7 +696,9 @@ async def _judge_top_candidates(
 
     def _judgment_fingerprint(notice_id: int) -> str:
         if notice_id in fit_judged_notice_ids:
-            return f"{base_fingerprint}:fit"
+            # item_fit 판정 그룹 추가로 캐시 형태가 바뀌어 버전을 올렸다 — 이
+            # 태그 없이는 item_fit 없는 옛 캐시가 그대로 재사용된다.
+            return f"{base_fingerprint}:fit-v2"
         return base_fingerprint
 
     # 1단계(순차, session 필요): 캐시 확인.

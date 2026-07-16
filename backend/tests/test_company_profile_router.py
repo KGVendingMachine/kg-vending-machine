@@ -186,11 +186,11 @@ def test_update_rejects_future_founded_year():
 
 
 def test_update_rejects_inconsistent_type_and_stage_in_one_request():
-    """한 요청 안에서 예비창업자인데 기업 단계가 예비창업이 아니면 거부."""
+    """한 요청 안에서 예비창업자인데 기업 단계가 예비창업자가 아니면 거부."""
     with pytest.raises(ValidationError):
-        CompanyProfileUpdate(business_type="예비창업자", company_stage="도약")
+        CompanyProfileUpdate(business_type="예비창업자", company_stage="중소기업")
     with pytest.raises(ValidationError):
-        CompanyProfileUpdate(business_type="법인사업자", company_stage="예비창업")
+        CompanyProfileUpdate(business_type="법인사업자", company_stage="예비창업자")
 
 
 async def test_save_rejects_stage_conflicting_with_existing_business_type(db_session):
@@ -204,7 +204,7 @@ async def test_save_rejects_stage_conflicting_with_existing_business_type(db_ses
 
     with pytest.raises(HTTPException) as exc_info:
         await save_my_company_profile(
-            payload=CompanyProfileUpdate(company_stage="도약"),
+            payload=CompanyProfileUpdate(company_stage="중소기업"),
             current_user=user,
             session=db_session,
         )
@@ -213,12 +213,12 @@ async def test_save_rejects_stage_conflicting_with_existing_business_type(db_ses
 
 async def test_transition_to_pre_founder_clears_registration_fields(db_session):
     """business_type을 예비창업자로 바꾸면 사업자등록 이후에만 의미 있는 필드가
-    null로 정리되고 company_stage도 예비창업으로 강제된다(거부하지 않고 자동 정리)."""
+    null로 정리되고 company_stage도 예비창업자로 강제된다(거부하지 않고 자동 정리)."""
     user = await _make_user(db_session, kakao_id="company-pre-founder-transition")
     await save_my_company_profile(
         payload=CompanyProfileUpdate(
             business_type="법인사업자",
-            company_stage="도약",
+            company_stage="중소기업",
             business_registration_number="000-00-00000",
             founded_year=2020,
             employee_count=30,
@@ -234,7 +234,7 @@ async def test_transition_to_pre_founder_clears_registration_fields(db_session):
         session=db_session,
     )
     assert saved.business_type == "예비창업자"
-    assert saved.company_stage == "예비창업"
+    assert saved.company_stage == "예비창업자"
     assert saved.business_registration_number is None
     assert saved.founded_date is None
     assert saved.company_size is None

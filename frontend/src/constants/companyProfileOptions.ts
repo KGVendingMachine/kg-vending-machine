@@ -8,7 +8,7 @@
 export const BUSINESS_TYPES = ['개인사업자', '법인사업자', '예비창업자'] as const
 
 /** 기업 단계. 소상공인은 단계가 아니라 규모라 제외(규모는 서버가 산출). */
-export const COMPANY_STAGES = ['예비창업', '초기창업', '도약'] as const
+export const COMPANY_STAGES = ['예비창업자', '초기창업', '중소기업'] as const
 
 /** 사업장 시/도 (region_name으로 전송, 코드 변환은 서버 담당) */
 export const REGIONS = [

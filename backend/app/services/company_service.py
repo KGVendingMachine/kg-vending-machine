@@ -18,7 +18,7 @@ from app.services.company_size import derive_company_size
 class CompanyProfileInconsistentError(Exception):
     """business_type과 company_stage의 조합이 모순될 때 발생.
 
-    예: business_type=예비창업자인데 company_stage=도약(또는 그 반대).
+    예: business_type=예비창업자인데 company_stage=중소기업(또는 그 반대).
     스키마의 model_validator는 한 요청 안에 두 필드가 함께 온 경우만 잡을 수
     있어서, 부분 갱신으로 한 필드만 보내 기존 저장값과 모순되는 경우는 여기서
     기존 프로필과 병합한 뒤 검증한다.
@@ -35,7 +35,7 @@ def _validate_stage_consistency(
     if is_pre_founder != is_pre_founder_stage:
         raise CompanyProfileInconsistentError(
             "사업자유형과 기업 단계 조합이 올바르지 않습니다"
-            "(예비창업자는 기업 단계가 예비창업이어야 하고, 그 외에는 예비창업일 수 없습니다)"
+            "(예비창업자는 기업 단계가 예비창업자여야 하고, 그 외에는 예비창업자일 수 없습니다)"
         )
 
 
@@ -54,7 +54,7 @@ def _apply_pre_founder_transition(fields: dict) -> dict:
     """이번 요청이 business_type을 예비창업자로 바꾸는 경우 관련 필드를 정리한다.
 
     예비창업자는 사업자등록 전이므로 등록번호·설립연도·기업규모·근로자수·매출은
-    존재할 수 없다. company_stage도 예비창업으로 강제한다 — 요청에 다른 값이
+    존재할 수 없다. company_stage도 예비창업자로 강제한다 — 요청에 다른 값이
     함께 왔더라도(프론트를 거치지 않은 직접 API 호출 포함) 이 값들로 덮어써서
     모순된 조합이 저장되지 않게 한다.
     """
@@ -127,7 +127,7 @@ async def save_my_profile(
     """본인의 대표 기업 프로필을 부분 갱신/생성하고 커밋한다.
 
     business_type이 예비창업자로 바뀌는 요청이면 사업자등록 이후에만 의미
-    있는 필드를 null로 정리하고 company_stage를 예비창업으로 맞춘다. 그 외
+    있는 필드를 null로 정리하고 company_stage를 예비창업자로 맞춘다. 그 외
     business_type/company_stage 중 하나만 이번 요청에 왔다면 기존 저장값과
     합쳐서 정합성을 검증한다(둘 다 부분 갱신 대상이라 요청 본문만으로는
     모순 여부를 판단할 수 없다).

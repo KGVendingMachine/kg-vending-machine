@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # 기업측 예비창업 판정에 쓰는 값들.
 _PRESTARTUP_BUSINESS_TYPE = "예비창업자"
-_PRESTARTUP_STAGE = "예비창업"
+_PRESTARTUP_STAGE = "예비창업자"
 
 
 @dataclass(frozen=True)
