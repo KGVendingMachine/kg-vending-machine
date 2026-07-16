@@ -79,7 +79,7 @@ def _judged_score() -> JudgedSecondaryScore:
                 criterion="지역 요건",
                 status="충족",
                 evidence="서울 소재",
-                is_exclusion=False,
+                group="eligibility",
             )
         ],
     )
@@ -92,7 +92,9 @@ async def test_second_matching_run_reuses_cached_judgment(db_session, monkeypatc
     judge_notice_mock = AsyncMock(return_value=_judged_score())
     monkeypatch.setattr(matching_service, "judge_notice", judge_notice_mock)
     monkeypatch.setattr(
-        matching_service, "build_criteria_statements", lambda notice: ["지역 요건"]
+        matching_service,
+        "build_criteria_statements",
+        lambda notice, include_fit=False: ["지역 요건"],
     )
     monkeypatch.setattr(
         matching_service,
@@ -108,6 +110,7 @@ async def test_second_matching_run_reuses_cached_judgment(db_session, monkeypatc
         profile=profile,
         secondary_result=secondary_result,
         passed=[(notice, normalized_notice)],
+        fit_judged_notice_ids=set(),
     )
 
     first_scores, first_judged = await _judge_top_candidates(**kwargs)
@@ -128,7 +131,9 @@ async def test_profile_change_invalidates_cache(db_session, monkeypatch):
     judge_notice_mock = AsyncMock(return_value=_judged_score())
     monkeypatch.setattr(matching_service, "judge_notice", judge_notice_mock)
     monkeypatch.setattr(
-        matching_service, "build_criteria_statements", lambda notice: ["지역 요건"]
+        matching_service,
+        "build_criteria_statements",
+        lambda notice, include_fit=False: ["지역 요건"],
     )
     monkeypatch.setattr(
         matching_service,
@@ -143,6 +148,7 @@ async def test_profile_change_invalidates_cache(db_session, monkeypatch):
         plan=NormalizedBusinessPlanSchema.model_validate({}),
         secondary_result=secondary_result,
         passed=[(notice, normalized_notice)],
+        fit_judged_notice_ids=set(),
     )
 
     await _judge_top_candidates(profile=profile, **base_kwargs)

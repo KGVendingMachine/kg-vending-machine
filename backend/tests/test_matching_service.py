@@ -85,6 +85,166 @@ def test_score_notice_returns_recommendation_breakdown():
     assert result.summary_reason
 
 
+def test_score_notice_uses_lighter_growth_weight_for_rd_notices():
+    """R&D 공고는 평가기준이 기술성/혁신성 위주라 성장성(growth) 겹침이 거의
+    없다 — 성장성 가중치를 낮추고 아이템 적합도·AI 정밀판정에 더 실어야
+    한다(2026-07-16)."""
+    notice = Notice(id=1, source_id=1, title="AI smart factory support")
+    normalized_notice = NormalizedNoticeSchema.model_validate(_notice_json())
+    profile = CompanyProfile(company_size="small company", region_name="Seoul")
+
+    default_result = _score_notice(
+        plan=_plan(),
+        profile=profile,
+        notice=notice,
+        normalized_notice=normalized_notice,
+        is_rd=False,
+    )
+    rd_result = _score_notice(
+        plan=_plan(),
+        profile=profile,
+        notice=notice,
+        normalized_notice=normalized_notice,
+        is_rd=True,
+    )
+    fund_result = _score_notice(
+        plan=_plan(),
+        profile=profile,
+        notice=notice,
+        normalized_notice=normalized_notice,
+        is_fund=True,
+    )
+
+    default_weights = default_result.result_json["score_breakdown"]["weights"]
+    rd_weights = rd_result.result_json["score_breakdown"]["weights"]
+    fund_weights = fund_result.result_json["score_breakdown"]["weights"]
+    assert default_weights == {
+        "eligibility": 0.30,
+        "item_fit": 0.25,
+        "business_fit": 0.25,
+        "growth": 0.20,
+        "bonus": 0.03,
+    }
+    assert rd_weights == {
+        "eligibility": 0.25,
+        "item_fit": 0.35,
+        "business_fit": 0.35,
+        "growth": 0.05,
+        "bonus": 0.03,
+    }
+    assert fund_weights == {
+        "eligibility": 0.35,
+        "item_fit": 0.15,
+        "business_fit": 0.30,
+        "growth": 0.20,
+        "bonus": 0.03,
+    }
+    assert rd_weights["growth"] < default_weights["growth"]
+    assert rd_weights["item_fit"] > default_weights["item_fit"]
+    assert "secondary" not in rd_weights
+    assert "secondary" not in default_weights
+    # bonus는 나머지 5개와 나눠 갖는 비율이 아니라 base_total_score 위에
+    # 가산되는 별도 값이라, "나머지 5개"만 합이 1.0이어야 한다.
+    assert sum(v for k, v in rd_weights.items() if k != "bonus") == pytest.approx(1.0)
+    assert sum(v for k, v in default_weights.items() if k != "bonus") == pytest.approx(1.0)
+
+
+def test_score_notice_applies_llm_fit_score_for_rd_and_fund_notices():
+    """criteria_fit/bonus_fit LLM 판정(business_fit/growth/bonus 대체)은
+    R&D·자금 공고 전용이다 — 다른 카테고리 매칭 로직에 영향을 주면 안 된다."""
+    notice = Notice(id=1, source_id=1, title="AI smart factory support")
+    normalized_notice = NormalizedNoticeSchema.model_validate(_notice_json())
+    profile = CompanyProfile(company_size="small company", region_name="Seoul")
+
+    default_result = _score_notice(
+        plan=_plan(),
+        profile=profile,
+        notice=notice,
+        normalized_notice=normalized_notice,
+        is_rd=False,
+        llm_fit_score=90.0,
+        llm_bonus_score=80.0,
+        llm_fit_count=3,
+        llm_bonus_count=3,
+    )
+    rd_result = _score_notice(
+        plan=_plan(),
+        profile=profile,
+        notice=notice,
+        normalized_notice=normalized_notice,
+        is_rd=True,
+        llm_fit_score=90.0,
+        llm_bonus_score=80.0,
+        llm_fit_count=3,
+        llm_bonus_count=3,
+    )
+    fund_result = _score_notice(
+        plan=_plan(),
+        profile=profile,
+        notice=notice,
+        normalized_notice=normalized_notice,
+        is_fund=True,
+        llm_fit_score=90.0,
+        llm_bonus_score=80.0,
+        llm_fit_count=3,
+        llm_bonus_count=3,
+    )
+
+    assert float(default_result.business_fit_score) != pytest.approx(90.0)
+    assert float(default_result.bonus_score) != pytest.approx(80.0)
+    assert float(rd_result.business_fit_score) == pytest.approx(90.0)
+    assert float(rd_result.growth_score) == pytest.approx(90.0)
+    assert float(rd_result.bonus_score) == pytest.approx(80.0)
+    assert float(fund_result.business_fit_score) == pytest.approx(90.0)
+    assert float(fund_result.growth_score) == pytest.approx(90.0)
+    assert float(fund_result.bonus_score) == pytest.approx(80.0)
+    assert rd_result.result_json["score_sources"]["business_fit"] == "llm"
+    assert fund_result.result_json["score_sources"]["business_fit"] == "llm"
+    assert default_result.result_json["score_sources"]["business_fit"] == "keyword"
+
+
+def test_score_notice_does_not_track_llm_exclusion_as_hard_cut():
+    notice = Notice(id=1, source_id=1, title="AI smart factory support")
+    normalized_notice = NormalizedNoticeSchema.model_validate(_notice_json())
+    profile = CompanyProfile(company_size="small company", region_name="Seoul")
+
+    result = _score_notice(
+        plan=_plan(),
+        profile=profile,
+        notice=notice,
+        normalized_notice=normalized_notice,
+        secondary_filter_score=100.0,
+    )
+
+    assert float(result.total_score) > 49.0
+    assert "secondary_filter_excluded" not in result.result_json
+
+
+def test_score_notice_keeps_secondary_filter_as_reference_only():
+    notice = Notice(id=1, source_id=1, title="AI smart factory support")
+    normalized_notice = NormalizedNoticeSchema.model_validate(_notice_json())
+    profile = CompanyProfile(company_size="small company", region_name="Seoul")
+
+    low_reference = _score_notice(
+        plan=_plan(),
+        profile=profile,
+        notice=notice,
+        normalized_notice=normalized_notice,
+        secondary_filter_score=5.0,
+    )
+    high_reference = _score_notice(
+        plan=_plan(),
+        profile=profile,
+        notice=notice,
+        normalized_notice=normalized_notice,
+        secondary_filter_score=100.0,
+    )
+
+    assert low_reference.total_score == high_reference.total_score
+    assert low_reference.result_json["score_breakdown"]["secondary_filter"] == 5.0
+    assert high_reference.result_json["score_breakdown"]["secondary_filter"] == 100.0
+
+
 def test_eligibility_score_hard_cuts_institute_only_applicant_structure():
     # 지역/규모가 완벽히 일치해도, 신청주체가 대학·출연연 전용이면 기업은
     # 애초에 신청 자체를 못 하므로 다른 조건과 무관하게 무조건 탈락시켜야
@@ -96,11 +256,12 @@ def test_eligibility_score_hard_cuts_institute_only_applicant_structure():
     normalized_notice = NormalizedNoticeSchema.model_validate(notice_json)
     profile = CompanyProfile(company_size="small company", region_name="Seoul")
 
-    score, status, cautions = _eligibility_score(profile, normalized_notice)
+    score, status, cautions, notes = _eligibility_score(profile, normalized_notice)
 
     assert score <= 20.0
     assert status == "likely_ineligible"
     assert any("대학·연구기관 전용" in caution for caution in cautions)
+    assert any(note["sign"] == "-" for note in notes)
 
 
 def test_eligibility_score_warns_but_does_not_cut_open_consortium():
@@ -114,10 +275,11 @@ def test_eligibility_score_warns_but_does_not_cut_open_consortium():
     normalized_notice = NormalizedNoticeSchema.model_validate(notice_json)
     profile = CompanyProfile(company_size="small company", region_name="Seoul")
 
-    score, status, cautions = _eligibility_score(profile, normalized_notice)
+    score, status, cautions, notes = _eligibility_score(profile, normalized_notice)
 
     assert status != "likely_ineligible"
     assert any("컨소시엄(공동 신청) 구성이 필요" in caution for caution in cautions)
+    assert any("컨소시엄(공동 신청) 구성이 필요" in note["detail"] for note in notes)
 
 
 @pytest.mark.anyio

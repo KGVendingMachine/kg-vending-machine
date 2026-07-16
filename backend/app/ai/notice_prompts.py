@@ -16,12 +16,13 @@ NOTICE_SYSTEM_PROMPT = f"""\
 - JSON 스키마에서 배열 타입인 필드는 정보가 없더라도 반드시 []로 출력하세요. 배열 필드에 null을 넣지 마세요.
 - 샘플 메타데이터에 title, source, category, status, application_start_date, application_end_date가 있으면 basic/application 필드에 우선 반영하세요.
 - 금액, 비율, 기간처럼 원문 표현이 중요한 값은 원문 의미가 보존되도록 문자열로 작성하세요.
+- support.support_amount에는 지원한도/융자한도/보조금액/최대 지원금처럼 금액으로 표현된 지원 규모를 원문 그대로 보존해 작성하세요. 예: "기업당 최대 1억원", "소요자금의 80% 이내, 최대 5억원". 금액 정보가 없으면 null로 두세요.
 - support.subsidy_rate는 정부/기관이 지원하는 비율입니다. "기업부담금", "자부담", "부가세 기업 부담" 비율을 subsidy_rate에 넣지 마세요.
 - 원문에 "90% 지원"과 "기업부담금 10% 이상"이 함께 있으면 support.subsidy_rate는 "90%"이고 support.self_payment_required는 true입니다. "10%"는 matching.caution_points에 자부담 조건으로 정리하세요.
 - business_year는 공고일, 사업기간, 접수시작일 중 확인 가능한 가장 대표적인 연도를 숫자로 작성하세요.
 - application.method에는 "신청방법", "접수방법", "이메일 제출", "온라인 신청", "방문/우편 제출" 등 신청 경로와 방식을 원문 표현에 가깝게 작성하세요.
 - application.submission_channel에는 이메일, 온라인, 방문, 우편 등 제출 채널을 짧게 작성하세요. 이메일 주소만 있어도 submission_channel은 "이메일"로 작성하세요.
-- support.summary에는 이 공고가 무엇을 지원하는지 한 문장으로 반드시 요약하세요. 세부 지원 항목은 support.support_content에 배열로 나누어 작성하세요.
+- support.summary에는 "무엇을(지원 내용) + 얼마를(금액/한도, 있으면) + 어떤 방식으로(출연/융자/바우처 등 지급 방식)" 지원하는지 한 문장으로 반드시 요약하세요. 금액이 원문에 없어도 지급 방식(예: 출연금, 융자, 바우처, 위탁연구비)만은 반드시 밝히세요. 나쁜 예: "대학연구소와 스타트업의 협력을 통해 혁신적 R&D 성과 창출을 지원합니다"(금액·방식 없음). 좋은 예: "대학·스타트업 공동 R&D 과제당 최대 3억원을 정부출연금으로 지원합니다". 세부 지원 항목은 support.support_content에 배열로 나누어 작성하세요.
 - support.support_type에는 매칭용 대분류를 반드시 작성하세요. 원문에 세부 지원 항목이 있으면 이를 다음과 같은 큰 유형으로 가능한 한 세분화해 묶으세요: 자금지원, 컨설팅, 멘토링, 교육, 판로/마케팅, 인증지원, 지식재산권, 기술지원, 시험/인증, 홍보지원, 시설/공간, 수출지원, 인력지원, R&D, 국방/방산, 기타.
 - support.support_type은 support.support_content보다 짧고 넓은 분류여야 합니다. 예: "지식재산권 등록/출원비용 90% 지원"은 support_content에, "지식재산권" 또는 "자금지원"은 support_type에 작성하세요.
 - 서로 다른 지원 항목이 여러 개 있으면 support.support_type도 여러 개 작성하세요. 예: 지식재산권, 세미나/교육, 기업 인증, 홍보물 제작, 시험경비, 전문기술, 군 전투실험이 모두 있으면 "지식재산권", "교육", "인증지원", "홍보지원", "시험/인증", "기술지원", "국방/방산"처럼 분리하세요.
@@ -39,7 +40,7 @@ NOTICE_SYSTEM_PROMPT = f"""\
 
 출력 전 품질 체크:
 - 원문이나 메타데이터에 신청/접수 방법이 있는데 application.method가 null이면 잘못된 출력입니다.
-- 원문에 지원 내용이 있는데 support.summary가 null이면 잘못된 출력입니다.
+- 원문에 지원 내용이 있는데 support.summary가 null이거나 금액·지급 방식 없이 뭉뚱그려져 있으면 잘못된 출력입니다.
 - 원문에 지원 항목이나 지원 내용이 있는데 support.support_type이 빈 배열이면 잘못된 출력입니다.
 - 원문에 신청제한/중복지원/허위/환수 문구가 있는데 excluded_targets와 disqualification_reasons가 모두 빈 배열이면 잘못된 출력입니다.
 - 원문에 기업부담금/부가세/예산소진/조기마감/별도선정절차/결과보고 후 지급 문구가 있는데 matching.caution_points가 빈 배열이면 잘못된 출력입니다.

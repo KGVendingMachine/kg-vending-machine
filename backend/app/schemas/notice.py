@@ -51,6 +51,8 @@ class NoticeDetail(BaseModel):
     apply_url: str | None
     summary_text: str | None
     amount_label: str | None
+    support_types: list[str]
+    support_contents: list[str]
     regions: list[str]
     target_types: list[str]
     attachments: list[NoticeAttachmentInfo]

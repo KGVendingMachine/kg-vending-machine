@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { ScoreGauge } from '../ScoreGauge/ScoreGauge'
 import { PATHS } from '../../routes/paths'
 import type { MatchedNotice } from '../../types/notice'
@@ -38,6 +38,24 @@ function htmlSummaryToParagraphs(html: string): string[] {
     .filter(Boolean)
 }
 
+function secondaryReasonGroupLabel(
+  reason: MatchedNotice['secondaryFilterReasons'][number],
+): string {
+  const group = reason.group ?? (reason.is_exclusion ? 'exclusion' : 'eligibility')
+  switch (group) {
+    case 'exclusion':
+      return '검토요건'
+    case 'criteria_fit':
+      return '평가기준'
+    case 'bonus_fit':
+      return '우대조건'
+    case 'item_fit':
+      return '아이템 적합도'
+    default:
+      return '자격요건'
+  }
+}
+
 interface MatchDetailViewProps {
   notice: MatchedNotice
   /** 비교 대상 공고 목록. 매칭 실행 컨텍스트가 없으면(북마크 등) 빈 배열. */
@@ -69,16 +87,16 @@ export function MatchDetailView({
   onCompareClick,
 }: MatchDetailViewProps) {
   const navigate = useNavigate()
+  const location = useLocation()
 
   // 신청 전 체크리스트는 이 화면에서만 쓰는 로컬 진행 표시라 저장하지 않고,
   // 공고를 나갔다 들어오면 초기화된다.
   const [checkedItems, setCheckedItems] = useState<Set<string>>(new Set())
 
-  // 기업 프로필(매출액·상시근로자수·기업규모·사업자유형 등)이 비어 있으면
-  // 판정에 쓸 근거가 없어 "정보부족"만 나온다 — 프로필을 채우면 해결되는
-  // 문제라는 걸 알려준다(정보부족 판정 개수를 세서, 하나라도 있을 때만).
+  // group이 "eligibility"인 항목만 프로필 필드로 판정한다 — criteria_fit/
+  // bonus_fit/item_fit은 프로필을 채워도 해결 안 되므로 여기서 제외한다.
   const infoInsufficientCount = notice.secondaryFilterReasons.filter(
-    (reason) => reason.status === '정보부족',
+    (reason) => reason.status === '정보부족' && reason.group === 'eligibility',
   ).length
 
   function toggleChecklistItem(label: string) {
@@ -186,7 +204,7 @@ export function MatchDetailView({
         ) : null}
       </div>
 
-      {notice.summary ? (
+      {notice.summary || notice.amountLabel || notice.supportContents.length > 0 ? (
         <div className="border-b border-[#eef0f2] bg-white px-10 py-6">
           <div className="mb-4 flex items-baseline justify-between">
             <div className="flex items-baseline gap-[10px]">
@@ -197,11 +215,29 @@ export function MatchDetailView({
             </div>
           </div>
           <div className="flex flex-col gap-3 rounded-md border border-[#eef0f2] bg-surface-subtle px-5 py-4 text-[13px] leading-[1.7] text-[#374151]">
-            {summaryParagraphs(notice.summary).map((paragraph, index) => (
-              <p className="whitespace-pre-line" key={index}>
-                {paragraph}
-              </p>
-            ))}
+            {notice.amountLabel ? (
+              <div className="rounded border border-[#d9e2ef] bg-white px-3 py-2">
+                <span className="font-bold text-primary">지원규모</span>
+                <span className="ml-2">{notice.amountLabel}</span>
+              </div>
+            ) : null}
+            {notice.supportContents.length > 0 ? (
+              <div className="rounded border border-[#d9e2ef] bg-white px-3 py-2">
+                <div className="mb-1 font-bold text-primary">지원내용</div>
+                <ul className="m-0 flex list-disc flex-col gap-1 pl-4">
+                  {notice.supportContents.slice(0, 5).map((content) => (
+                    <li key={content}>{content}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {notice.summary
+              ? summaryParagraphs(notice.summary).map((paragraph, index) => (
+                  <p className="whitespace-pre-line" key={index}>
+                    {paragraph}
+                  </p>
+                ))
+              : null}
           </div>
         </div>
       ) : null}
@@ -264,6 +300,11 @@ export function MatchDetailView({
                       <span className="text-[11px] font-medium text-faint">
                         {item.weightLabel}
                       </span>
+                      {item.source === 'llm' ? (
+                        <span className="ml-1 text-[11px] font-medium text-primary">
+                          원문 LLM 반영
+                        </span>
+                      ) : null}
                     </span>
                     <span
                       className={
@@ -362,8 +403,13 @@ export function MatchDetailView({
           {notice.secondaryFilterJudged && notice.secondaryFilterReasons.length > 0 ? (
             <>
               <div className="mb-1.5 text-[15px] font-extrabold">
-                공고 원문 정밀 판정
+                AI 판정근거 (공고 원문)
               </div>
+              {notice.secondaryFilterScore != null ? (
+                <div className="mb-2 text-[12.5px] text-faint">
+                  판정 참고점수 {notice.secondaryFilterScore} / 100
+                </div>
+              ) : null}
               {infoInsufficientCount > 0 ? (
                 <div className="mb-2.5 flex items-center justify-between gap-2.5 rounded bg-primary-soft px-3 py-2 text-[12.5px]">
                   <span>
@@ -374,7 +420,11 @@ export function MatchDetailView({
                   <button
                     type="button"
                     className="shrink-0 cursor-pointer whitespace-nowrap rounded border-none bg-primary px-2.5 py-1.5 text-[12px] font-semibold text-white"
-                    onClick={() => navigate(PATHS.COMPANY_PROFILE)}
+                    onClick={() =>
+                      navigate(PATHS.COMPANY_PROFILE, {
+                        state: { from: location.pathname + location.search },
+                      })
+                    }
                   >
                     프로필 채우기
                   </button>
@@ -401,7 +451,7 @@ export function MatchDetailView({
                             : 'font-semibold text-faint'
                       }
                     >
-                      [{reason.status}]
+                      [{secondaryReasonGroupLabel(reason)} · {reason.status}]
                     </span>{' '}
                     <span className="text-[#374151]">{reason.criterion}</span>
                     {reason.evidence ? (

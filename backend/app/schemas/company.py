@@ -19,13 +19,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # 사업자유형 (models/company.py business_type 컬럼과 동일한 값 집합)
 BUSINESS_TYPES = ("개인사업자", "법인사업자", "예비창업자")
 
-# 기업 단계 (company_stage 컬럼). 소상공인은 단계가 아니라 규모라 여기 두지
-# 않는다 — 규모는 company_size로 별도 산출한다(services/company_size.py).
-COMPANY_STAGES = ("예비창업", "초기창업", "도약")
+# 기업 단계 (company_stage 컬럼). 사업자등록 이후에만 적용되는 축이라
+# 예비창업자는 여기 없다(business_type이 그 상태를 표현). 소상공인도 단계가
+# 아니라 규모라 여기 두지 않는다 — 규모는 company_size로 별도 산출한다
+# (services/company_size.py).
+COMPANY_STAGES = ("초기창업", "중소기업")
 
-# 예비창업자만 가질 수 있는 기업 단계. business_type과의 정합성 검증에 사용.
 PRE_FOUNDER_TYPE = "예비창업자"
-PRE_FOUNDER_STAGE = "예비창업"
 
 # 시/도 이름 → 행정표준코드(법정동코드 시도 2자리).
 # 강원(51)·전북(52)은 특별자치도 승격 이후 코드를 사용한다(구 42·45 아님).
@@ -93,7 +93,7 @@ class CompanyProfileUpdate(BaseModel):
     business_type: str | None = Field(
         None, description="개인사업자 / 법인사업자 / 예비창업자"
     )
-    company_stage: str | None = Field(None, description="예비창업 / 초기창업 / 도약")
+    company_stage: str | None = Field(None, description="초기창업 / 중소기업")
     industry_code: str | None = Field(None, description="KSIC 대분류 코드 (A~S)")
     region_name: str | None = Field(None, description="사업장 시/도 이름")
     founded_year: int | None = Field(None, ge=1900, description="설립연도 (예: 2021)")
@@ -144,21 +144,14 @@ class CompanyProfileUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _validate_stage_matches_business_type(self) -> "CompanyProfileUpdate":
-        """한 요청 안에 business_type과 company_stage가 함께 오면 조합을 검증한다.
+        """한 요청 안에 business_type=예비창업자와 company_stage가 함께 오면 거부한다.
 
         하나만 온 부분 갱신은 여기서 판단할 수 없다(기존 저장값과 합쳐봐야
         판단 가능) — 그 경우는 company_service에서 기존 프로필과 병합해 검증한다.
         """
-        if self.business_type is None or self.company_stage is None:
+        if self.business_type != PRE_FOUNDER_TYPE or self.company_stage is None:
             return self
-        is_pre_founder = self.business_type == PRE_FOUNDER_TYPE
-        is_pre_founder_stage = self.company_stage == PRE_FOUNDER_STAGE
-        if is_pre_founder != is_pre_founder_stage:
-            raise ValueError(
-                "사업자유형과 기업 단계 조합이 올바르지 않습니다"
-                "(예비창업자는 기업 단계가 예비창업이어야 하고, 그 외에는 예비창업일 수 없습니다)"
-            )
-        return self
+        raise ValueError("예비창업자는 기업 단계(초기창업/중소기업)를 함께 설정할 수 없습니다")
 
 
 class CompanyProfileResponse(BaseModel):

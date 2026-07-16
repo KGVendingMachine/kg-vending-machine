@@ -117,7 +117,9 @@ export function MyPage() {
           <button
             type="button"
             className="block w-full cursor-pointer border-0 bg-transparent p-3 text-center text-sm font-semibold text-primary"
-            onClick={() => navigate(PATHS.COMPANY_PROFILE)}
+            onClick={() =>
+              navigate(PATHS.COMPANY_PROFILE, { state: { from: PATHS.MYPAGE } })
+            }
           >
             정보 수정
           </button>

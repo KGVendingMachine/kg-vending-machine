@@ -41,6 +41,9 @@ async def save_judgment(
     score: float,
     excluded: bool,
     judgments: list[dict],
+    fit_score: float | None = None,
+    bonus_score: float | None = None,
+    item_fit_score: float | None = None,
 ) -> None:
     """(business_plan_id, notice_id, profile_fingerprint) 조합으로 upsert한다.
 
@@ -48,6 +51,10 @@ async def save_judgment(
     판정이 항상 우선이면 되므로 별도 버전 관리는 두지 않는다. flush만
     한다 — 매칭 파이프라인의 공유 세션 안에서 호출되므로 호출자가 트랜잭션
     경계를 관리한다(notice_embedding_service와 동일한 규칙).
+
+    fit_score/bonus_score/item_fit_score(2026-07-16, 적합도 판정 확장)는
+    criteria_fit/bonus_fit/item_fit 그룹 판정 결과 — 판정 대상 문장이
+    없으면 None으로 저장된다.
     """
     stmt = (
         pg_insert(SecondaryFilteringJudgment)
@@ -57,6 +64,9 @@ async def save_judgment(
             profile_fingerprint=profile_fingerprint,
             score=score,
             excluded=excluded,
+            fit_score=fit_score,
+            bonus_score=bonus_score,
+            item_fit_score=item_fit_score,
             judgments=judgments,
         )
         .on_conflict_do_update(
@@ -64,6 +74,9 @@ async def save_judgment(
             set_={
                 "score": score,
                 "excluded": excluded,
+                "fit_score": fit_score,
+                "bonus_score": bonus_score,
+                "item_fit_score": item_fit_score,
                 "judgments": judgments,
                 "judged_at": func.now(),
             },

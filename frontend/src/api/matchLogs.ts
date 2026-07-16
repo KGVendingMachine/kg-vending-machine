@@ -96,7 +96,11 @@ export interface MatchResultJson {
     growth: number
     bonus: number
     secondary_filter: number
+    /** R&D/자금 공고는 성장성 비중을 낮추고 아이템 적합도·2차필터링에 더
+     * 싣는 등 가중치가 다르다 — 실제로 쓰인 값(0~1)을 그대로 담는다. */
+    weights?: Partial<Record<string, number>>
   }
+  score_sources?: Partial<Record<string, string>>
   /** 2차 필터링 근거(임베딩 유사도)가 실제로 있었는지. false면 secondary_filter는
    * 중립값(50)으로 채워진 것 — 공고에 첨부파일이 없거나 임베딩이 실패한 경우. */
   secondary_filter_available: boolean
@@ -140,8 +144,9 @@ export interface SecondaryFilteringReasonLog {
   /** "충족" / "미충족" / "정보부족" 중 하나. */
   status: string
   evidence: string | null
+  group?: string | null
   /** true면 제외요건("~에 해당하지 않음"으로 재구성된 문장) 판정이다. */
-  is_exclusion: boolean
+  is_exclusion?: boolean
 }
 
 /** 2차 필터링에서 공고 하나가 어떻게 처리됐는지 (GET .../secondary-filtering의 notices[]). */

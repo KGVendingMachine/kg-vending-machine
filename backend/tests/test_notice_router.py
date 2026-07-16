@@ -9,13 +9,62 @@ Query(...) 기본값 객체가 그대로 전달되는 걸 피하기 위해 모�
 import pytest
 from fastapi import HTTPException
 
-from app.api.notice import get_notice, get_notices
+from app.api.notice import _amount_label, _summary_text, _support_list, get_notice, get_notices
+from app.models.notice import Notice
 from app.models.notice_source import NoticeSource
 from app.repositories.notice_repository import replace_notice_region, upsert_notice
 
 pytestmark = pytest.mark.anyio
 
 _FUND_CATEGORY_ID = 1  # kg_category 시드 데이터 기준 "자금"
+
+
+def test_amount_label_falls_back_to_normalized_support_amount():
+    notice = Notice(
+        amount_label=None,
+        normalized_json={"support": {"support_amount": "기업당 최대 1억원"}},
+    )
+
+    assert _amount_label(notice) == "기업당 최대 1억원"
+
+
+def test_amount_label_prefers_source_amount_label():
+    notice = Notice(
+        amount_label="최대 5천만원",
+        normalized_json={"support": {"support_amount": "기업당 최대 1억원"}},
+    )
+
+    assert _amount_label(notice) == "최대 5천만원"
+
+
+def test_summary_text_falls_back_to_normalized_support_summary():
+    notice = Notice(
+        summary_text="source summary",
+        normalized_json={"support": {"summary": "normalized summary"}},
+    )
+
+    assert _summary_text(notice) == "normalized summary"
+
+
+def test_summary_text_uses_source_summary_when_normalized_summary_missing():
+    notice = Notice(summary_text="source summary", normalized_json={"support": {}})
+
+    assert _summary_text(notice) == "source summary"
+
+
+def test_support_list_returns_normalized_support_items():
+    notice = Notice(
+        normalized_json={
+            "support": {
+                "support_content": ["technology upgrade", "commercialization support"]
+            }
+        }
+    )
+
+    assert _support_list(notice, "support_content") == [
+        "technology upgrade",
+        "commercialization support",
+    ]
 
 
 async def _create_source(db_session, name: str) -> NoticeSource:

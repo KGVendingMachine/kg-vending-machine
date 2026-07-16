@@ -25,7 +25,7 @@ export interface CompanyProfileUpdate {
   employee_count?: number
   /** 개인사업자 / 법인사업자 / 예비창업자 */
   business_type?: string
-  /** 예비창업 / 초기창업 / 도약 */
+  /** 초기창업 / 중소기업 */
   company_stage?: string
   /** KSIC 대분류 코드 (A~S) */
   industry_code?: string
