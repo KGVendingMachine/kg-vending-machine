@@ -1,11 +1,17 @@
+import asyncio
+
+import pytest
+
 from app.models.company import CompanyProfile
 from app.models.notice import Notice
 from app.schemas.business_plan import NormalizedBusinessPlanSchema
 from app.schemas.notice_normalization import NormalizedNoticeSchema
+from app.services import matching_service
 from app.services.matching_service import (
     _eligibility_score,
     _quality_errors,
     _score_notice,
+    run_matching,
 )
 
 
@@ -112,3 +118,33 @@ def test_eligibility_score_warns_but_does_not_cut_open_consortium():
 
     assert status != "likely_ineligible"
     assert any("컨소시엄(공동 신청) 구성이 필요" in caution for caution in cautions)
+
+
+@pytest.mark.anyio
+async def test_run_matching_limits_global_concurrency(monkeypatch):
+    """서로 다른 유저의 매칭이 겹쳐도 실제 실행은 세마포어 한도만큼만
+    동시에 돈다(2026-07-16, 겹친 요청 하나가 21분 걸린 걸 실측해 추가)."""
+    monkeypatch.setattr(
+        matching_service, "_matching_pipeline_semaphore", asyncio.Semaphore(1)
+    )
+    concurrent = 0
+    max_concurrent = 0
+
+    async def _fake_locked(session, *, log, plan, profile, max_results):
+        nonlocal concurrent, max_concurrent
+        concurrent += 1
+        max_concurrent = max(max_concurrent, concurrent)
+        await asyncio.sleep(0.05)
+        concurrent -= 1
+        return []
+
+    monkeypatch.setattr(matching_service, "_run_matching_locked", _fake_locked)
+
+    await asyncio.gather(
+        *(
+            run_matching(None, log=None, plan=None, profile=None, max_results=10)
+            for _ in range(3)
+        )
+    )
+
+    assert max_concurrent == 1

@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     호출 수 제한. notice_normalization_service._NOTICE_LLM_CONCURRENCY_LIMIT과
     같은 이유(계정 전체 동시 호출 한도가 실측된 적 없음, 매칭 요청과 정규화
     배치가 겹칠 때 레이트리밋/타임아웃 위험)로 동일한 기본값을 쓴다."""
+    MATCHING_PIPELINE_CONCURRENCY_LIMIT: int = 2
+    """run_matching() 전체를 동시에 몇 건까지 실행할지. 매칭 한 건 안에서도
+    임베딩·LLM 판정이 각자 최대 10건씩 동시 호출하므로, 서로 다른 유저의
+    매칭 요청이 겹치면 그 한도가 곱절로 늘어 OpenAI 레이트리밋에 걸려 하나가
+    비정상적으로 오래 걸린다(실측 2026-07-16, 겹친 요청 하나가 21분 걸림).
+    유저별 중복 실행 방지(match_log_repository.get_processing_by_user)와 별개로,
+    서로 다른 유저끼리 겹치는 것도 여기서 막는다."""
     BUSINESS_PLAN_SAMPLE_JSON_PATH: str = ""
     NOTICE_SAMPLE_JSON_PATH: str = ""
 

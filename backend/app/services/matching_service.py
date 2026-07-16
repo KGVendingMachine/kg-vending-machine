@@ -43,6 +43,14 @@ _secondary_filtering_judge_semaphore = asyncio.Semaphore(
     get_settings().SECONDARY_FILTERING_JUDGE_CONCURRENCY_LIMIT
 )
 
+# run_matching() 전체 동시 실행 상한. 매칭 한 건 안에서도 임베딩·LLM 판정이
+# 각자 세마포어 한도만큼 동시 호출하므로, 서로 다른 유저의 매칭이 겹치면 그
+# 한도가 곱절로 늘어 OpenAI 레이트리밋에 걸린다(match_log.py의 유저별 중복
+# 실행 방지와 별개로, 여기서 유저가 달라도 겹치는 것 자체를 막는다).
+_matching_pipeline_semaphore = asyncio.Semaphore(
+    get_settings().MATCHING_PIPELINE_CONCURRENCY_LIMIT
+)
+
 _QUALITY_REQUIRED_FIELDS: tuple[str, ...] = (
     "basic.title",
     "support.summary",
@@ -638,6 +646,22 @@ def _build_secondary_filtering_log(
 
 
 async def run_matching(
+    session: AsyncSession,
+    *,
+    log: MatchLog,
+    plan: BusinessPlan,
+    profile: CompanyProfile,
+    max_results: int,
+) -> list[MatchResult]:
+    """매칭 파이프라인 진입점. 전체 동시 실행 개수를 세마포어로 제한해, 서로
+    다른 유저의 매칭이 겹쳐 OpenAI 호출 한도를 나눠 쓰는 걸 막는다."""
+    async with _matching_pipeline_semaphore:
+        return await _run_matching_locked(
+            session, log=log, plan=plan, profile=profile, max_results=max_results
+        )
+
+
+async def _run_matching_locked(
     session: AsyncSession,
     *,
     log: MatchLog,

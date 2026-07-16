@@ -1,7 +1,7 @@
 from datetime import date
 
 import pytest
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, HTTPException
 
 from sqlalchemy import select
 
@@ -237,6 +237,63 @@ async def test_create_match_log_marks_failed_when_no_normalized_notices(
     row = await db_session.execute(select(MatchLog).where(MatchLog.id == response.id))
     log = row.scalar_one()
     assert log.run_status == JobStatus.FAILED.value
+
+
+async def test_create_match_log_reuses_existing_processing_log_for_same_plan(
+    db_session,
+):
+    """같은 계획서로 매칭이 이미 processing 중일 때 재요청하면, 새로 만들지
+    않고 기존 로그를 그대로 돌려줘야 한다(배경: 겹친 요청이 세마포어·OpenAI
+    호출 한도를 나눠 써서 하나가 비정상적으로 오래 걸리는 문제 실측)."""
+    user = await _make_user(db_session, "match-dedup-user")
+    profile = CompanyProfile(user_id=user.id)
+    db_session.add(profile)
+    await db_session.flush()
+    plan = await _make_plan(db_session, profile)
+
+    first = await create_match_log(
+        payload=MatchLogCreateRequest(business_plan_id=plan.id),
+        background_tasks=BackgroundTasks(),
+        current_user=user,
+        session=db_session,
+    )
+    second = await create_match_log(
+        payload=MatchLogCreateRequest(business_plan_id=plan.id),
+        background_tasks=BackgroundTasks(),
+        current_user=user,
+        session=db_session,
+    )
+
+    assert second.id == first.id
+
+
+async def test_create_match_log_rejects_when_different_plan_already_processing(
+    db_session,
+):
+    """다른 계획서 매칭이 이미 도는 중이면 새 매칭은 409로 막아야 한다 —
+    동시에 여러 매칭이 겹치면 자원을 다퉈 느려지는 문제를 예방한다."""
+    user = await _make_user(db_session, "match-conflict-user")
+    profile = CompanyProfile(user_id=user.id)
+    db_session.add(profile)
+    await db_session.flush()
+    plan_a = await _make_plan(db_session, profile)
+    plan_b = await _make_plan(db_session, profile)
+
+    await create_match_log(
+        payload=MatchLogCreateRequest(business_plan_id=plan_a.id),
+        background_tasks=BackgroundTasks(),
+        current_user=user,
+        session=db_session,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_match_log(
+            payload=MatchLogCreateRequest(business_plan_id=plan_b.id),
+            background_tasks=BackgroundTasks(),
+            current_user=user,
+            session=db_session,
+        )
+    assert exc_info.value.status_code == 409
 
 
 async def test_delete_match_log_removes_log_and_children(db_session):

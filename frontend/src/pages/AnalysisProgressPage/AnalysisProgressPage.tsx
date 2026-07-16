@@ -104,6 +104,23 @@ function apiErrorDetail(error: unknown): string | null {
   return null
 }
 
+// 백그라운드 탭은 브라우저가 setTimeout을 스로틀링해 폴링이 실제로는 몇 분씩
+// 밀릴 수 있다 — 탭이 다시 보이는 순간엔 대기를 끊고 바로 재확인하게 한다.
+function waitForNextPoll(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(finish, ms)
+    function onVisible() {
+      if (document.visibilityState === 'visible') finish()
+    }
+    function finish() {
+      clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      resolve()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+  })
+}
+
 export function AnalysisProgressPage() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -189,6 +206,15 @@ export function AnalysisProgressPage() {
       timer = setTimeout(poll, POLL_INTERVAL_MS)
     }
 
+    // 백그라운드 탭에서 setTimeout이 스로틀링되는 동안 화면이 멈춰 보이는 걸
+    // 막는다 — 탭이 다시 보이면 예약된 타이머를 끊고 바로 재확인한다.
+    function onVisible() {
+      if (document.visibilityState !== 'visible' || cancelled || timer == null) return
+      clearTimeout(timer)
+      poll()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
     async function run() {
       try {
         if (attempt === 0) {
@@ -219,6 +245,7 @@ export function AnalysisProgressPage() {
     return () => {
       cancelled = true
       if (timer) clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [businessPlanId, navigate, attempt])
 
@@ -269,7 +296,7 @@ export function AnalysisProgressPage() {
             )
             return
           }
-          await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+          await waitForNextPoll(POLL_INTERVAL_MS)
           continue
         }
 
@@ -279,7 +306,7 @@ export function AnalysisProgressPage() {
           matchFail('매칭에 실패했어요. 잠시 후 다시 시도해 주세요.')
           return
         }
-        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+        await waitForNextPoll(POLL_INTERVAL_MS)
       }
 
       if (matchCancelledRef.current) return

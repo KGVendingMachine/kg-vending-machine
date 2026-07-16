@@ -170,6 +170,29 @@ async def create_match_log(
             detail="Company profile not found.",
         )
 
+    # 같은 유저가 매칭을 여러 개 동시에 돌리면 세마포어·OpenAI 호출 한도를
+    # 겹쳐 쓰게 돼 하나가 비정상적으로 오래 걸린다(실측 2026-07-16,
+    # match_log_id=180이 겹친 요청 때문에 14분 넘게 걸림).
+    existing = await match_log_repository.get_processing_by_user(
+        session, current_user.id
+    )
+    if existing is not None:
+        if existing.business_plan_id == plan.id:
+            # 같은 계획서로 재요청 — 새로 만들지 않고 이미 도는 로그를 그대로
+            # 돌려줘 폴링만 이어붙게 한다(notice_ocr.py 배치 트리거의
+            # "이미 진행 중이면 기존 job 반환" 패턴과 동일).
+            existing_row = await match_log_repository.get_owned_by_user(
+                session, existing.id, current_user.id
+            )
+            existing_log, existing_title = existing_row
+            return _to_response(existing_log, existing_title)
+        # 다른 계획서 매칭이 이미 도는 중 — 여기서 새로 시작하면 그 계획서와
+        # 자원을 다투게 되므로, 그게 끝날 때까지 명시적으로 대기시킨다.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="다른 매칭이 이미 진행 중입니다. 완료된 뒤 다시 시도해주세요.",
+        )
+
     log = await match_log_repository.create(
         session,
         user_id=current_user.id,
