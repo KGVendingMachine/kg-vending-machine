@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # 상위 K건에만 돌린다(docs/secondary-filtering-llm-judge-guide.md TBD #1,
 # bizSupportNavigator rag_search의 limit과 같은 이유). 상위 K건 밖의 임베딩된
 # 공고는 판정 없이 기존 코사인 유사도 점수를 그대로 쓴다.
-_SECONDARY_FILTERING_JUDGE_TOP_K = 15
+_SECONDARY_FILTERING_JUDGE_TOP_K = 20
 
 _secondary_filtering_judge_semaphore = asyncio.Semaphore(
     get_settings().SECONDARY_FILTERING_JUDGE_CONCURRENCY_LIMIT
