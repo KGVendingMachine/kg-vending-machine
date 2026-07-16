@@ -57,17 +57,50 @@ def test_build_criteria_only_includes_present_eligibility_fields():
     ids = [item[0] for item in items]
     assert "elig:region" in ids
     assert "elig:size" not in ids  # target_company_size가 비어 있음
-    assert all(not is_excl for _, _, is_excl in items)
+    assert all(group == "eligibility" for _, _, group in items)
 
 
 def test_build_criteria_reframes_exclusion_positively():
     notice = _notice()
 
     items = _build_criteria(notice)
-    exclusion_items = [item for item in items if item[2]]
+    exclusion_items = [item for item in items if item[2] == "exclusion"]
 
     assert len(exclusion_items) == 1
     assert exclusion_items[0][1] == "휴업 중인 기업에 해당하지 않음"
+
+
+def test_build_criteria_omits_fit_groups_by_default():
+    notice = NormalizedNoticeSchema.model_validate(
+        {
+            "eligibility": {"target_regions": ["서울"]},
+            "evaluation": {
+                "criteria": ["기술 혁신성"],
+                "preferred_conditions": ["여성기업 우대"],
+            },
+        }
+    )
+
+    items = _build_criteria(notice)
+
+    assert all(group not in ("criteria_fit", "bonus_fit") for _, _, group in items)
+
+
+def test_build_criteria_includes_fit_groups_when_requested():
+    notice = NormalizedNoticeSchema.model_validate(
+        {
+            "evaluation": {
+                "criteria": ["기술 혁신성"],
+                "preferred_conditions": ["여성기업 우대"],
+            },
+        }
+    )
+
+    items = _build_criteria(notice, include_fit=True)
+    groups = [group for _, _, group in items]
+
+    assert "criteria_fit" in groups
+    assert "bonus_fit" in groups
 
 
 def test_build_criteria_excludes_financially_unverifiable_items():
@@ -89,7 +122,7 @@ def test_build_criteria_excludes_financially_unverifiable_items():
     )
 
     items = _build_criteria(notice)
-    exclusion_statements = [item[1] for item in items if item[2]]
+    exclusion_statements = [item[1] for item in items if item[2] == "exclusion"]
 
     assert exclusion_statements == ["휴업 중인 기업에 해당하지 않음"]
 
@@ -151,14 +184,14 @@ def test_aggregate_secondary_score_weights_eligibility_more_than_exclusion():
     # 모듈 docstring에 적힌 실측 버그와 동일한 시나리오).
     judgments = [
         CriterionJudgment(
-            criterion="자격1", status="미충족", evidence=None, is_exclusion=False
+            criterion="자격1", status="미충족", evidence=None, group="eligibility"
         ),
         CriterionJudgment(
-            criterion="자격2", status="미충족", evidence=None, is_exclusion=False
+            criterion="자격2", status="미충족", evidence=None, group="eligibility"
         ),
     ] + [
         CriterionJudgment(
-            criterion=f"제외{i}", status="충족", evidence=None, is_exclusion=True
+            criterion=f"제외{i}", status="충족", evidence=None, group="exclusion"
         )
         for i in range(9)
     ]
@@ -173,13 +206,13 @@ def test_aggregate_secondary_score_weights_eligibility_more_than_exclusion():
 def test_aggregate_secondary_score_caps_when_exclusion_confirmed():
     judgments = [
         CriterionJudgment(
-            criterion="자격1", status="충족", evidence=None, is_exclusion=False
+            criterion="자격1", status="충족", evidence=None, group="eligibility"
         ),
         CriterionJudgment(
             criterion="제외1에 해당하지 않음",
             status="미충족",
             evidence="제외 대상 확인됨",
-            is_exclusion=True,
+            group="exclusion",
         ),
     ]
 
@@ -187,6 +220,45 @@ def test_aggregate_secondary_score_caps_when_exclusion_confirmed():
 
     assert result.excluded is True
     assert result.score <= judge_service._EXCLUDED_SCORE_CAP
+
+
+def test_aggregate_secondary_score_computes_fit_and_bonus_separately():
+    judgments = [
+        CriterionJudgment(
+            criterion="자격1", status="충족", evidence=None, group="eligibility"
+        ),
+        CriterionJudgment(
+            criterion="평가기준1", status="충족", evidence=None, group="criteria_fit"
+        ),
+        CriterionJudgment(
+            criterion="평가기준2", status="미충족", evidence=None, group="criteria_fit"
+        ),
+        CriterionJudgment(
+            criterion="우대조건1", status="충족", evidence=None, group="bonus_fit"
+        ),
+    ]
+
+    result = aggregate_secondary_score(judgments)
+
+    # criteria_fit 평균 = (1.0 + 0.0) / 2 = 0.5 → 50.0
+    assert result.fit_score == pytest.approx(50.0)
+    # bonus_fit 평균 = 1.0 → 100.0
+    assert result.bonus_score == pytest.approx(100.0)
+    # score(자격요건 축)에는 criteria_fit/bonus_fit이 안 섞인다
+    assert result.score == pytest.approx(100.0)
+
+
+def test_aggregate_secondary_score_fit_score_none_without_fit_judgments():
+    judgments = [
+        CriterionJudgment(
+            criterion="자격1", status="충족", evidence=None, group="eligibility"
+        ),
+    ]
+
+    result = aggregate_secondary_score(judgments)
+
+    assert result.fit_score is None
+    assert result.bonus_score is None
 
 
 async def test_judge_notice_returns_none_when_no_criteria_available():
@@ -218,6 +290,57 @@ async def test_judge_notice_uses_llm_judgments(monkeypatch):
     assert result is not None
     assert result.excluded is False
     assert result.score == pytest.approx(100.0)
+
+
+async def test_judge_notice_include_fit_populates_fit_and_bonus_score(monkeypatch):
+    async def _fake_judge_criteria(**kwargs):
+        return {
+            "elig:region": ("충족", "서울 소재 확인"),
+            "elig:size": ("충족", "소기업 확인"),
+            "excl:reason:0": ("충족", "체납 없음"),
+            "fit:criteria:0": ("충족", "AI 비전 검사 기술 보유"),
+            "fit:bonus:0": ("충족", "여성기업 확인"),
+        }
+
+    monkeypatch.setattr(judge_service, "judge_criteria", _fake_judge_criteria)
+
+    notice = NormalizedNoticeSchema.model_validate(
+        {
+            "eligibility": {
+                "target_regions": ["서울", "경기"],
+                "target_company_size": ["소기업"],
+            },
+            "evaluation": {
+                "disqualification_reasons": ["휴업 중인 기업"],
+                "criteria": ["기술 혁신성"],
+                "preferred_conditions": ["여성기업 우대"],
+            },
+        }
+    )
+    profile = CompanyProfile(company_size="소기업", region_name="서울")
+    result = await judge_notice(
+        profile=profile, plan=_plan(), notice=notice, evidence=[], include_fit=True
+    )
+
+    assert result is not None
+    assert result.fit_score == pytest.approx(100.0)
+    assert result.bonus_score == pytest.approx(100.0)
+
+
+async def test_judge_notice_without_include_fit_leaves_fit_score_none(monkeypatch):
+    async def _fake_judge_criteria(**kwargs):
+        return {"elig:region": ("충족", "서울 소재 확인")}
+
+    monkeypatch.setattr(judge_service, "judge_criteria", _fake_judge_criteria)
+
+    profile = CompanyProfile(company_size="소기업", region_name="서울")
+    result = await judge_notice(
+        profile=profile, plan=_plan(), notice=_notice(), evidence=[]
+    )
+
+    assert result is not None
+    assert result.fit_score is None
+    assert result.bonus_score is None
 
 
 async def test_judge_notice_falls_back_to_information_lacking_on_ai_error(monkeypatch):

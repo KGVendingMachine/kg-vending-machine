@@ -13,6 +13,9 @@ services/llm_judge.py + services/score_aggregate.py 패턴을 이식한다: 정�
 캡한다 — bizSupportNavigator는 이 경우 0으로 완전히 캡하지만, 이 저장소는
 이미 matching_service._eligibility_score의 likely_ineligible 캡(총점 49점
 이하)이 있어 이중 안전장치로 삼기 위해 0이 아니라 _EXCLUDED_SCORE_CAP을 쓴다.
+
+2026-07-16(적합도 판정 확장, R&D 전용): 평가기준·우대조건도 같은 LLM 호출로
+판정해 criteria_fit/bonus_fit 그룹으로 추가하고, 별도 fit_score/bonus_score로 집계한다.
 """
 
 import hashlib
@@ -29,6 +32,9 @@ from app.services.secondary_filtering_service import EvidenceChunk
 logger = logging.getLogger(__name__)
 
 CriterionStatus = Literal["충족", "미충족", "정보부족"]
+CriterionGroup = Literal["eligibility", "exclusion", "criteria_fit", "bonus_fit"]
+"""eligibility/exclusion은 자격요건 축(기존과 동일). criteria_fit/bonus_fit은
+적합도 축(신규, R&D 전용) — business_fit_score/growth_score/bonus_score 대체."""
 
 _STATUS_WEIGHT: dict[CriterionStatus, float] = {
     "충족": 1.0,
@@ -49,7 +55,7 @@ class CriterionJudgment:
     criterion: str
     status: CriterionStatus
     evidence: str | None
-    is_exclusion: bool
+    group: CriterionGroup
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,11 @@ class JudgedSecondaryScore:
     score: float
     excluded: bool
     """제외요건 확정으로 _EXCLUDED_SCORE_CAP이 적용됐는지."""
+    fit_score: float | None = None
+    """criteria_fit 그룹(평가기준) 판정의 단순 평균*100. 판정 대상 문장이 없으면
+    None — matching_service가 이 경우 기존 키워드 겹침 점수를 그대로 쓴다."""
+    bonus_score: float | None = None
+    """bonus_fit 그룹(우대조건) 판정의 단순 평균*100. 의미는 fit_score와 동일."""
     judgments: list[CriterionJudgment] = field(default_factory=list)
 
 
@@ -82,8 +93,12 @@ def _is_unverifiable_from_business_plan(statement: str) -> bool:
     return any(keyword in statement for keyword in _UNVERIFIABLE_KEYWORDS)
 
 
-def _build_criteria(notice: NormalizedNoticeSchema) -> list[tuple[str, str, bool]]:
-    """(criterion_id, statement, is_exclusion) 목록을 만든다.
+def _build_criteria(
+    notice: NormalizedNoticeSchema,
+    *,
+    include_fit: bool = False,
+) -> list[tuple[str, str, CriterionGroup]]:
+    """(criterion_id, statement, group) 목록을 만든다.
 
     eligibility 쪽(지역/기업규모/업력단계/필수상태)은 정규화 단계에서 실제로
     뽑힌 필드만 문장화한다 — 애초에 못 뽑은 필드까지 "정보부족" 판정으로
@@ -92,8 +107,11 @@ def _build_criteria(notice: NormalizedNoticeSchema) -> list[tuple[str, str, bool
     긍정 재구성해, 충족/미충족의 의미(둘 다 "이 기업에 좋음"이 충족)를
     eligibility와 통일한다. 신용·재무 상태처럼 사업계획서로 원천적으로
     검증 불가능한 문장은 같은 이유(신호 희석 방지)로 아예 만들지 않는다.
+
+    include_fit=True일 때만 criteria_fit/bonus_fit(평가기준·우대조건 판정,
+    현재 R&D 공고 전용)을 덧붙인다.
     """
-    items: list[tuple[str, str, bool]] = []
+    items: list[tuple[str, str, CriterionGroup]] = []
     eligibility = notice.eligibility
 
     if eligibility.target_regions:
@@ -101,7 +119,7 @@ def _build_criteria(notice: NormalizedNoticeSchema) -> list[tuple[str, str, bool
             (
                 "elig:region",
                 f"사업장 지역이 다음 중 하나에 해당함: {', '.join(eligibility.target_regions)}",
-                False,
+                "eligibility",
             )
         )
     if eligibility.target_company_size:
@@ -109,7 +127,7 @@ def _build_criteria(notice: NormalizedNoticeSchema) -> list[tuple[str, str, bool
             (
                 "elig:size",
                 f"기업 규모가 다음 중 하나에 해당함: {', '.join(eligibility.target_company_size)}",
-                False,
+                "eligibility",
             )
         )
     if eligibility.target_business_stage:
@@ -117,7 +135,7 @@ def _build_criteria(notice: NormalizedNoticeSchema) -> list[tuple[str, str, bool
             (
                 "elig:stage",
                 f"업력/사업 단계가 다음 중 하나에 해당함: {', '.join(eligibility.target_business_stage)}",
-                False,
+                "eligibility",
             )
         )
     if eligibility.required_status:
@@ -125,30 +143,57 @@ def _build_criteria(notice: NormalizedNoticeSchema) -> list[tuple[str, str, bool
             (
                 "elig:status",
                 f"다음 요건을 충족함: {', '.join(eligibility.required_status)}",
-                False,
+                "eligibility",
             )
         )
 
     for index, target in enumerate(eligibility.excluded_targets):
         if _is_unverifiable_from_business_plan(target):
             continue
-        items.append((f"excl:target:{index}", f"{target}에 해당하지 않음", True))
+        items.append(
+            (f"excl:target:{index}", f"{target}에 해당하지 않음", "exclusion")
+        )
     for index, reason in enumerate(notice.evaluation.disqualification_reasons):
         if _is_unverifiable_from_business_plan(reason):
             continue
-        items.append((f"excl:reason:{index}", f"{reason}에 해당하지 않음", True))
+        items.append(
+            (f"excl:reason:{index}", f"{reason}에 해당하지 않음", "exclusion")
+        )
+
+    if include_fit:
+        for index, criterion in enumerate(notice.evaluation.criteria):
+            items.append(
+                (
+                    f"fit:criteria:{index}",
+                    f"다음 평가기준에 부합하는 근거가 있음: {criterion}",
+                    "criteria_fit",
+                )
+            )
+        for index, condition in enumerate(notice.evaluation.preferred_conditions):
+            items.append(
+                (
+                    f"fit:bonus:{index}",
+                    f"다음 우대조건에 해당함: {condition}",
+                    "bonus_fit",
+                )
+            )
 
     return items
 
 
-def build_criteria_statements(notice: NormalizedNoticeSchema) -> list[str]:
+def build_criteria_statements(
+    notice: NormalizedNoticeSchema, *, include_fit: bool = False
+) -> list[str]:
     """_build_criteria(notice)의 문장 부분만 뽑아 공개한다(2026-07-16, RAG
     성능 개선 검토). matching_service._judge_top_candidates가 LLM 판정 전에
     이 문장들을 그대로 임베딩해 secondary_filtering_service.get_criterion_evidence로
     criterion-aware evidence를 보강하는 데 쓴다 — judge_notice() 내부의
     _build_criteria 호출과 별개로 한 번 더 계산되지만, 순수 함수라 비용은
     없다(실제 비용은 이 문장들을 임베딩하는 embed_texts 호출 쪽에서 발생)."""
-    return [statement for _, statement, _ in _build_criteria(notice)]
+    return [
+        statement
+        for _, statement, _ in _build_criteria(notice, include_fit=include_fit)
+    ]
 
 
 def profile_fingerprint(profile: CompanyProfile) -> str:
@@ -192,13 +237,11 @@ def _company_profile_text(
 
 
 def _fallback_judgments(
-    items: list[tuple[str, str, bool]],
+    items: list[tuple[str, str, CriterionGroup]],
 ) -> list[CriterionJudgment]:
     return [
-        CriterionJudgment(
-            criterion=statement, status="정보부족", evidence=None, is_exclusion=is_excl
-        )
-        for _, statement, is_excl in items
+        CriterionJudgment(criterion=statement, status="정보부족", evidence=None, group=group)
+        for _, statement, group in items
     ]
 
 
@@ -208,19 +251,27 @@ def _group_average(judgments: list[CriterionJudgment]) -> float | None:
     return sum(_STATUS_WEIGHT[j.status] for j in judgments) / len(judgments)
 
 
+def _group_avg_score(
+    judgments: list[CriterionJudgment], group: CriterionGroup
+) -> float | None:
+    """judgments 중 group에 속한 것만 골라 단순 평균*100을 낸다. 판정 대상이
+    없으면 None(중립 50점과 구분 — matching_service가 이때만 키워드 겹침을 유지)."""
+    matched = [j for j in judgments if j.group == group]
+    avg = _group_average(matched)
+    return round(avg * 100, 2) if avg is not None else None
+
+
 def aggregate_secondary_score(
     judgments: list[CriterionJudgment],
 ) -> JudgedSecondaryScore:
-    """판정 결과를 자격 70% + 제외 30% 가중 평균으로 합친다
-    (bizSupportNavigator score_aggregate.py 그대로). 한쪽 그룹이 비어 있으면
-    있는 쪽만 100% 반영한다. 제외요건 중 하나라도 "미충족"(=제외 대상에
-    해당함)으로 확정되면 점수를 _EXCLUDED_SCORE_CAP으로 캡한다.
-    """
+    """판정 결과를 집계한다. 자격요건 축(score)은 자격 70%+제외 30% 가중평균,
+    제외요건 미충족 확정 시 _EXCLUDED_SCORE_CAP으로 캡한다. 적합도 축
+    (fit_score/bonus_score)은 별도 필드로 반환하고 score 계산에는 안 섞는다."""
     if not judgments:
         return JudgedSecondaryScore(score=NEUTRAL_SCORE, excluded=False, judgments=[])
 
-    eligibility = [j for j in judgments if not j.is_exclusion]
-    exclusion = [j for j in judgments if j.is_exclusion]
+    eligibility = [j for j in judgments if j.group == "eligibility"]
+    exclusion = [j for j in judgments if j.group == "exclusion"]
     excluded = any(j.status == "미충족" for j in exclusion)
 
     eligibility_avg = _group_average(eligibility)
@@ -236,7 +287,11 @@ def aggregate_secondary_score(
 
     score = min(raw_score, _EXCLUDED_SCORE_CAP) if excluded else raw_score
     return JudgedSecondaryScore(
-        score=round(score, 2), excluded=excluded, judgments=judgments
+        score=round(score, 2),
+        excluded=excluded,
+        fit_score=_group_avg_score(judgments, "criteria_fit"),
+        bonus_score=_group_avg_score(judgments, "bonus_fit"),
+        judgments=judgments,
     )
 
 
@@ -246,8 +301,10 @@ async def judge_notice(
     plan: NormalizedBusinessPlanSchema,
     notice: NormalizedNoticeSchema,
     evidence: list[EvidenceChunk],
+    include_fit: bool = False,
 ) -> JudgedSecondaryScore | None:
-    """공고 하나의 2차 필터링 LLM 판정 결과를 반환한다.
+    """공고 하나의 2차 필터링 LLM 판정 결과를 반환한다. include_fit=True면
+    criteria_fit/bonus_fit(평가기준·우대조건, 현재 R&D 전용)도 같이 판정한다.
 
     정규화 단계에서 eligibility/제외요건을 하나도 못 뽑은 공고는 판정 대상
     문장 자체가 없으므로 None을 반환한다 — 호출자(matching_service)가 기존
@@ -257,7 +314,7 @@ async def judge_notice(
     판정으로 집계한다 — 공고 하나의 LLM 실패로 전체 매칭이 중단되면 안 되고,
     "정보부족"이 이미 그 취지(판정 불가)를 정확히 표현하기 때문이다.
     """
-    items = _build_criteria(notice)
+    items = _build_criteria(notice, include_fit=include_fit)
     if not items:
         return None
 
@@ -279,7 +336,7 @@ async def judge_notice(
         return aggregate_secondary_score(_fallback_judgments(items))
 
     judgments: list[CriterionJudgment] = []
-    for criterion_id, statement, is_excl in items:
+    for criterion_id, statement, group in items:
         judged = judged_by_id.get(criterion_id)
         if judged is None:
             judgments.append(
@@ -287,7 +344,7 @@ async def judge_notice(
                     criterion=statement,
                     status="정보부족",
                     evidence=None,
-                    is_exclusion=is_excl,
+                    group=group,
                 )
             )
             continue
@@ -297,7 +354,7 @@ async def judge_notice(
                 criterion=statement,
                 status=status,
                 evidence=evidence_text,
-                is_exclusion=is_excl,
+                group=group,
             )
         )
 

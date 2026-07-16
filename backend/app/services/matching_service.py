@@ -259,7 +259,7 @@ def _parse_notice(notice: Notice) -> NormalizedNoticeSchema | None:
 
 def _eligibility_score(
     profile: CompanyProfile, notice: NormalizedNoticeSchema
-) -> tuple[float, str, list[str]]:
+) -> tuple[float, str, list[str], list[dict[str, str]]]:
     """소프트 자격요건 점수(감점형, total_score 구성요소).
 
     run_matching()의 get_eligible_notices()(지역/대상/업력/기간 하드필터,
@@ -268,47 +268,79 @@ def _eligibility_score(
     공고에 한해 기업규모(company_size, 하드필터가 안 보는 축)까지 포함해
     감점형으로 재차 점수를 매긴다. 중복이 아니라 보완 관계이므로 하드필터
     도입 후에도 그대로 유지한다.
+
+    notes는 cautions(감점 사유만)와 달리 +/− 사유를 모두 담는다 — 화면에
+    감점·가점 근거를 같이 보여주기 위함.
     """
     score = 55.0
     cautions: list[str] = []
+    notes: list[dict[str, str]] = []
 
     target_regions = notice.eligibility.target_regions
     if not target_regions or set(target_regions) & _ALL_REGIONS:
         score += 15
+        notes.append({"sign": "+", "detail": "전국 대상 공고라 지역 요건에 걸리지 않습니다."})
     elif profile.region_name and _contains_any(profile.region_name, target_regions):
         score += 20
+        notes.append(
+            {
+                "sign": "+",
+                "detail": f"사업장 지역({profile.region_name})이 공고 대상 지역과 일치합니다.",
+            }
+        )
     else:
         score -= 15
-        cautions.append(
+        detail = (
             f"사업장 지역({profile.region_name or '미등록'})이 공고 대상 지역"
             f"({', '.join(target_regions)})과 달라 확인이 필요합니다."
         )
+        cautions.append(detail)
+        notes.append({"sign": "-", "detail": detail})
 
     target_sizes = notice.eligibility.target_company_size
     if not target_sizes:
         score += 5
+        notes.append({"sign": "+", "detail": "기업 규모 제한이 없는 공고입니다."})
     elif profile.company_size and _contains_any(profile.company_size, target_sizes):
         score += 15
+        notes.append(
+            {
+                "sign": "+",
+                "detail": f"기업 규모({profile.company_size})가 공고 대상 규모와 일치합니다.",
+            }
+        )
     elif any("기업" in size for size in target_sizes):
         score += 8
+        notes.append(
+            {"sign": "+", "detail": "공고 대상 규모 표기가 넓어 부분적으로 부합합니다."}
+        )
     else:
         score -= 10
-        cautions.append(
+        detail = (
             f"기업 규모({profile.company_size or '미등록'})가 공고 대상 규모"
             f"({', '.join(target_sizes)})와 달라 확인이 필요합니다."
         )
+        cautions.append(detail)
+        notes.append({"sign": "-", "detail": detail})
 
     target_stages = notice.eligibility.target_business_stage
     if not target_stages:
         score += 5
+        notes.append({"sign": "+", "detail": "사업 단계 제한이 없는 공고입니다."})
     elif profile.company_stage and _contains_any(profile.company_stage, target_stages):
         score += 10
+        notes.append(
+            {
+                "sign": "+",
+                "detail": f"사업 단계({profile.company_stage})가 공고 대상 단계와 일치합니다.",
+            }
+        )
 
     if notice.eligibility.excluded_targets:
-        cautions.extend(
-            f"제외 대상 해당 여부 확인 필요: {target}"
-            for target in notice.eligibility.excluded_targets[:2]
-        )
+        for target in notice.eligibility.excluded_targets[:2]:
+            detail = f"제외 대상 해당 여부 확인 필요: {target}"
+            cautions.append(detail)
+            notes.append({"sign": "-", "detail": detail})
 
     score = max(0.0, min(100.0, score))
     if score >= 75:
@@ -326,21 +358,25 @@ def _eligibility_score(
     if notice.eligibility.applicant_structure == "컨소시엄·기관 전용(기업 참여 불가)":
         score = min(score, 20.0)
         status = "likely_ineligible"
-        cautions.append(
+        detail = (
             "이 공고는 대학·연구기관 전용으로 보입니다 — 기업 단독/참여 신청이"
             " 불가능할 수 있으니 원문을 확인하세요."
         )
+        cautions.append(detail)
+        notes.append({"sign": "-", "detail": detail})
     elif notice.eligibility.applicant_structure == "컨소시엄 필요(기업 주관/참여 가능)":
         # 사업계획서는 "이 회사가 지금 파트너를 구했는지"를 알려주지 않는다
         # (그건 신청 시점의 섭외 상황이지, 회사의 기술/업종 정보가 아니다).
         # 그래서 점수는 그대로 두되(기술 적합성 자체는 여전히 유효한 신호),
         # "파트너를 구해야 신청 가능하다"는 걸 놓치지 않도록 반드시 안내한다.
-        cautions.append(
+        detail = (
             "이 공고는 컨소시엄(공동 신청) 구성이 필요합니다 — 대학·연구소·"
             "타 기업 등 파트너를 먼저 구해야 신청할 수 있습니다."
         )
+        cautions.append(detail)
+        notes.append({"sign": "-", "detail": detail})
 
-    return score, status, cautions
+    return score, status, cautions, notes
 
 
 def _score_notice(
@@ -351,6 +387,8 @@ def _score_notice(
     normalized_notice: NormalizedNoticeSchema,
     secondary_filter_score: float | None = None,
     is_rd: bool = False,
+    llm_fit_score: float | None = None,
+    llm_bonus_score: float | None = None,
 ) -> MatchResult:
     weights = _RD_WEIGHTS if is_rd else _DEFAULT_WEIGHTS
     plan_item_tokens = _tokens(
@@ -385,8 +423,8 @@ def _score_notice(
         normalized_notice.evaluation.preferred_conditions,
     )
 
-    eligibility_score, eligibility_status, cautions = _eligibility_score(
-        profile, normalized_notice
+    eligibility_score, eligibility_status, cautions, eligibility_notes = (
+        _eligibility_score(profile, normalized_notice)
     )
     field_match_score, field_match = _field_match_result(plan, normalized_notice)
     base_item_fit_score = _overlap_score(plan_item_tokens, notice_item_tokens)
@@ -398,6 +436,18 @@ def _score_notice(
         _tokens(normalized_notice.evaluation.preferred_conditions),
         default=45.0,
     )
+    business_fit_source = "keyword"
+    growth_source = "keyword"
+    bonus_source = "keyword"
+    # R&D 전용: LLM이 판정한 평가기준/우대조건 점수로 단어 겹침을 대체한다.
+    if is_rd and llm_fit_score is not None:
+        business_fit_score = llm_fit_score
+        business_fit_source = "llm"
+        growth_score = llm_fit_score
+        growth_source = "llm"
+    if is_rd and llm_bonus_score is not None:
+        bonus_score = llm_bonus_score
+        bonus_source = "llm"
     # 2차 필터링 점수(secondary_filtering_service의 임베딩 유사도, 유사도
     # 상위 후보는 secondary_filtering_judge_service의 LLM 판정 점수로 대체됨)
     # 근거가 없는 공고(첨부파일 없음, 임베딩 실패, 판정 대상 요건 없음 등)는
@@ -451,9 +501,17 @@ def _score_notice(
             "secondary_filter": round(resolved_secondary_score, 2),
             "weights": weights,
         },
+        # 각 점수가 LLM 판정(R&D 전용)에서 왔는지 키워드 겹침 fallback인지 표시.
+        "score_sources": {
+            "item_fit": "keyword",
+            "business_fit": business_fit_source,
+            "growth": growth_source,
+            "bonus": bonus_source,
+        },
         "secondary_filter_available": secondary_filter_score is not None,
         "matched_keywords": matched_keywords,
         "cautions": cautions + normalized_notice.matching.caution_points[:3],
+        "eligibility_notes": eligibility_notes,
         "suggested_actions": [strategy] if strategy else [],
     }
 
@@ -564,6 +622,7 @@ async def _judge_top_candidates(
     profile: CompanyProfile,
     secondary_result: SecondaryFilteringResult,
     passed: list[tuple[Notice, NormalizedNoticeSchema]],
+    rd_notice_ids: set[int],
 ) -> tuple[dict[int, float], dict[int, JudgedSecondaryScore]]:
     """secondary_result.scores(코사인 유사도)로 순위를 매겨 상위
     _SECONDARY_FILTERING_JUDGE_TOP_K건만 judge_notice()로 정밀 판정하고,
@@ -609,10 +668,21 @@ async def _judge_top_candidates(
         if cached is None:
             to_judge.append(notice_id)
             continue
+        try:
+            # 옛 is_exclusion 키 캐시 행은 구조가 달라 TypeError가 난다 —
+            # 캐시 미스로 취급해 재판정시킨다.
+            cached_judgments = [CriterionJudgment(**item) for item in cached.judgments]
+        except TypeError:
+            to_judge.append(notice_id)
+            continue
         judged = JudgedSecondaryScore(
             score=float(cached.score),
             excluded=cached.excluded,
-            judgments=[CriterionJudgment(**item) for item in cached.judgments],
+            fit_score=float(cached.fit_score) if cached.fit_score is not None else None,
+            bonus_score=(
+                float(cached.bonus_score) if cached.bonus_score is not None else None
+            ),
+            judgments=cached_judgments,
         )
         final_scores[notice_id] = judged.score
         judged_by_notice[notice_id] = judged
@@ -623,12 +693,15 @@ async def _judge_top_candidates(
             notice_id: int,
         ) -> tuple[int, JudgedSecondaryScore | None]:
             _, normalized_notice = notice_by_id[notice_id]
+            include_fit = notice_id in rd_notice_ids
             async with _secondary_filtering_judge_semaphore:
                 # criterion-aware evidence 보강(2026-07-16, RAG 성능 개선
                 # 검토) — 사업계획서 유사도 기반 evidence만으로는 개별
                 # 요건(지역/제외대상 등)과 무관한 근거가 섞일 수 있어, 요건
                 # 문장 자체로 한 번 더 검색해 병합한다.
-                criterion_statements = build_criteria_statements(normalized_notice)
+                criterion_statements = build_criteria_statements(
+                    normalized_notice, include_fit=include_fit
+                )
                 criterion_evidence = await get_criterion_evidence(
                     notice_id, criterion_statements
                 )
@@ -640,6 +713,7 @@ async def _judge_top_candidates(
                     plan=plan,
                     notice=normalized_notice,
                     evidence=evidence,
+                    include_fit=include_fit,
                 )
             return notice_id, judged
 
@@ -660,6 +734,8 @@ async def _judge_top_candidates(
                 profile_fingerprint=fingerprint,
                 score=judged.score,
                 excluded=judged.excluded,
+                fit_score=judged.fit_score,
+                bonus_score=judged.bonus_score,
                 judgments=[asdict(j) for j in judged.judgments],
             )
 
@@ -716,7 +792,7 @@ def _build_secondary_filtering_log(
                         "criterion": judgment.criterion,
                         "status": judgment.status,
                         "evidence": judgment.evidence,
-                        "is_exclusion": judgment.is_exclusion,
+                        "group": judgment.group,
                     }
                     for judgment in judgments[notice.id].judgments
                 ]
@@ -852,7 +928,7 @@ async def _run_matching_locked(
             parse_failed_ids.append(notice.id)
             continue
 
-        _, eligibility_status, _ = _eligibility_score(profile, normalized_notice)
+        _, eligibility_status, _, _ = _eligibility_score(profile, normalized_notice)
         if eligibility_status == "likely_ineligible":
             quantitative_failed[notice.id] = (
                 normalized_notice.eligibility.applicant_structure or "자격요건 불일치"
@@ -921,11 +997,13 @@ async def _run_matching_locked(
         profile=profile,
         secondary_result=secondary_result,
         passed=passed,
+        rd_notice_ids=rd_notice_ids,
     )
     _mark_stage("LLM_정밀판정")
 
     scored: list[ScoredNotice] = []
     for notice, normalized_notice in passed:
+        judged = secondary_judgments.get(notice.id)
         result = _score_notice(
             plan=normalized_plan,
             profile=profile,
@@ -933,6 +1011,8 @@ async def _run_matching_locked(
             normalized_notice=normalized_notice,
             secondary_filter_score=final_secondary_scores.get(notice.id),
             is_rd=notice.id in rd_notice_ids,
+            llm_fit_score=judged.fit_score if judged else None,
+            llm_bonus_score=judged.bonus_score if judged else None,
         )
         result.recommendation_run_id = log.id
         if result.eligibility_status in eligibility_counts:
