@@ -44,6 +44,28 @@ _secondary_filtering_judge_semaphore = asyncio.Semaphore(
     get_settings().SECONDARY_FILTERING_JUDGE_CONCURRENCY_LIMIT
 )
 
+# total_score 가중치. 성장성(growth)은 사업계획서의 확장전략·자금계획 vs 공고의
+# 평가기준을 단어 겹침으로 재는데, R&D(기술개발) 공고는 평가기준이 보통
+# "연구개발목표·기술성·혁신성" 위주라 겹칠 단어가 거의 없어 대부분 중립값(50점)
+# 으로 죽는 가중치였다(2026-07-16 확인). R&D는 성장성 비중을 낮추고, 그만큼을
+# 실제로 의미 있는 신호인 아이템 적합도·AI 정밀판정(secondary)에 나눠 싣는다.
+_DEFAULT_WEIGHTS = {
+    "eligibility": 0.25,
+    "item_fit": 0.20,
+    "business_fit": 0.20,
+    "growth": 0.10,
+    "bonus": 0.05,
+    "secondary": 0.20,
+}
+_RD_WEIGHTS = {
+    "eligibility": 0.25,
+    "item_fit": 0.24,
+    "business_fit": 0.20,
+    "growth": 0.02,
+    "bonus": 0.05,
+    "secondary": 0.24,
+}
+
 # run_matching() 전체 동시 실행 상한. 매칭 한 건 안에서도 임베딩·LLM 판정이
 # 각자 세마포어 한도만큼 동시 호출하므로, 서로 다른 유저의 매칭이 겹치면 그
 # 한도가 곱절로 늘어 OpenAI 레이트리밋에 걸린다(match_log.py의 유저별 중복
@@ -319,7 +341,9 @@ def _score_notice(
     notice: Notice,
     normalized_notice: NormalizedNoticeSchema,
     secondary_filter_score: float | None = None,
+    is_rd: bool = False,
 ) -> MatchResult:
+    weights = _RD_WEIGHTS if is_rd else _DEFAULT_WEIGHTS
     plan_item_tokens = _tokens(
         plan.company.industry,
         plan.problem.background,
@@ -374,12 +398,12 @@ def _score_notice(
     )
 
     total_score = (
-        eligibility_score * 0.25
-        + item_fit_score * 0.20
-        + business_fit_score * 0.20
-        + growth_score * 0.10
-        + bonus_score * 0.05
-        + resolved_secondary_score * 0.20
+        eligibility_score * weights["eligibility"]
+        + item_fit_score * weights["item_fit"]
+        + business_fit_score * weights["business_fit"]
+        + growth_score * weights["growth"]
+        + bonus_score * weights["bonus"]
+        + resolved_secondary_score * weights["secondary"]
     )
     if eligibility_status == "likely_ineligible":
         total_score = min(total_score, 49.0)
@@ -416,6 +440,7 @@ def _score_notice(
             "growth": round(growth_score, 2),
             "bonus": round(bonus_score, 2),
             "secondary_filter": round(resolved_secondary_score, 2),
+            "weights": weights,
         },
         "secondary_filter_available": secondary_filter_score is not None,
         "matched_keywords": matched_keywords,
@@ -828,6 +853,7 @@ async def _run_matching_locked(
             notice=notice,
             normalized_notice=normalized_notice,
             secondary_filter_score=final_secondary_scores.get(notice.id),
+            is_rd=notice.id in rd_notice_ids,
         )
         result.recommendation_run_id = log.id
         if result.eligibility_status in eligibility_counts:

@@ -85,6 +85,38 @@ def test_score_notice_returns_recommendation_breakdown():
     assert result.summary_reason
 
 
+def test_score_notice_uses_lighter_growth_weight_for_rd_notices():
+    """R&D 공고는 평가기준이 기술성/혁신성 위주라 성장성(growth) 겹침이 거의
+    없다 — 성장성 가중치를 낮추고 아이템 적합도·AI 정밀판정에 더 실어야
+    한다(2026-07-16)."""
+    notice = Notice(id=1, source_id=1, title="AI smart factory support")
+    normalized_notice = NormalizedNoticeSchema.model_validate(_notice_json())
+    profile = CompanyProfile(company_size="small company", region_name="Seoul")
+
+    default_result = _score_notice(
+        plan=_plan(),
+        profile=profile,
+        notice=notice,
+        normalized_notice=normalized_notice,
+        is_rd=False,
+    )
+    rd_result = _score_notice(
+        plan=_plan(),
+        profile=profile,
+        notice=notice,
+        normalized_notice=normalized_notice,
+        is_rd=True,
+    )
+
+    default_weights = default_result.result_json["score_breakdown"]["weights"]
+    rd_weights = rd_result.result_json["score_breakdown"]["weights"]
+    assert rd_weights["growth"] < default_weights["growth"]
+    assert rd_weights["item_fit"] > default_weights["item_fit"]
+    assert rd_weights["secondary"] > default_weights["secondary"]
+    assert sum(rd_weights.values()) == pytest.approx(1.0)
+    assert sum(default_weights.values()) == pytest.approx(1.0)
+
+
 def test_eligibility_score_hard_cuts_institute_only_applicant_structure():
     # 지역/규모가 완벽히 일치해도, 신청주체가 대학·출연연 전용이면 기업은
     # 애초에 신청 자체를 못 하므로 다른 조건과 무관하게 무조건 탈락시켜야
