@@ -229,6 +229,15 @@ def _parse_notice(notice: Notice) -> NormalizedNoticeSchema | None:
 def _eligibility_score(
     profile: CompanyProfile, notice: NormalizedNoticeSchema
 ) -> tuple[float, str, list[str]]:
+    """소프트 자격요건 점수(감점형, total_score 구성요소).
+
+    run_matching()의 get_eligible_notices()(지역/대상/업력/기간 하드필터,
+    docs/first-filtering.md)와 검사 축이 겹치지만 목적이 다르다 — 하드필터는
+    통과 못 하면 아예 후보에서 빠지고, 이 함수는 이미 하드필터를 통과한
+    공고에 한해 기업규모(company_size, 하드필터가 안 보는 축)까지 포함해
+    감점형으로 재차 점수를 매긴다. 중복이 아니라 보완 관계이므로 하드필터
+    도입 후에도 그대로 유지한다.
+    """
     score = 55.0
     cautions: list[str] = []
 
@@ -708,9 +717,11 @@ async def _run_matching_locked(
             "매칭할 수 있는 공고가 없습니다. 공고 정규화가 완료된 뒤 다시 시도해주세요."
         )
 
-    # docs/matching-pipeline.md "로깅 요구사항" — 1차 필터링(품질 필터 +
-    # 자격요건 필터) 단계는 별도 엔드포인트 없이 이 루프 안에 통합돼 있어,
-    # 어느 기준에서 몇 건이 걸러졌는지는 로그로만 추적할 수 있다.
+    # docs/matching-pipeline.md "로깅 요구사항" — 1차 하드필터(지역/대상/업력/
+    # 기간, docs/first-filtering.md)는 위 get_eligible_notices()에서 이미
+    # 끝났고, 여기서부터는 그 결과 위에 품질 필터(정규화 필수 필드 존재 여부)
+    # 만 이 루프 안에서 추가로 적용한다. 어느 기준에서 몇 건이 걸러졌는지는
+    # 로그로만 추적할 수 있다.
     quality_failed: dict[int, list[str]] = {}
     parse_failed_ids: list[int] = []
     quantitative_failed: dict[int, str] = {}
@@ -785,11 +796,12 @@ async def _run_matching_locked(
         else set()
     )
 
-    # 2차 필터링(docs/matching-pipeline.md 4단계) — 1차 필터링(품질+자격요건)을
-    # 통과한 후보에 한해서만 공고 PDF 임베딩·유사도 검색을 수행한다(전체
-    # 후보를 다 임베딩하면 비용이 크므로, 3단계에서 명백히 무관한 공고를
-    # 먼저 제거하는 것과 같은 이유). 임베딩이 없거나 실패한 공고는 결과에서
-    # 빠지고 _score_notice가 중립값으로 처리한다.
+    # 2차 필터링(docs/matching-pipeline.md 4단계) — 1차 하드필터
+    # (get_eligible_notices) + 품질 필터 + 정량 게이트를 모두 통과한 `passed`에
+    # 한해서만 공고 PDF 임베딩·유사도 검색을 수행한다(전체 후보를 다 임베딩하면
+    # 비용이 크므로, 명백히 무관하거나 자격 미달인 공고를 먼저 제거하는 것과
+    # 같은 이유). 임베딩이 없거나 실패한 공고는 결과에서 빠지고 _score_notice가
+    # 중립값으로 처리한다.
     secondary_result = await run_secondary_filtering(
         session,
         business_plan_id=plan.id,

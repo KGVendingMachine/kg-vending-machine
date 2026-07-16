@@ -20,6 +20,8 @@ from app.models.user import User
 from app.repositories import match_log_repository
 from app.schemas.business_plan import JobStatus
 from app.schemas.match_log import MatchLogCreateRequest
+from app.services import matching_service
+from app.services.notice_eligibility_service import EligibilityResult
 
 pytestmark = pytest.mark.anyio
 
@@ -200,6 +202,78 @@ async def test_create_match_log_scores_and_persists_results(db_session):
     assert ours[0].recommendation_level in {"strong", "recommended", "normal"}
     # 필수 필드가 빈 공고는 품질 게이트에서 제외된다.
     assert all(r.notice_id != low_quality_notice.id for r in results)
+
+
+async def test_create_match_log_excludes_notices_filtered_out_by_eligibility(
+    db_session, monkeypatch
+):
+    """1차 하드필터(get_eligible_notices)가 걸러낸 공고는 품질 기준을
+    충족하더라도 2차 필터링/최종 결과에 도달하지 못해야 한다."""
+    user = await _make_user(db_session, "match-eligibility-user")
+    profile = CompanyProfile(
+        user_id=user.id,
+        company_size="small company",
+        company_stage="startup",
+        region_name="Seoul",
+        region_code="11",
+    )
+    db_session.add(profile)
+    await db_session.flush()
+    plan = await _make_plan(db_session, profile)
+    source = await _make_notice_source(db_session)
+
+    eligible_notice = await _make_notice(
+        db_session,
+        source,
+        title="eligible AI smart factory support",
+        normalized_json=_notice_json(
+            "eligible AI smart factory support", ["AI", "manufacturing", "vision"]
+        ),
+    )
+    ineligible_notice = await _make_notice(
+        db_session,
+        source,
+        title="ineligible AI smart factory support",
+        normalized_json=_notice_json(
+            "ineligible AI smart factory support", ["AI", "manufacturing", "vision"]
+        ),
+    )
+
+    async def _fake_get_eligible_notices(session, profile, today=None):
+        # 1차 하드필터를 통과한 공고는 eligible_notice 하나뿐이라고 가정한다
+        # — ineligible_notice는 품질 필터를 통과할 수 있는 정상 데이터를
+        # 갖고 있어도 애초에 후보 목록에 들지 못해야 한다.
+        return EligibilityResult(
+            notice_ids=[eligible_notice.id], counts={"input": 2, "통과": 1}
+        )
+
+    monkeypatch.setattr(
+        matching_service, "get_eligible_notices", _fake_get_eligible_notices
+    )
+
+    # 매칭은 백그라운드 잡으로 도니(2026-07-15) 즉시 completed가 아니라
+    # processing으로 응답한다 — 다른 테스트와 같은 패턴으로 _run_matching_job을
+    # 직접 실행해 완료 상태까지 만든다.
+    response = await create_match_log(
+        payload=MatchLogCreateRequest(business_plan_id=plan.id, max_results=50),
+        background_tasks=BackgroundTasks(),
+        current_user=user,
+        session=db_session,
+    )
+    assert response.run_status == JobStatus.PROCESSING
+
+    await _run_matching_job(
+        db_session, response.id, business_plan_id=plan.id, max_results=50
+    )
+
+    results = await list_match_results(
+        match_log_id=response.id,
+        current_user=user,
+        session=db_session,
+    )
+    notice_ids = {r.notice_id for r in results}
+    assert eligible_notice.id in notice_ids
+    assert ineligible_notice.id not in notice_ids
 
 
 async def test_create_match_log_marks_failed_when_no_normalized_notices(

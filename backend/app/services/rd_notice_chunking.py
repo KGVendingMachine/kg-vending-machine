@@ -17,7 +17,12 @@ R&D(기술개발) 공고 전용 청킹. docs/msit-rd-notice-chunking-guide.md에
 import re
 from dataclasses import dataclass
 
-from app.services.text_chunking import DEFAULT_MAX_CHARS, TextChunk, _split_oversized
+from app.services.text_chunking import (
+    DEFAULT_MAX_CHARS,
+    DEFAULT_OVERLAP_CHARS,
+    TextChunk,
+    _split_oversized,
+)
 
 # 매칭에 실질적으로 쓰이는 섹션 — 자격요건/지원내용/선정기준과, R&D 특유
 # 용어로 포장돼 있을 뿐 같은 성격인 항목(가이드 4장 (A)그룹)을 합쳐 취급한다.
@@ -185,6 +190,6 @@ def chunk_rd_notice_text(
     for section in split_rd_notice_sections(stripped):
         if section.group == "excluded":
             continue
-        for piece in _split_oversized(section.text, max_chars):
+        for piece in _split_oversized(section.text, max_chars, DEFAULT_OVERLAP_CHARS):
             chunks.append(TextChunk(chunk_type=section.header, chunk_text=piece))
     return chunks
