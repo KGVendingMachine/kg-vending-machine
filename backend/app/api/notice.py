@@ -49,6 +49,17 @@ def _summary_text(notice) -> str | None:
     return notice.summary_text
 
 
+def _support_list(notice, key: str) -> list[str]:
+    normalized = notice.normalized_json or {}
+    support = normalized.get("support") if isinstance(normalized, dict) else None
+    if not isinstance(support, dict):
+        return []
+    values = support.get(key)
+    if not isinstance(values, list):
+        return []
+    return [str(value).strip() for value in values if str(value).strip()]
+
+
 @router.get(
     "",
     response_model=NoticeListResponse,
@@ -129,6 +140,8 @@ async def get_notice(
         apply_url=notice.apply_url,
         summary_text=_summary_text(notice),
         amount_label=_amount_label(notice),
+        support_types=_support_list(notice, "support_type"),
+        support_contents=_support_list(notice, "support_content"),
         regions=regions,
         target_types=target_types,
         attachments=[

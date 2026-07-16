@@ -51,6 +51,8 @@ export interface MatchedNotice {
   sourceUrl: string | null
   applyUrl: string | null
   summary: string | null
+  supportTypes: string[]
+  supportContents: string[]
   score: number | null
   scoreLevel: ScoreLevel | null
   /** 추천 이유 중 첫 문장 (카드 목록에서 짧게 보여줄 때) */
@@ -184,6 +186,8 @@ export function toMatchedNotice(
     sourceUrl: notice.source_url,
     applyUrl: notice.apply_url,
     summary: notice.summary_text,
+    supportTypes: notice.support_types,
+    supportContents: notice.support_contents,
     score: result?.total_score ?? null,
     scoreLevel: toScoreLevel(result?.recommendation_level ?? null),
     matchReasonShort: strengths[0] ?? null,
@@ -228,6 +232,8 @@ export function bookmarkToMatchedNotice(bookmark: Bookmark): MatchedNotice {
     sourceUrl: notice.source_url,
     applyUrl: notice.apply_url,
     summary: null,
+    supportTypes: [],
+    supportContents: [],
     score: recommendation?.total_score ?? null,
     scoreLevel: toScoreLevel(recommendation?.recommendation_level ?? null),
     matchReasonShort: strengths[0] ?? null,

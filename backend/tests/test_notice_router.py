@@ -9,7 +9,7 @@ Query(...) 기본값 객체가 그대로 전달되는 걸 피하기 위해 모�
 import pytest
 from fastapi import HTTPException
 
-from app.api.notice import _amount_label, _summary_text, get_notice, get_notices
+from app.api.notice import _amount_label, _summary_text, _support_list, get_notice, get_notices
 from app.models.notice import Notice
 from app.models.notice_source import NoticeSource
 from app.repositories.notice_repository import replace_notice_region, upsert_notice
@@ -50,6 +50,21 @@ def test_summary_text_uses_source_summary_when_normalized_summary_missing():
     notice = Notice(summary_text="source summary", normalized_json={"support": {}})
 
     assert _summary_text(notice) == "source summary"
+
+
+def test_support_list_returns_normalized_support_items():
+    notice = Notice(
+        normalized_json={
+            "support": {
+                "support_content": ["technology upgrade", "commercialization support"]
+            }
+        }
+    )
+
+    assert _support_list(notice, "support_content") == [
+        "technology upgrade",
+        "commercialization support",
+    ]
 
 
 async def _create_source(db_session, name: str) -> NoticeSource:

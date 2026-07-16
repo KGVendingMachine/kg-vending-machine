@@ -39,6 +39,8 @@ export interface NoticeDetail {
   apply_url: string | null
   summary_text: string | null
   amount_label: string | null
+  support_types: string[]
+  support_contents: string[]
   regions: string[]
   target_types: string[]
   attachments: NoticeAttachmentInfo[]

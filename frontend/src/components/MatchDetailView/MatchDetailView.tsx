@@ -204,7 +204,7 @@ export function MatchDetailView({
         ) : null}
       </div>
 
-      {notice.summary ? (
+      {notice.summary || notice.amountLabel || notice.supportContents.length > 0 ? (
         <div className="border-b border-[#eef0f2] bg-white px-10 py-6">
           <div className="mb-4 flex items-baseline justify-between">
             <div className="flex items-baseline gap-[10px]">
@@ -215,11 +215,29 @@ export function MatchDetailView({
             </div>
           </div>
           <div className="flex flex-col gap-3 rounded-md border border-[#eef0f2] bg-surface-subtle px-5 py-4 text-[13px] leading-[1.7] text-[#374151]">
-            {summaryParagraphs(notice.summary).map((paragraph, index) => (
-              <p className="whitespace-pre-line" key={index}>
-                {paragraph}
-              </p>
-            ))}
+            {notice.amountLabel ? (
+              <div className="rounded border border-[#d9e2ef] bg-white px-3 py-2">
+                <span className="font-bold text-primary">지원규모</span>
+                <span className="ml-2">{notice.amountLabel}</span>
+              </div>
+            ) : null}
+            {notice.supportContents.length > 0 ? (
+              <div className="rounded border border-[#d9e2ef] bg-white px-3 py-2">
+                <div className="mb-1 font-bold text-primary">지원내용</div>
+                <ul className="m-0 flex list-disc flex-col gap-1 pl-4">
+                  {notice.supportContents.slice(0, 5).map((content) => (
+                    <li key={content}>{content}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {notice.summary
+              ? summaryParagraphs(notice.summary).map((paragraph, index) => (
+                  <p className="whitespace-pre-line" key={index}>
+                    {paragraph}
+                  </p>
+                ))
+              : null}
           </div>
         </div>
       ) : null}
