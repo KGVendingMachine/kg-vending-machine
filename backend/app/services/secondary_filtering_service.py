@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.chroma_client import get_business_plan_collection, get_notice_collection
-from app.ai.embedding_client import AiEmbeddingError
+from app.ai.embedding_client import AiEmbeddingError, embed_texts
 from app.db.session import async_session_factory
 from app.repositories import business_plan_repository
 from app.services.business_plan_embedding_service import ensure_business_plan_embedded
@@ -74,6 +74,12 @@ _MAX_EVIDENCE_CHUNKS_PER_NOTICE = 3
 # 부담이 없어 전체를 다 올리는 대신 R&D 카테고리에만 적용한다.
 _N_RESULTS_PER_QUERY_RD = 40
 _MAX_EVIDENCE_CHUNKS_PER_NOTICE_RD = 5
+
+# criterion 문장 하나당 조회할 공고 청크 수. _MAX_EVIDENCE_CHUNKS_PER_NOTICE와
+# 같은 이유로 작게 잡는다 — get_criterion_evidence 참고. criterion 쿼리는
+# 이미 요건 문장 자체로 타깃팅돼 있어 R&D라고 더 넓힐 필요는 없다고 보고
+# R&D 구분 없이 공통 값을 쓴다.
+_CRITERION_N_RESULTS = 3
 
 
 @dataclass(frozen=True)
@@ -295,3 +301,71 @@ async def run_secondary_filtering(
         len(best_score_by_notice),
     )
     return result
+
+
+async def get_criterion_evidence(
+    notice_id: int, criterion_statements: list[str]
+) -> list[EvidenceChunk]:
+    """요건 문장 자체를 쿼리로 써서 공고 청크를 검색한다(criterion-aware
+    evidence, 2026-07-16 RAG 성능 개선 검토).
+
+    run_secondary_filtering의 evidence는 사업계획서 청크와의 유사도로만
+    뽑혀서, 개별 요건(예: "사업장 지역")과 무관한 근거(예: 제품 설명 청크)가
+    섞일 수 있다. 요건 문장 자체로 검색하면 그 요건에 실제로 관련된 청크를
+    직접 찾을 수 있다.
+
+    비용 통제를 위해 공고 전체가 아니라 matching_service._judge_top_candidates가
+    실제로 LLM 판정할 상위 K건에만 쓴다. 요건이 보통 5~11개인데 하나씩
+    임베딩하면 그만큼 API 호출이 늘어나므로, 공고 하나당 요건 전체를
+    embed_texts 한 번으로 묶어 호출하고(추가 비용은 "공고당 +1회"로 제한),
+    Chroma 쿼리(로컬, 무료)만 요건 수만큼 돌린다.
+    """
+    if not criterion_statements:
+        return []
+
+    try:
+        vectors = await embed_texts(criterion_statements)
+    except AiEmbeddingError:
+        logger.warning(
+            "criterion-aware evidence 검색 건너뜀 (notice_id=%s): 요건 문장 "
+            "임베딩 실패",
+            notice_id,
+        )
+        return []
+
+    collection = get_notice_collection()
+    best_distance_by_chunk: dict[str, float] = {}
+    for vector in vectors:
+        query_result = await asyncio.to_thread(
+            collection.query,
+            query_embeddings=[vector],
+            n_results=_CRITERION_N_RESULTS,
+            where={"notice_id": notice_id},
+        )
+        distances = (query_result.get("distances") or [[]])[0]
+        documents = (query_result.get("documents") or [[]])[0]
+        for distance, document in zip(distances, documents):
+            if distance < best_distance_by_chunk.get(document, float("inf")):
+                best_distance_by_chunk[document] = distance
+
+    chunks = [
+        EvidenceChunk(content=content, distance=distance)
+        for content, distance in best_distance_by_chunk.items()
+    ]
+    return sorted(chunks, key=lambda chunk: chunk.distance)[
+        :_MAX_EVIDENCE_CHUNKS_PER_NOTICE
+    ]
+
+
+def merge_evidence(
+    *evidence_lists: list[EvidenceChunk],
+) -> list[EvidenceChunk]:
+    """여러 출처(사업계획서 유사도 기반 + criterion 기반 등)의 evidence를
+    합친다. 같은 청크 내용이 여러 출처에서 나오면 더 가까운 거리만 남긴다."""
+    best_by_content: dict[str, EvidenceChunk] = {}
+    for chunks in evidence_lists:
+        for chunk in chunks:
+            existing = best_by_content.get(chunk.content)
+            if existing is None or chunk.distance < existing.distance:
+                best_by_content[chunk.content] = chunk
+    return sorted(best_by_content.values(), key=lambda chunk: chunk.distance)
