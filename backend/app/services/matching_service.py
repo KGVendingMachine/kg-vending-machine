@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -669,12 +670,24 @@ async def _run_matching_locked(
     profile: CompanyProfile,
     max_results: int,
 ) -> list[MatchResult]:
+    # 매칭이 느려질 때 추측 대신 로그로 바로 어느 단계인지 짚을 수 있도록,
+    # 주요 단계 경계마다 소요 시간을 재서 마지막에 한 줄로 남긴다(2026-07-16).
+    stage_started_at = time.monotonic()
+    stage_durations: dict[str, float] = {}
+
+    def _mark_stage(name: str) -> None:
+        nonlocal stage_started_at
+        now = time.monotonic()
+        stage_durations[name] = now - stage_started_at
+        stage_started_at = now
+
     normalized_plan = _parse_business_plan(plan)
     eligibility_result = await get_eligible_notices(session, profile)
     candidates = await match_log_repository.list_normalized_notice_candidates(
         session,
         notice_ids=eligibility_result.notice_ids,
     )
+    _mark_stage("1차_하드필터+후보조회")
     logger.info(
         "매칭 시작 (match_log_id=%s, business_plan_id=%s): 1차 하드필터 통과 "
         "%d건 중 정규화 완료 후보 공고 %d건 (축별 집계=%s)",
@@ -735,6 +748,8 @@ async def _run_matching_locked(
 
         passed.append((notice, normalized_notice))
 
+    _mark_stage("품질필터+정량게이트")
+
     if quantitative_failed:
         logger.info(
             "2차 필터링(정량 게이트) [match_log_id=%s] 자격요건 미달로 %d건 제외"
@@ -781,6 +796,7 @@ async def _run_matching_locked(
         candidate_notice_ids=[notice.id for notice, _ in passed],
         rd_notice_ids=rd_notice_ids,
     )
+    _mark_stage("2차필터링(임베딩+유사도검색)")
     # 유사도 상위 K건만 LLM으로 정밀 판정한다(docs/secondary-filtering-llm-judge-guide.md)
     # — final_scores는 판정된 공고는 판정 점수, 나머지는 기존 유사도 점수를 담는다.
     final_secondary_scores, secondary_judgments = await _judge_top_candidates(
@@ -790,6 +806,7 @@ async def _run_matching_locked(
         secondary_result=secondary_result,
         passed=passed,
     )
+    _mark_stage("LLM_정밀판정")
 
     scored: list[ScoredNotice] = []
     for notice, normalized_notice in passed:
@@ -818,6 +835,7 @@ async def _run_matching_locked(
             result.eligibility_status,
             (result.result_json or {}).get("matched_keywords"),
         )
+    _mark_stage("점수산출")
 
     log.secondary_filtering_log = _build_secondary_filtering_log(
         passed=passed,
@@ -884,6 +902,7 @@ async def _run_matching_locked(
     )
 
     await match_log_repository.replace_results(session, log.id, selected)
+    _mark_stage("결과저장")
 
     log.run_status = "completed"
     log.completed_at = _now_naive()
@@ -900,5 +919,11 @@ async def _run_matching_locked(
             )
             for item in scored[:max_results]
         ],
+    )
+    logger.info(
+        "매칭 단계별 소요시간 (match_log_id=%s, 총 %.1f초): %s",
+        log.id,
+        sum(stage_durations.values()),
+        {name: round(seconds, 2) for name, seconds in stage_durations.items()},
     )
     return selected

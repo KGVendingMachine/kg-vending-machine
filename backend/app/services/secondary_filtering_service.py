@@ -228,32 +228,43 @@ async def run_secondary_filtering(
     ]
 
     notice_collection = get_notice_collection()
+
+    async def _query_one(group_notice_ids: list[int], n_results: int, vector):
+        return await asyncio.to_thread(
+            notice_collection.query,
+            query_embeddings=[vector],
+            n_results=n_results,
+            where={"notice_id": {"$in": group_notice_ids}},
+        )
+
+    # 사업계획서 청크 x (일반/R&D) 그룹 조합 쿼리를 순차로 돌리지 않고 한꺼번에
+    # 실행한다 — 청크 수가 몇 개 안 돼도(실측 3~5개) 그룹까지 겹치면 순차
+    # 실행 시 쌓이는 지연이 있어, 서로 독립적인 조회라 병렬화가 안전하다.
+    query_tasks = [
+        _query_one(group_notice_ids, n_results, vector)
+        for group_notice_ids, n_results in query_groups
+        if group_notice_ids
+        for vector in plan_vectors
+    ]
+    query_results = await asyncio.gather(*query_tasks)
+
     best_score_by_notice: dict[int, float] = {}
     # (notice_id, chunk_content) -> 그 청크의 최소 거리. 같은 청크가 여러
     # 사업계획서 청크 쿼리에서 반복 매칭될 수 있어(중복 근거를 LLM에 그대로
     # 넘기지 않도록) content로 중복 제거하면서 가장 좋은 거리만 남긴다.
     best_distance_by_chunk: dict[tuple[int, str], float] = {}
-    for group_notice_ids, n_results in query_groups:
-        if not group_notice_ids:
-            continue
-        for vector in plan_vectors:
-            query_result = await asyncio.to_thread(
-                notice_collection.query,
-                query_embeddings=[vector],
-                n_results=n_results,
-                where={"notice_id": {"$in": group_notice_ids}},
-            )
-            metadatas = (query_result.get("metadatas") or [[]])[0]
-            distances = (query_result.get("distances") or [[]])[0]
-            documents = (query_result.get("documents") or [[]])[0]
-            for metadata, distance, document in zip(metadatas, distances, documents):
-                notice_id = metadata["notice_id"]
-                score = _similarity_to_score(distance)
-                if score > best_score_by_notice.get(notice_id, -1.0):
-                    best_score_by_notice[notice_id] = score
-                chunk_key = (notice_id, document)
-                if distance < best_distance_by_chunk.get(chunk_key, float("inf")):
-                    best_distance_by_chunk[chunk_key] = distance
+    for query_result in query_results:
+        metadatas = (query_result.get("metadatas") or [[]])[0]
+        distances = (query_result.get("distances") or [[]])[0]
+        documents = (query_result.get("documents") or [[]])[0]
+        for metadata, distance, document in zip(metadatas, distances, documents):
+            notice_id = metadata["notice_id"]
+            score = _similarity_to_score(distance)
+            if score > best_score_by_notice.get(notice_id, -1.0):
+                best_score_by_notice[notice_id] = score
+            chunk_key = (notice_id, document)
+            if distance < best_distance_by_chunk.get(chunk_key, float("inf")):
+                best_distance_by_chunk[chunk_key] = distance
 
     result.scores = best_score_by_notice
     evidence_by_notice: dict[int, list[EvidenceChunk]] = {}
