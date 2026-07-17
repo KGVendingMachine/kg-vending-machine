@@ -7,6 +7,10 @@ on:
     branches: [develop]
     paths:
       - "backend/**"
+  # Actions 탭 > Deploy Backend > Run workflow 버튼(또는 gh workflow run)으로
+  # 수동 실행. 워크플로 파일만 바뀐 푸시는 paths 필터에 안 걸려 배포가 안 도는데,
+  # 그런 경우에도 이걸로 배포·마이그레이션을 돌릴 수 있다.
+  workflow_dispatch:
 
 concurrency:
   group: deploy-backend
