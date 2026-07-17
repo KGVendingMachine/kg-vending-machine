@@ -15,6 +15,8 @@ export interface CompanyProfile {
   founded_date: string | null
   /** 연매출 (원) */
   annual_revenue: number | null
+  /** 매칭 전 확인 모달에서 지역·기업형태를 확인한 시각. null이면 모달 표시 대상 */
+  matching_confirmed_at: string | null
 }
 
 /** 부분 갱신 요청. 담은 필드만 저장되고 나머지는 그대로 유지된다. */
@@ -49,5 +51,15 @@ export function saveMyCompanyProfile(
   return apiFetch<CompanyProfile>('/api/company-profile/me', {
     method: 'PUT',
     body: JSON.stringify(payload),
+  })
+}
+
+/**
+ * 매칭 전 확인 모달에서 지역·기업형태가 맞다고 확인했음을 기록한다.
+ * 기록되면 이후 매칭 시작 시 확인 모달을 건너뛴다.
+ */
+export function confirmMatchingProfile(): Promise<CompanyProfile> {
+  return apiFetch<CompanyProfile>('/api/company-profile/me/matching-confirmation', {
+    method: 'POST',
   })
 }
