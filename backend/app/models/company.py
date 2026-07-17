@@ -55,6 +55,9 @@ class CompanyProfile(Base):
         Boolean, server_default=false(), nullable=False
     )
     """대표 프로필 여부"""
+    matching_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    """매칭 전 확인 모달에서 지역·기업형태가 맞다고 확인한 시각. null이면 미확인이라
+    매칭 시작 전에 확인 모달을 띄운다."""
     file_url: Mapped[str | None] = mapped_column(String(500))
     """프로필 원본 파일 S3 경로"""
     spec_json: Mapped[dict | None] = mapped_column(JSONB)

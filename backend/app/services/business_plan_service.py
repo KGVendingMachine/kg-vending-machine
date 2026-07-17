@@ -24,19 +24,11 @@ from app.repositories.business_plan_repository import (
     get_raw_text,
     save_normalization_result,
 )
-from app.repositories.company_repository import get_primary_by_user
+from app.repositories.company_repository import get_primary_by_user, upsert_primary
 from app.schemas.business_plan import NormalizedBusinessPlanSchema, ValidationResult
 from app.utils.file_storage import delete_stored_file, save_upload_file
 
 NormalizeFn = Callable[[str], Awaitable[NormalizedBusinessPlanSchema]]
-
-
-class CompanyProfileRequiredError(Exception):
-    """업로드하려는 유저에게 아직 기업 프로필이 없을 때.
-
-    business_plan.company_profile_id가 NOT NULL이라 프로필 없이는 행을 만들 수
-    없다. 프로필을 먼저 등록하도록 유도한다.
-    """
 
 
 class UnsupportedFileTypeError(Exception):
@@ -58,11 +50,16 @@ async def upload_business_plan(
     """업로드 파일을 디스크에 저장하고 business_plan 행을 생성한다.
 
     OCR·정규화 같은 무거운 처리는 하지 않는다(이후 백그라운드 잡). 여기서는
-    소유 기업 프로필 확인 → 확장자 검증 → 파일 저장 → 행 생성까지만 한다.
+    소유 기업 프로필 확보 → 확장자 검증 → 파일 저장 → 행 생성까지만 한다.
+
+    업로드 우선 온보딩(#142): 프로필 작성 전에 업로드부터 하는 유저가
+    기본 경로다. business_plan.company_profile_id가 NOT NULL이므로 프로필이
+    없으면 빈 대표 프로필 행을 만들어 연결한다 — 이후 정규화가 이 행의 빈
+    컬럼을 자동으로 채운다(company_service.autofill_profile_from_business_plan).
     """
     profile = await get_primary_by_user(session, user_id)
     if profile is None:
-        raise CompanyProfileRequiredError()
+        profile = await upsert_primary(session, user_id, {})
 
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in SUPPORTED_UPLOAD_SUFFIXES:

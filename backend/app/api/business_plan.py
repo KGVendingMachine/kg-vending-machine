@@ -32,7 +32,6 @@ from app.schemas.business_plan import (
     BusinessPlanUploadResponse,
 )
 from app.services.business_plan_service import (
-    CompanyProfileRequiredError,
     UnsupportedFileTypeError,
     get_my_latest_business_plan,
     upload_business_plan,
@@ -67,11 +66,6 @@ async def upload_business_plan_file(
             storage_root=settings.STORAGE_ROOT,
             max_upload_size_bytes=settings.MAX_UPLOAD_SIZE_BYTES,
         )
-    except CompanyProfileRequiredError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="기업 프로필을 먼저 등록해주세요.",
-        ) from exc
     except UnsupportedFileTypeError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)

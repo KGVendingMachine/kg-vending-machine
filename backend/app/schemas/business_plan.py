@@ -16,7 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 
 def _none_to_empty_dict(value: Any) -> Any:
@@ -51,6 +51,17 @@ class CompanyInfo(BaseModel):
     name: str | None = None
     ceo_name: str | None = None
     founded_year: int | None = None
+    region_name: str | None = Field(
+        default=None,
+        description=(
+            "사업장 소재지 시/도. 서울/부산/대구/인천/광주/대전/울산/세종/경기/"
+            "충북/충남/전남/경북/경남/제주/강원/전북 중 하나"
+        ),
+    )
+    business_type: str | None = Field(
+        default=None,
+        description="사업자 유형. 개인사업자/법인사업자/예비창업자 중 하나",
+    )
     industry: str | None = None
     industry_candidates: list[IndustryCandidate] = Field(default_factory=list)
     business_registration_status: str | None = None

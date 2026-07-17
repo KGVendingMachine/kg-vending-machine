@@ -42,3 +42,10 @@ async def upsert_primary(
             setattr(profile, key, value)
     await session.flush()
     return profile
+
+
+async def get_by_id(
+    session: AsyncSession, company_profile_id: int
+) -> CompanyProfile | None:
+    """프로필을 id로 반환한다. 없으면 None."""
+    return await session.get(CompanyProfile, company_profile_id)

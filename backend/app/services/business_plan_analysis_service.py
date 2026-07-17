@@ -2,7 +2,7 @@
 services/business_plan_analysis_service.py
 
 사업계획서 분석 오케스트레이션: OCR → raw_text 저장(커밋) → 정규화(analysis_json 저장)
-→ 2차 필터링용 임베딩(비차단, docs/matching-pipeline.md 4단계).
+→ 프로필 자동 채움(비차단) → 2차 필터링용 임베딩(비차단, docs/matching-pipeline.md 4단계).
 
 OCR 결과(raw_text)를 정규화 전에 먼저 커밋한다. 정규화(LLM)가 실패해도 비싼
 CLOVA OCR 결과는 DB에 남아, 재시도 시 재OCR 없이 정규화만 다시 돌릴 수 있다.
@@ -34,6 +34,7 @@ from app.services.business_plan_service import (
     NormalizationOutcome,
     normalize_business_plan,
 )
+from app.services.company_service import autofill_profile_from_business_plan
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,26 @@ async def run_analysis(
         normalize_fn=normalize_fn,
         extracted_text=text,
     )
+
+    try:
+        filled = await autofill_profile_from_business_plan(
+            session, plan.company_profile_id, outcome.normalized
+        )
+        if filled:
+            logger.info(
+                "정규화 결과로 프로필 자동 채움 (company_profile_id=%s, fields=%s)",
+                plan.company_profile_id,
+                filled,
+            )
+    except Exception:
+        # 자동 채움은 보조 기능이라 실패해도 분석 자체는 실패시키지 않는다 —
+        # 매칭 전 확인 모달에서 직접 입력으로 보완할 수 있다.
+        logger.exception(
+            "프로필 자동 채움 중 오류 (business_plan_id=%s) — 분석 자체는"
+            " 정상 완료로 처리한다.",
+            business_plan_id,
+        )
+        await session.rollback()
 
     try:
         await ensure_business_plan_embedded(session, business_plan_id)

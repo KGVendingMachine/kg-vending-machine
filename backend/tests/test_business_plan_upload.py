@@ -15,8 +15,8 @@ from fastapi import UploadFile
 from app.models.company import CompanyProfile
 from app.models.user import User
 from app.repositories.business_plan_repository import get_by_id
+from app.repositories.company_repository import get_primary_by_user
 from app.services.business_plan_service import (
-    CompanyProfileRequiredError,
     UnsupportedFileTypeError,
     upload_business_plan,
 )
@@ -79,19 +79,23 @@ async def test_upload_stores_unified_file_type_for_images(
     assert plan.file_type == "IMAGE"
 
 
-async def test_upload_requires_company_profile(db_session, test_user, tmp_path):
-    file = _upload("plan.pdf", b"data")
+async def test_upload_creates_empty_primary_profile_when_missing(
+    db_session, test_user, tmp_path
+):
+    """업로드 우선 온보딩(#142): 프로필 작성 전 업로드면 빈 대표 프로필을 만들어 연결한다."""
+    file = _upload("plan.pdf", b"%PDF-1.4 fake content")
 
-    with pytest.raises(CompanyProfileRequiredError):
-        await upload_business_plan(
-            db_session,
-            user_id=test_user.id,
-            file=file,
-            storage_root=str(tmp_path),
-            max_upload_size_bytes=1_000_000,
-        )
+    plan = await upload_business_plan(
+        db_session,
+        user_id=test_user.id,
+        file=file,
+        storage_root=str(tmp_path),
+        max_upload_size_bytes=1_000_000,
+    )
 
-    assert not list(tmp_path.iterdir())  # 파일도 저장되면 안 됨
+    profile = await get_primary_by_user(db_session, test_user.id)
+    assert profile is not None
+    assert plan.company_profile_id == profile.id
 
 
 async def test_upload_rejects_unsupported_extension(db_session, test_user, tmp_path):
