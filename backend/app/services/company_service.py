@@ -5,13 +5,14 @@
 형식(founded_date, region_code)으로 바꾸는 변환도 여기서 담당한다.
 """
 
-from datetime import date
+from datetime import date, datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.company import CompanyProfile
 from app.repositories import company_repository
-from app.schemas.company import PRE_FOUNDER_TYPE, REGION_CODES
+from app.schemas.business_plan import NormalizedBusinessPlanSchema
+from app.schemas.company import BUSINESS_TYPES, PRE_FOUNDER_TYPE, REGION_CODES
 from app.services.company_size import derive_company_size
 
 
@@ -104,18 +105,6 @@ async def get_my_profile(session: AsyncSession, user_id: int) -> CompanyProfile 
     return await company_repository.get_primary_by_user(session, user_id)
 
 
-def is_profile_complete(profile: CompanyProfile | None) -> bool:
-    """프로필 작성이 실질적으로 끝났다고 볼 수 있는지 판단한다.
-
-    upsert_primary는 빈 필드로도 row를 만들 수 있어 "row가 존재한다"만으로는
-    작성 완료를 보장하지 못한다. 대표자명/사업자등록번호 중 하나라도 채워져
-    있으면 실제로 입력을 진행한 것으로 본다.
-    """
-    if profile is None:
-        return False
-    return bool(profile.representative_name or profile.business_registration_number)
-
-
 async def save_my_profile(
     session: AsyncSession, user_id: int, fields: dict
 ) -> CompanyProfile:
@@ -147,3 +136,143 @@ async def save_my_profile(
     # async_session_factory는 expire_on_commit=False라 commit 후에도 속성이
     # 살아 있다(id는 flush 시 RETURNING으로 채워짐). 별도 refresh 불필요.
     return profile
+
+
+class MatchingConfirmationIncompleteError(Exception):
+    """지역·기업형태가 비어 있어 매칭 확인을 기록할 수 없을 때.
+
+    확인 모달의 "맞아요"는 두 값이 채워져 있어야 의미가 있다. 비어 있으면
+    프론트가 버튼을 비활성화하지만, 직접 API 호출까지 막지는 못하므로 여기서
+    다시 검증한다.
+    """
+
+
+async def confirm_matching_profile(
+    session: AsyncSession, user_id: int
+) -> CompanyProfile:
+    """매칭 전 확인 모달의 "맞아요"를 기록하고 커밋한다.
+
+    matching_confirmed_at이 채워지면 이후 매칭 시작 시 확인 모달을 건너뛴다.
+    1차 필터링의 주요 축인 지역·기업형태가 비어 있으면 확인 자체가 성립하지
+    않으므로 거부한다.
+    """
+    profile = await company_repository.get_primary_by_user(session, user_id)
+    if profile is None or not profile.region_name or not profile.business_type:
+        raise MatchingConfirmationIncompleteError(
+            "지역과 사업자유형을 먼저 입력해야 매칭 정보를 확인할 수 있습니다"
+        )
+    profile.matching_confirmed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    await session.commit()
+    return profile
+
+
+# ---------------------------------------------------------------------------
+# 사업계획서 정규화 결과 → 프로필 자동 채움 (업로드 우선 온보딩, #142)
+# ---------------------------------------------------------------------------
+
+# 정규화가 "충청북도"처럼 전체 도(道) 명칭을 낼 때의 별칭. 약칭이 전체 명칭의
+# 접두사인 경우("서울특별시"·"경기도"·"전북특별자치도" 등)는 아래
+# _canonical_region_name의 접두사 매칭으로 잡히므로 여기 두지 않는다.
+_REGION_FULL_NAME_ALIASES = {
+    "충청북도": "충북",
+    "충청남도": "충남",
+    "전라남도": "전남",
+    "전라북도": "전북",
+    "경상북도": "경북",
+    "경상남도": "경남",
+}
+
+# 자동 채움 대상 문자열 컬럼의 길이 제한(models/company.py). 넘는 값은 추출
+# 오류일 가능성이 커서 잘라 넣지 않고 채움을 포기한다.
+_AUTOFILL_MAX_LENGTHS = {"company_name": 255, "representative_name": 100}
+
+
+def _canonical_region_name(raw: str | None) -> str | None:
+    """정규화 결과의 지역 표기를 REGION_CODES 키(시/도 약칭)로 정리한다.
+
+    "서울특별시 강남구" → "서울"처럼 접두사로 판정한다. 어느 시/도로도 정리하지
+    못하면 None — 틀린 지역을 채우는 것보다 비워 두고 매칭 전 확인 모달에서
+    직접 입력을 유도하는 편이 낫다.
+    """
+    if not raw:
+        return None
+    text = raw.strip()
+    for full_name, short_name in _REGION_FULL_NAME_ALIASES.items():
+        if text.startswith(full_name):
+            return short_name
+    for short_name in REGION_CODES:
+        if text.startswith(short_name):
+            return short_name
+    return None
+
+
+def _autofill_fields(
+    normalized: NormalizedBusinessPlanSchema, profile: CompanyProfile
+) -> dict:
+    """프로필의 빈 컬럼에 한해 정규화 결과에서 채울 컬럼 값을 고른다.
+
+    LLM 출력은 스키마 설명을 어길 수 있으므로 저장 전에 여기서 다시 검증한다
+    (지역 표기 정리, business_type enum, 설립연도 범위, 문자열 길이).
+    """
+    company = normalized.company
+    fields: dict = {}
+
+    if not profile.company_name and company.name:
+        fields["company_name"] = company.name.strip()
+    if not profile.representative_name and company.ceo_name:
+        fields["representative_name"] = company.ceo_name.strip()
+    if profile.founded_date is None and company.founded_year is not None:
+        if 1900 <= company.founded_year <= date.today().year:
+            fields["founded_date"] = date(company.founded_year, 1, 1)
+    if not profile.region_name:
+        region = _canonical_region_name(company.region_name)
+        if region is not None:
+            fields["region_name"] = region
+            fields["region_code"] = REGION_CODES[region]
+    if not profile.business_type and company.business_type in BUSINESS_TYPES:
+        fields["business_type"] = company.business_type
+
+    for key, max_length in _AUTOFILL_MAX_LENGTHS.items():
+        if key in fields and len(fields[key]) > max_length:
+            del fields[key]
+
+    # 예비창업자는 설립연도·사업자등록번호·기업 단계 등과 공존할 수 없다. 기존
+    # 저장값이나 이번 추출값에 그런 필드가 있으면 설립 이력이 더 구체적인
+    # 근거이므로 business_type 추출이 틀렸다고 보고 예비창업자 채움을 포기한다.
+    # save_my_profile의 전환 규칙과 달리 여기서는 기존 값을 절대 지우지 않는다.
+    if fields.get("business_type") == PRE_FOUNDER_TYPE and (
+        "founded_date" in fields
+        or profile.founded_date is not None
+        or profile.business_registration_number
+        or profile.company_stage
+        or profile.employee_count is not None
+        or profile.annual_revenue is not None
+    ):
+        del fields["business_type"]
+
+    return fields
+
+
+async def autofill_profile_from_business_plan(
+    session: AsyncSession,
+    company_profile_id: int,
+    normalized: NormalizedBusinessPlanSchema,
+) -> list[str]:
+    """정규화 결과로 프로필의 빈 컬럼만 채우고 커밋한다. 채운 컬럼명을 반환.
+
+    업로드 우선 온보딩: 프로필 입력 없이 업로드부터 한 유저의 프로필을
+    사업계획서에서 뽑은 값으로 보완한다. 유저가 이미 입력한 컬럼은 정규화
+    결과가 달라도 덮어쓰지 않는다 — 재업로드해도 기존 값은 그대로다.
+    """
+    profile = await company_repository.get_by_id(session, company_profile_id)
+    if profile is None:
+        return []
+
+    fields = _autofill_fields(normalized, profile)
+    if not fields:
+        return []
+
+    for key, value in fields.items():
+        setattr(profile, key, value)
+    await session.commit()
+    return list(fields)

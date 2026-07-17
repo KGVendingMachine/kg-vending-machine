@@ -153,15 +153,11 @@ def _build_criteria(
     for index, target in enumerate(()):
         if _is_unverifiable_from_business_plan(target):
             continue
-        items.append(
-            (f"excl:target:{index}", f"{target}에 해당하지 않음", "exclusion")
-        )
+        items.append((f"excl:target:{index}", f"{target}에 해당하지 않음", "exclusion"))
     for index, reason in enumerate(()):
         if _is_unverifiable_from_business_plan(reason):
             continue
-        items.append(
-            (f"excl:reason:{index}", f"{reason}에 해당하지 않음", "exclusion")
-        )
+        items.append((f"excl:reason:{index}", f"{reason}에 해당하지 않음", "exclusion"))
 
     if include_fit:
         if eligibility.target_industries:
@@ -300,7 +296,9 @@ def _fallback_judgments(
     items: list[tuple[str, str, CriterionGroup]],
 ) -> list[CriterionJudgment]:
     return [
-        CriterionJudgment(criterion=statement, status="정보부족", evidence=None, group=group)
+        CriterionJudgment(
+            criterion=statement, status="정보부족", evidence=None, group=group
+        )
         for _, statement, group in items
     ]
 

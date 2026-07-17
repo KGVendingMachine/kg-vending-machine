@@ -21,7 +21,17 @@ export function CompanyProfilePage() {
   const navigate = useNavigate()
   const location = useLocation()
   // state가 없으면(랜딩 → 온보딩 진입) 기존대로 업로드 화면으로 이어진다.
-  const returnTo = (location.state as { from?: string } | null)?.from ?? PATHS.UPLOAD
+  // 분석 페이지(매칭 전 확인 모달)에서 온 경우 businessPlanId를 함께 받는데,
+  // 분석 페이지는 이 값을 router state로 요구하므로 복귀할 때 그대로 되돌려
+  // 보내야 업로드 페이지로 튕기지 않는다.
+  const navState = location.state as
+    | { from?: string; businessPlanId?: number }
+    | null
+  const returnTo = navState?.from ?? PATHS.UPLOAD
+  const returnState =
+    navState?.businessPlanId != null
+      ? { state: { businessPlanId: navState.businessPlanId } }
+      : undefined
   const [representativeName, setRepresentativeName] = useState('')
   const [businessRegistrationNumber, setBusinessRegistrationNumber] = useState('')
   const [businessType, setBusinessType] = useState('')
@@ -84,7 +94,7 @@ export function CompanyProfilePage() {
   }
 
   function handleSkip() {
-    navigate(returnTo)
+    navigate(returnTo, returnState)
   }
 
   /**
@@ -117,7 +127,7 @@ export function CompanyProfilePage() {
     } finally {
       setSaving(false)
     }
-    navigate(returnTo)
+    navigate(returnTo, returnState)
   }
 
   return (

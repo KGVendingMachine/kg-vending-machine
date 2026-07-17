@@ -12,7 +12,7 @@
 요청은 부분 갱신을 지원한다: 보낸 필드만 반영하고 나머지 컬럼은 그대로 둔다.
 """
 
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -151,7 +151,9 @@ class CompanyProfileUpdate(BaseModel):
         """
         if self.business_type != PRE_FOUNDER_TYPE or self.company_stage is None:
             return self
-        raise ValueError("예비창업자는 기업 단계(초기창업/중소기업)를 함께 설정할 수 없습니다")
+        raise ValueError(
+            "예비창업자는 기업 단계(초기창업/중소기업)를 함께 설정할 수 없습니다"
+        )
 
 
 class CompanyProfileResponse(BaseModel):
@@ -172,3 +174,5 @@ class CompanyProfileResponse(BaseModel):
     founded_date: date | None = None
     annual_revenue: int | None = None
     """연매출 (원)"""
+    matching_confirmed_at: datetime | None = None
+    """매칭 전 확인 모달에서 지역·기업형태를 확인한 시각. null이면 모달 표시 대상"""

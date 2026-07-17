@@ -71,7 +71,9 @@ class SecondaryFilteringReasonLog(BaseModel):
 
         values = dict(data)
         if values.get("group") is None:
-            values["group"] = "exclusion" if values.get("is_exclusion") else "eligibility"
+            values["group"] = (
+                "exclusion" if values.get("is_exclusion") else "eligibility"
+            )
         if "is_exclusion" not in values:
             values["is_exclusion"] = values.get("group") == "exclusion"
         return values

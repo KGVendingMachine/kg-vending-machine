@@ -36,7 +36,7 @@ const STEPS = [
 
 export function LandingPage() {
   const navigate = useNavigate()
-  const goToUpload = () => navigate(PATHS.COMPANY_PROFILE)
+  const goToUpload = () => navigate(PATHS.UPLOAD)
 
   return (
     <div className="flex-1 bg-white text-[#15181c]">

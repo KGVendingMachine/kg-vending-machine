@@ -9,7 +9,13 @@ Query(...) 기본값 객체가 그대로 전달되는 걸 피하기 위해 모�
 import pytest
 from fastapi import HTTPException
 
-from app.api.notice import _amount_label, _summary_text, _support_list, get_notice, get_notices
+from app.api.notice import (
+    _amount_label,
+    _summary_text,
+    _support_list,
+    get_notice,
+    get_notices,
+)
 from app.models.notice import Notice
 from app.models.notice_source import NoticeSource
 from app.repositories.notice_repository import replace_notice_region, upsert_notice
