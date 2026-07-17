@@ -147,8 +147,19 @@ async def _make_full_account(db_session, user: User) -> dict:
 
     result = MatchResult(recommendation_run_id=log.id, notice_id=notice.id)
     report = MatchReport(match_run_id=log.id, content="리포트")
-    bookmark = NoticeBookmark(user_id=user.id, notice_id=notice.id, source="browse")
-    db_session.add_all([result, report, bookmark])
+    db_session.add_all([result, report])
+    await db_session.flush()
+
+    # 추천에서 담은 북마크: business_plan_id FK(RESTRICT)를 물고 있어
+    # 삭제 순서(북마크 → 사업계획서)가 틀리면 FK 위반이 재현된다.
+    bookmark = NoticeBookmark(
+        user_id=user.id,
+        notice_id=notice.id,
+        business_plan_id=plan.id,
+        match_result_id=result.id,
+        source="recommendation",
+    )
+    db_session.add(bookmark)
     await db_session.flush()
 
     return {

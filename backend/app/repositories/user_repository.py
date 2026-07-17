@@ -99,7 +99,9 @@ async def delete_owned_data(session: AsyncSession, user_id: int) -> list[str]:
     규칙이 없어(기본 RESTRICT), notice_repository.delete_notice와 같은
     방식으로 자식 → 부모 순서로 직접 지운다:
     match_result/match_report → match_log,
-    business_plan_chunk → business_plan → company_profile.
+    notice_bookmark → business_plan_chunk → business_plan → company_profile.
+    notice_bookmark.business_plan_id 는 ON DELETE 규칙 없는 FK(RESTRICT)라
+    반드시 business_plan 보다 먼저 지워야 한다.
 
     저장 파일(file_url)은 DB 트랜잭션 밖의 IO라 여기서 지우지 않고 경로만
     모아 반환한다 — 실제 삭제는 커밋 후 호출자(서비스)가 처리한다.
@@ -165,6 +167,10 @@ async def delete_owned_data(session: AsyncSession, user_id: int) -> list[str]:
         )
         await session.execute(delete(MatchLog).where(MatchLog.id.in_(log_ids)))
 
+    await session.execute(
+        delete(NoticeBookmark).where(NoticeBookmark.user_id == user_id)
+    )
+
     if plan_ids:
         await session.execute(
             delete(BusinessPlanChunk).where(
@@ -172,10 +178,6 @@ async def delete_owned_data(session: AsyncSession, user_id: int) -> list[str]:
             )
         )
         await session.execute(delete(BusinessPlan).where(BusinessPlan.id.in_(plan_ids)))
-
-    await session.execute(
-        delete(NoticeBookmark).where(NoticeBookmark.user_id == user_id)
-    )
 
     if profile_ids:
         await session.execute(
