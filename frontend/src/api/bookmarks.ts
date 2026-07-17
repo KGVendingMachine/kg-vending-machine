@@ -1,4 +1,5 @@
 import { apiFetch } from './client'
+import type { SecondaryFilteringNoticeLog } from './matchLogs'
 
 /** backend/app/schemas/notice_bookmark.py BookmarkNoticeInfo */
 export interface BookmarkNoticeInfo {
@@ -58,6 +59,20 @@ export function createBookmarkByNotice(noticeId: number): Promise<Bookmark> {
 /** DELETE /bookmarks/{id} — 북마크 해제. */
 export function deleteBookmark(bookmarkId: number): Promise<void> {
   return apiFetch<void>(`/api/bookmarks/${bookmarkId}`, { method: 'DELETE' })
+}
+
+/**
+ * 북마크 담을 당시 매칭 실행에 남아있는 2차 필터링 요건별 판정 근거를
+ * 조회한다. 브라우징으로 담았거나 원본 매칭 실행/결과가 삭제됐으면 null
+ * (서버가 그대로 null을 준다 — getSecondaryFilteringLog처럼 404를 null로
+ * 정규화할 필요가 없다).
+ */
+export function getBookmarkSecondaryFiltering(
+  bookmarkId: number,
+): Promise<SecondaryFilteringNoticeLog | null> {
+  return apiFetch<SecondaryFilteringNoticeLog | null>(
+    `/api/bookmarks/${bookmarkId}/secondary-filtering`,
+  )
 }
 
 /**

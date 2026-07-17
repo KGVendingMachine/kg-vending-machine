@@ -16,6 +16,7 @@ from app.repositories import (
 )
 from app.repositories.business_plan_repository import get_latest_by_company_profile
 from app.repositories.notice_bookmark_repository import BookmarkListRow
+from app.schemas.match_log import SecondaryFilteringNoticeLog
 from app.schemas.notice_bookmark import (
     BookmarkCreateRequest,
     BookmarkNoticeInfo,
@@ -158,3 +159,51 @@ async def list_bookmarks(
     rows = await notice_bookmark_repository.list_by_user(session, user.id)
     current_plan_id = await _current_plan_id(session, user.id)
     return [_to_response(row, current_plan_id=current_plan_id) for row in rows]
+
+
+async def get_secondary_filtering_reasons(
+    session: AsyncSession, *, user: User, bookmark_id: int
+) -> SecondaryFilteringNoticeLog | None:
+    """북마크 담을 당시 매칭 실행(match_log)에 남아있는 2차 필터링 요건별
+    판정 근거를 조회한다.
+
+    북마크 자체(notice_bookmark)는 요약 스냅샷(recommendation)만 얼려
+    저장하고 요건별 판정 근거는 저장하지 않는다 — match_result_id로 원본
+    match_log까지 거슬러 올라가 그 안의 secondary_filtering_log(JSONB)에서
+    이 공고 항목을 찾아 읽는다. 브라우징으로 담았거나(match_result_id 없음),
+    원본 매칭 실행/결과가 이미 삭제됐거나, 그 실행에 2차 필터링 로그가 없으면
+    None(호출부가 "판정 근거 없음"으로 자연스럽게 처리하면 된다).
+    """
+    row = await notice_bookmark_repository.get_row_by_id(
+        session, bookmark_id=bookmark_id, user_id=user.id
+    )
+    if row is None:
+        raise BookmarkTargetNotFoundError()
+
+    match_result_id = row.bookmark.match_result_id
+    if match_result_id is None:
+        return None
+
+    result = await match_log_repository.get_result_owned_by_user(
+        session, match_result_id, user.id
+    )
+    if result is None:
+        return None
+
+    log_row = await match_log_repository.get_owned_by_user(
+        session, result.recommendation_run_id, user.id
+    )
+    if log_row is None:
+        return None
+    log, _ = log_row
+    if log.secondary_filtering_log is None:
+        return None
+
+    notices = log.secondary_filtering_log.get("notices") or []
+    entry = next(
+        (item for item in notices if item.get("notice_id") == result.notice_id),
+        None,
+    )
+    if entry is None:
+        return None
+    return SecondaryFilteringNoticeLog(**entry)

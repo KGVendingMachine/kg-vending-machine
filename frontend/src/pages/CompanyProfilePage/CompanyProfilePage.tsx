@@ -116,7 +116,7 @@ export function CompanyProfilePage() {
     if (foundedYear.trim() && Number.isInteger(year)) payload.founded_year = year
     const employees = Number(employeeCount)
     if (employeeCount.trim() && Number.isFinite(employees))
-      payload.employee_count = employees
+      payload.employee_count = Math.round(employees)
     const revenueEok = Number(annualRevenue)
     if (annualRevenue.trim() && Number.isFinite(revenueEok) && revenueEok >= 0)
       payload.annual_revenue = Math.round(revenueEok * 100_000_000)
