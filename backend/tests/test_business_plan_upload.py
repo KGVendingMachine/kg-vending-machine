@@ -7,6 +7,7 @@ POST /business-plans 업로드 흐름(services.business_plan_service.upload_busi
 """
 
 import io
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -77,6 +78,24 @@ async def test_upload_stores_unified_file_type_for_images(
     )
 
     assert plan.file_type == "IMAGE"
+
+
+async def test_upload_resets_matching_confirmation(db_session, test_user, tmp_path):
+    """새 계획서를 올리면 매칭 전 확인(matching_confirmed_at)을 리셋해
+    다음 매칭 시작 시 확인 모달이 다시 뜨게 한다."""
+    profile = await _primary_profile(db_session, test_user)
+    profile.matching_confirmed_at = datetime(2026, 7, 17, 6, 12, 48)
+    await db_session.flush()
+
+    await upload_business_plan(
+        db_session,
+        user_id=test_user.id,
+        file=_upload("plan.pdf", b"%PDF-1.4 fake content"),
+        storage_root=str(tmp_path),
+        max_upload_size_bytes=1_000_000,
+    )
+
+    assert profile.matching_confirmed_at is None
 
 
 async def test_upload_creates_empty_primary_profile_when_missing(

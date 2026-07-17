@@ -60,6 +60,12 @@ async def upload_business_plan(
     profile = await get_primary_by_user(session, user_id)
     if profile is None:
         profile = await upsert_primary(session, user_id, {})
+    elif profile.matching_confirmed_at is not None:
+        # 새 계획서 업로드는 매칭 기준(프로필 값) 재확인 대상이다 — 다음 매칭
+        # 시작 시 확인 모달이 다시 뜨도록 리셋한다. 계획서가 바뀌면 다른
+        # 회사/내용일 수 있는데, 이전 확인이 그대로 남으면 옛 프로필 값으로
+        # 매칭되는 걸 유저가 모르고 지나칠 수 있다.
+        profile.matching_confirmed_at = None
 
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
