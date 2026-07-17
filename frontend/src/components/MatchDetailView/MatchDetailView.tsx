@@ -204,6 +204,117 @@ export function MatchDetailView({
         ) : null}
       </div>
 
+      {/* AI 정밀 판정 근거 섹션 임시 비활성화 (요청에 따라 AI 판정근거(공고 원문)만 노출)
+      {notice.strengths.length > 0 || notice.weaknesses.length > 0 ? (
+        <div className="border-b border-[#eef0f2] bg-white px-10 py-6">
+          <div className="rounded-lg border border-[#d6e4ff] bg-white p-4">
+            <span className="inline-block rounded bg-primary-soft px-2 py-[3px] text-[11px] font-bold text-primary">
+              AI 정밀 판정 근거
+            </span>
+            <div className="mt-3 grid grid-cols-3 gap-2.5">
+              {notice.strengths.map((reason) => (
+                <div
+                  className="rounded-md border border-[#eef0f2] bg-surface-subtle p-3"
+                  key={reason}
+                >
+                  <div className="text-[12px] font-bold text-success">[강점]</div>
+                  <div className="mt-1 text-[11.5px] leading-[1.5] text-[#374151]">
+                    {reason}
+                  </div>
+                </div>
+              ))}
+              {notice.weaknesses.map((reason) => (
+                <div
+                  className="rounded-md border border-[#eef0f2] bg-surface-subtle p-3"
+                  key={reason}
+                >
+                  <div className="text-[12px] font-bold text-warning">[주의]</div>
+                  <div className="mt-1 text-[11.5px] leading-[1.5] text-[#374151]">
+                    {reason}
+                  </div>
+                </div>
+              ))}
+              {notice.strategySuggestion ? (
+                <div className="rounded-md border border-[#eef0f2] bg-surface-subtle p-3">
+                  <div className="text-[12px] font-bold text-success">[제안]</div>
+                  <div className="mt-1 text-[11.5px] leading-[1.5] text-[#374151]">
+                    {notice.strategySuggestion}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+      */}
+
+      {notice.secondaryFilterJudged && notice.secondaryFilterReasons.length > 0 ? (
+        <div className="border-b border-[#eef0f2] bg-white px-10 py-6">
+          <div className="rounded-lg border border-[#d6e4ff] bg-white p-4">
+            <span className="inline-block rounded bg-primary-soft px-2 py-[3px] text-[11px] font-bold text-primary">
+              AI 판정근거 (공고 원문)
+            </span>
+            {infoInsufficientCount > 0 ? (
+              <div className="mt-2.5 flex items-center justify-between gap-2.5 rounded bg-primary-soft px-3 py-2 text-[12px]">
+                <span>
+                  [정보부족] 항목은 기업 프로필(매출액·상시근로자 수·기업규모·
+                  사업자유형 등)이 비어 있어 판정 근거가 부족했던 항목이에요.
+                  프로필을 채우면 더 정확한 결과를 볼 수 있어요.
+                </span>
+                <button
+                  type="button"
+                  className="shrink-0 cursor-pointer whitespace-nowrap rounded border-none bg-primary px-2.5 py-1.5 text-[11.5px] font-semibold text-white"
+                  onClick={() =>
+                    navigate(PATHS.COMPANY_PROFILE, {
+                      state: { from: location.pathname + location.search },
+                    })
+                  }
+                >
+                  프로필 채우기
+                </button>
+              </div>
+            ) : null}
+            <div className="mt-3 grid grid-cols-3 gap-2.5">
+              {/* 판정 참고점수 카드 임시 비활성화
+              {notice.secondaryFilterScore != null ? (
+                <div className="rounded-md border border-[#eef0f2] bg-surface-subtle p-3">
+                  <div className="text-[12px] font-bold text-primary">판정 참고점수</div>
+                  <div className="mt-1 text-[13px] font-extrabold text-[#374151]">
+                    {notice.secondaryFilterScore}{' '}
+                    <span className="text-[11px] font-medium text-faint">/ 100</span>
+                  </div>
+                </div>
+              ) : null}
+              */}
+              {notice.secondaryFilterReasons.map((reason, index) => (
+                <div
+                  className="rounded-md border border-[#eef0f2] bg-surface-subtle p-3"
+                  key={index}
+                >
+                  <div
+                    className={
+                      reason.status === '미충족'
+                        ? 'text-[12px] font-bold text-danger'
+                        : reason.status === '충족'
+                          ? 'text-[12px] font-bold text-success'
+                          : 'text-[12px] font-bold text-faint'
+                    }
+                  >
+                    [{secondaryReasonGroupLabel(reason)} · {reason.status}]
+                  </div>
+                  <div className="mt-1 text-[11.5px] leading-[1.5] text-[#374151]">
+                    {reason.criterion}
+                    {reason.evidence ? (
+                      <span className="text-faint"> — {reason.evidence}</span>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {notice.summary || notice.amountLabel || notice.supportContents.length > 0 ? (
         <div className="border-b border-[#eef0f2] bg-white px-10 py-6">
           <div className="mb-4 flex items-baseline justify-between">
@@ -374,95 +485,6 @@ export function MatchDetailView({
         </div>
 
         <div className="bg-white px-8 py-7">
-          {notice.strengths.length > 0 || notice.weaknesses.length > 0 ? (
-            <>
-              <div className="mb-1.5 text-[15px] font-extrabold">AI 정밀 판정 근거</div>
-              <div className="mb-[26px] flex flex-col gap-2 text-[12.5px] leading-[1.6]">
-                {notice.strengths.map((reason) => (
-                  <div className="border-l-2 border-success pl-2.5" key={reason}>
-                    <span className="font-semibold text-success">[강점]</span>{' '}
-                    <span className="text-[#374151]">{reason}</span>
-                  </div>
-                ))}
-                {notice.weaknesses.map((reason) => (
-                  <div className="border-l-2 border-warning pl-2.5" key={reason}>
-                    <span className="font-semibold text-warning">[주의]</span>{' '}
-                    <span className="text-[#374151]">{reason}</span>
-                  </div>
-                ))}
-                {notice.strategySuggestion ? (
-                  <div className="border-l-2 border-success pl-2.5">
-                    <span className="font-semibold text-success">[제안]</span>{' '}
-                    <span className="text-[#374151]">{notice.strategySuggestion}</span>
-                  </div>
-                ) : null}
-              </div>
-            </>
-          ) : null}
-
-          {notice.secondaryFilterJudged && notice.secondaryFilterReasons.length > 0 ? (
-            <>
-              <div className="mb-1.5 text-[15px] font-extrabold">
-                AI 판정근거 (공고 원문)
-              </div>
-              {notice.secondaryFilterScore != null ? (
-                <div className="mb-2 text-[12.5px] text-faint">
-                  판정 참고점수 {notice.secondaryFilterScore} / 100
-                </div>
-              ) : null}
-              {infoInsufficientCount > 0 ? (
-                <div className="mb-2.5 flex items-center justify-between gap-2.5 rounded bg-primary-soft px-3 py-2 text-[12.5px]">
-                  <span>
-                    [정보부족] 항목은 기업 프로필(매출액·상시근로자 수·기업규모·
-                    사업자유형 등)이 비어 있어 판정 근거가 부족했던 항목이에요.
-                    프로필을 채우면 더 정확한 결과를 볼 수 있어요.
-                  </span>
-                  <button
-                    type="button"
-                    className="shrink-0 cursor-pointer whitespace-nowrap rounded border-none bg-primary px-2.5 py-1.5 text-[12px] font-semibold text-white"
-                    onClick={() =>
-                      navigate(PATHS.COMPANY_PROFILE, {
-                        state: { from: location.pathname + location.search },
-                      })
-                    }
-                  >
-                    프로필 채우기
-                  </button>
-                </div>
-              ) : null}
-              <div className="mb-[26px] flex flex-col gap-2 text-[12.5px] leading-[1.6]">
-                {notice.secondaryFilterReasons.map((reason, index) => (
-                  <div
-                    className={
-                      reason.status === '미충족'
-                        ? 'border-l-2 border-danger pl-2.5'
-                        : reason.status === '충족'
-                          ? 'border-l-2 border-success pl-2.5'
-                          : 'border-l-2 border-faint pl-2.5'
-                    }
-                    key={index}
-                  >
-                    <span
-                      className={
-                        reason.status === '미충족'
-                          ? 'font-semibold text-danger'
-                          : reason.status === '충족'
-                            ? 'font-semibold text-success'
-                            : 'font-semibold text-faint'
-                      }
-                    >
-                      [{secondaryReasonGroupLabel(reason)} · {reason.status}]
-                    </span>{' '}
-                    <span className="text-[#374151]">{reason.criterion}</span>
-                    {reason.evidence ? (
-                      <span className="text-faint"> — {reason.evidence}</span>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : null}
-
           {otherNotices.length > 0 ? (
             <>
               <div className="mb-1.5 text-[15px] font-extrabold">다른 추천 공고와 비교</div>

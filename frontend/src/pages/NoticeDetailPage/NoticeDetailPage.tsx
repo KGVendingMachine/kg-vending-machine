@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { MatchDetailView } from '../../components/MatchDetailView/MatchDetailView'
+import { getBookmarkSecondaryFiltering } from '../../api/bookmarks'
 import { getNoticeDetail } from '../../api/notices'
 import type { NoticeDetail } from '../../api/notices'
+import type { SecondaryFilteringNoticeLog } from '../../api/matchLogs'
 import { useFetchOnMount } from '../../hooks/useFetchOnMount'
 import { PATHS } from '../../routes/paths'
 import { useBookmarks } from '../../store/BookmarkContext'
@@ -25,11 +27,23 @@ export function NoticeDetailPage() {
   const [bookmarkBusy, setBookmarkBusy] = useState(false)
 
   const stateNotice = (location.state as { notice?: MatchedNotice } | null)?.notice
+  const bookmarkId = stateNotice?.bookmarkId ?? null
 
   const { data: fetchedDetail, loading } = useFetchOnMount<NoticeDetail>(() => {
     if (noticeId == null || Number.isNaN(noticeId)) return null
     return getNoticeDetail(noticeId)
   }, [noticeId])
+
+  // 북마크 자체엔 요건별 판정 근거가 없어(요약 스냅샷만 얼려 저장) 원본
+  // 매칭 실행에서 따로 조회한다. 브라우징 북마크(bookmarkId 없음)거나 원본
+  // 실행이 지워졌으면 null — MatchDetailView가 그 경우 섹션을 그리지 않는다.
+  const { data: secondaryFiltering } = useFetchOnMount<SecondaryFilteringNoticeLog | null>(
+    () => {
+      if (bookmarkId == null) return null
+      return getBookmarkSecondaryFiltering(bookmarkId)
+    },
+    [bookmarkId],
+  )
 
   if (noticeId == null || Number.isNaN(noticeId)) {
     return <Navigate to={PATHS.BOOKMARKS} replace />
@@ -47,6 +61,13 @@ export function NoticeDetailPage() {
               matchReasonShort: stateNotice.matchReasonShort,
               strengths: stateNotice.strengths,
               businessPlanTitle: stateNotice.businessPlanTitle,
+            }
+          : {}),
+        ...(secondaryFiltering?.llm_judged
+          ? {
+              secondaryFilterJudged: true,
+              secondaryFilterReasons: secondaryFiltering.reasons ?? [],
+              secondaryFilterScore: secondaryFiltering.secondary_filter_score,
             }
           : {}),
       }

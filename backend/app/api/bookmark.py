@@ -4,10 +4,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.user import User
+from app.schemas.match_log import SecondaryFilteringNoticeLog
 from app.schemas.notice_bookmark import BookmarkCreateRequest, BookmarkResponse
 from app.services.bookmark_service import (
     BookmarkTargetNotFoundError,
     add_bookmark,
+    get_secondary_filtering_reasons,
     list_bookmarks,
     remove_bookmark,
 )
@@ -49,6 +51,31 @@ async def create_bookmark(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="담으려는 공고 또는 추천 결과를 찾을 수 없습니다.",
+        ) from exc
+
+
+@router.get(
+    "/{bookmark_id}/secondary-filtering",
+    response_model=SecondaryFilteringNoticeLog | None,
+    summary="북마크한 공고의 2차 필터링 판정 근거 조회",
+    description=(
+        "담을 당시 매칭 실행(match_log)에 남아있는 요건별 판정 근거를 조회한다. "
+        "브라우징으로 담았거나 원본 매칭 실행/결과가 삭제됐으면 null."
+    ),
+)
+async def get_bookmark_secondary_filtering(
+    bookmark_id: int,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    try:
+        return await get_secondary_filtering_reasons(
+            session, user=current_user, bookmark_id=bookmark_id
+        )
+    except BookmarkTargetNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="북마크를 찾을 수 없습니다.",
         ) from exc
 
 
