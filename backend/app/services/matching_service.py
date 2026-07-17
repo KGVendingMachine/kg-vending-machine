@@ -322,7 +322,9 @@ def _eligibility_score(
     target_regions = notice.eligibility.target_regions
     if not target_regions or set(target_regions) & _ALL_REGIONS:
         score += 15
-        notes.append({"sign": "+", "detail": "전국 대상 공고라 지역 요건에 걸리지 않습니다."})
+        notes.append(
+            {"sign": "+", "detail": "전국 대상 공고라 지역 요건에 걸리지 않습니다."}
+        )
     elif profile.region_name and _contains_any(profile.region_name, target_regions):
         score += 20
         notes.append(
@@ -563,7 +565,9 @@ def _score_notice(
         matched_keywords=matched_keywords,
         notice=normalized_notice,
     )
-    weakness = _weakness(cautions, item_fit_score, business_fit_score, normalized_notice)
+    weakness = _weakness(
+        cautions, item_fit_score, business_fit_score, normalized_notice
+    )
     strategy = _strategy_suggestion(normalized_notice, growth_score)
 
     # logger.info(
@@ -658,7 +662,11 @@ def _strengths(
             )
     if business_fit_score >= 65:
         signal = notice.matching.suitable_company_profile
-        reason = f" 공고가 찾는 기업상({signal})과 사업계획서 내용이 겹칩니다." if signal else ""
+        reason = (
+            f" 공고가 찾는 기업상({signal})과 사업계획서 내용이 겹칩니다."
+            if signal
+            else ""
+        )
         strengths.append(
             f"사업 정합성이 {business_fit_score:.0f}점으로 높습니다.{reason}"
         )
@@ -1268,7 +1276,9 @@ async def _run_matching_locked(
             )
             result.recommendation_run_id = log.id
             scored[scored_by_id[notice_id]] = ScoredNotice(notice=notice, result=result)
-        scored.sort(key=lambda item: item.result.total_score or Decimal("0"), reverse=True)
+        scored.sort(
+            key=lambda item: item.result.total_score or Decimal("0"), reverse=True
+        )
         logger.info(
             "최종 보정 [match_log_id=%s]: 종합점수 상위 %d위 안에 든 미판정 R&D/"
             "자금 공고 %d건 재판정 완료 (notice_id=%s)",

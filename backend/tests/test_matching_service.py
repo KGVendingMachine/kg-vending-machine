@@ -146,7 +146,9 @@ def test_score_notice_uses_lighter_growth_weight_for_rd_notices():
     # bonus는 나머지 5개와 나눠 갖는 비율이 아니라 base_total_score 위에
     # 가산되는 별도 값이라, "나머지 5개"만 합이 1.0이어야 한다.
     assert sum(v for k, v in rd_weights.items() if k != "bonus") == pytest.approx(1.0)
-    assert sum(v for k, v in default_weights.items() if k != "bonus") == pytest.approx(1.0)
+    assert sum(v for k, v in default_weights.items() if k != "bonus") == pytest.approx(
+        1.0
+    )
 
 
 def test_score_notice_applies_llm_fit_score_for_rd_and_fund_notices():
