@@ -109,6 +109,21 @@ function apiErrorDetail(error: unknown): string | null {
   return null
 }
 
+// 확인 모달의 업력 표시. 백엔드 1차 필터(_full_years)와 같은 만 나이 방식
+// (설립 기념일이 안 지났으면 1년 뺌)으로 계산해 화면과 필터 판정이 어긋나지
+// 않게 한다.
+function fullYearsSince(foundedDate: string): number {
+  const founded = new Date(foundedDate)
+  const today = new Date()
+  let years = today.getFullYear() - founded.getFullYear()
+  const beforeAnniversary =
+    today.getMonth() < founded.getMonth() ||
+    (today.getMonth() === founded.getMonth() &&
+      today.getDate() < founded.getDate())
+  if (beforeAnniversary) years -= 1
+  return Math.max(0, years)
+}
+
 // 백그라운드 탭은 브라우저가 setTimeout을 스로틀링해 폴링이 실제로는 몇 분씩
 // 밀릴 수 있다 — 탭이 다시 보이는 순간엔 대기를 끊고 바로 재확인하게 한다.
 function waitForNextPoll(ms: number): Promise<void> {
@@ -420,6 +435,17 @@ export function AnalysisProgressPage() {
     }
   }, [phase, businessPlanId])
 
+  // 확인 모달의 설립연도(업력) 행. 업력도 1차 필터 축이지만 permissive라
+  // 확인 게이트(버튼 비활성)에는 넣지 않고 표시만 한다 — 예비창업자는
+  // 설립연도가 없는 게 정상이라 게이트에 넣으면 로직이 꼬인다.
+  const isPreFounder = confirmProfile?.business_type === '예비창업자'
+  const foundedMissing = !isPreFounder && !confirmProfile?.founded_date
+  const foundedLabel = isPreFounder
+    ? '예비창업자 — 해당 없음'
+    : confirmProfile?.founded_date
+      ? `${new Date(confirmProfile.founded_date).getFullYear()}년 (업력 ${fullYearsSince(confirmProfile.founded_date)}년)`
+      : '미입력'
+
   const analyzed = phase === 'analyzed'
   const failed = phase === 'failed'
   // 분석 완료 이후(매칭 대기/실행/완료)에는 매칭 버튼과 기록 리스트를 계속
@@ -642,9 +668,23 @@ export function AnalysisProgressPage() {
                   {confirmProfile?.business_type ?? '미입력'}
                 </span>
               </div>
+              <div className="flex items-center justify-between rounded bg-surface-subtle px-4 py-3">
+                <span className="text-[13px] text-muted">설립연도 (업력)</span>
+                <span
+                  className={
+                    foundedMissing
+                      ? 'text-sm font-bold text-warning'
+                      : 'text-sm font-bold'
+                  }
+                >
+                  {foundedLabel}
+                </span>
+              </div>
             </div>
 
-            {!confirmProfile?.region_name || !confirmProfile?.business_type ? (
+            {!confirmProfile?.region_name ||
+            !confirmProfile?.business_type ||
+            foundedMissing ? (
               <div className="mt-3 text-xs leading-[1.6] text-warning">
                 사업계획서에서 찾지 못한 항목이 있어요. 정확한 매칭을 위해 기업
                 프로필에서 입력해 주세요.
