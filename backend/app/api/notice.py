@@ -28,6 +28,38 @@ from app.schemas.notice import (
 router = APIRouter(prefix="/notices", tags=["notices"])
 
 
+def _amount_label(notice) -> str | None:
+    if notice.amount_label:
+        return notice.amount_label
+    normalized = notice.normalized_json or {}
+    support = normalized.get("support") if isinstance(normalized, dict) else None
+    if not isinstance(support, dict):
+        return None
+    amount = support.get("support_amount")
+    return amount if isinstance(amount, str) and amount.strip() else None
+
+
+def _summary_text(notice) -> str | None:
+    normalized = notice.normalized_json or {}
+    support = normalized.get("support") if isinstance(normalized, dict) else None
+    if isinstance(support, dict):
+        summary = support.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            return summary
+    return notice.summary_text
+
+
+def _support_list(notice, key: str) -> list[str]:
+    normalized = notice.normalized_json or {}
+    support = normalized.get("support") if isinstance(normalized, dict) else None
+    if not isinstance(support, dict):
+        return []
+    values = support.get(key)
+    if not isinstance(values, list):
+        return []
+    return [str(value).strip() for value in values if str(value).strip()]
+
+
 @router.get(
     "",
     response_model=NoticeListResponse,
@@ -106,8 +138,10 @@ async def get_notice(
         application_end_date=notice.application_end_date,
         source_url=notice.source_url,
         apply_url=notice.apply_url,
-        summary_text=notice.summary_text,
-        amount_label=notice.amount_label,
+        summary_text=_summary_text(notice),
+        amount_label=_amount_label(notice),
+        support_types=_support_list(notice, "support_type"),
+        support_contents=_support_list(notice, "support_content"),
         regions=regions,
         target_types=target_types,
         attachments=[

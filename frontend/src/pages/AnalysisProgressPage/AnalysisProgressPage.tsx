@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { PATHS, resultsPath } from '../../routes/paths'
 import {
@@ -6,7 +6,12 @@ import {
   startBusinessPlanAnalysis,
 } from '../../api/businessPlanAnalysis'
 import type { AnalysisStatus } from '../../api/businessPlanAnalysis'
-import { createMatchLog, listMatchResults } from '../../api/matchLogs'
+import { createMatchLog, getActiveMatchLog, getMatchLog } from '../../api/matchLogs'
+import {
+  confirmMatchingProfile,
+  getMyCompanyProfile,
+  type CompanyProfile,
+} from '../../api/companyProfile'
 import { ApiError } from '../../api/client'
 import { STEP_LABELS } from '../../constants/analysisSteps'
 
@@ -41,10 +46,6 @@ const PHASE_PERCENT: Record<Phase, number> = {
   matched: 100,
   failed: 100,
 }
-
-// 매칭 스텁이 즉시 끝나 단계 전환이 안 보이므로, "공고 매칭" 단계를 최소 이
-// 시간은 노출한다. 실제 스코어링이 붙으면(폴링 전환) 제거한다.
-const MIN_MATCHING_VISIBLE_MS = 1200
 
 interface LogLine {
   text: string
@@ -108,6 +109,38 @@ function apiErrorDetail(error: unknown): string | null {
   return null
 }
 
+// 확인 모달의 업력 표시. 백엔드 1차 필터(_full_years)와 같은 만 나이 방식
+// (설립 기념일이 안 지났으면 1년 뺌)으로 계산해 화면과 필터 판정이 어긋나지
+// 않게 한다.
+function fullYearsSince(foundedDate: string): number {
+  const founded = new Date(foundedDate)
+  const today = new Date()
+  let years = today.getFullYear() - founded.getFullYear()
+  const beforeAnniversary =
+    today.getMonth() < founded.getMonth() ||
+    (today.getMonth() === founded.getMonth() &&
+      today.getDate() < founded.getDate())
+  if (beforeAnniversary) years -= 1
+  return Math.max(0, years)
+}
+
+// 백그라운드 탭은 브라우저가 setTimeout을 스로틀링해 폴링이 실제로는 몇 분씩
+// 밀릴 수 있다 — 탭이 다시 보이는 순간엔 대기를 끊고 바로 재확인하게 한다.
+function waitForNextPoll(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(finish, ms)
+    function onVisible() {
+      if (document.visibilityState === 'visible') finish()
+    }
+    function finish() {
+      clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      resolve()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+  })
+}
+
 export function AnalysisProgressPage() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -124,6 +157,27 @@ export function AnalysisProgressPage() {
   // 방금 실행으로 만들어진 매칭 로그 id. 매칭 완료 시 "결과 보기" 버튼이
   // 이 id 기준으로 결과 페이지로 보낸다.
   const [matchedLogId, setMatchedLogId] = useState<number | null>(null)
+  // 매칭 전 확인 모달. 1차 필터링의 주요 축(지역·사업자유형)이 정규화로
+  // 자동 채워진 값이라, 매칭 시작 전에 맞는지 확인받는다(#142). null이면
+  // 모달 닫힘, 값이 있으면 그 프로필을 모달에 표시 중.
+  const [confirmProfile, setConfirmProfile] = useState<CompanyProfile | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirmLoading, setConfirmLoading] = useState(false)
+
+  // handleStartMatch는 useEffect가 아니라 버튼 클릭으로 시작하는 긴 폴링
+  // 루프라, 언마운트(페이지 이탈) 후에도 setState가 계속 불리는 걸 막으려면
+  // 별도 취소 플래그가 필요하다.
+  const matchCancelledRef = useRef(false)
+  useEffect(() => {
+    // 마운트마다 false로 되돌린다 — StrictMode(dev)는 마운트 → cleanup →
+    // 재마운트로 도는데 ref는 재마운트에도 보존되므로, 리셋이 없으면 cleanup이
+    // 세운 true가 그대로 남아 이후 매칭 폴링이 첫 줄에서 조용히 빠져나가
+    // 화면이 '매칭 중'에 영구히 멈춘다.
+    matchCancelledRef.current = false
+    return () => {
+      matchCancelledRef.current = true
+    }
+  }, [])
 
   useEffect(() => {
     // 업로드를 거치지 않고 직접 들어오면 분석할 대상이 없다 → 업로드로 되돌린다.
@@ -183,6 +237,15 @@ export function AnalysisProgressPage() {
       timer = setTimeout(poll, POLL_INTERVAL_MS)
     }
 
+    // 백그라운드 탭에서 setTimeout이 스로틀링되는 동안 화면이 멈춰 보이는 걸
+    // 막는다 — 탭이 다시 보이면 예약된 타이머를 끊고 바로 재확인한다.
+    function onVisible() {
+      if (document.visibilityState !== 'visible' || cancelled || timer == null) return
+      clearTimeout(timer)
+      poll()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
     async function run() {
       try {
         if (attempt === 0) {
@@ -213,6 +276,7 @@ export function AnalysisProgressPage() {
     return () => {
       cancelled = true
       if (timer) clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [businessPlanId, navigate, attempt])
 
@@ -222,30 +286,165 @@ export function AnalysisProgressPage() {
     setAttempt((current) => current + 1)
   }
 
+  function matchFail(message: string) {
+    if (matchCancelledRef.current) return
+    // 매칭 실행 실패는 분석 실패와 달리 완료 화면으로 되돌려 다시 시도하게 한다.
+    setPhase('analyzed')
+    setMatchError(message)
+  }
+
+  // 매칭 로그가 completed/failed가 될 때까지 폴링하고 화면 국면을 갱신한다.
+  // 새 실행(handleStartMatch)과 새로고침 후 복구(아래 useEffect)가 공유한다 —
+  // logId는 방금 만든 실행이거나 서버에서 복구한 진행 중 실행이다.
+  //
+  // 매칭(OCR·정규화·임베딩·LLM 판정)은 실측 몇 분까지 걸려(2026-07-15) 서버가
+  // 즉시 processing으로 응답하고 백그라운드에서 계속 돈다 —
+  // getBusinessPlanAnalysisStatus 폴링과 같은 패턴으로 완료를 기다린다.
+  async function pollMatchLog(logId: number) {
+    const startedAt = Date.now()
+    let consecutiveErrors = 0
+    for (;;) {
+      if (matchCancelledRef.current) return
+      if (Date.now() - startedAt > MAX_POLL_DURATION_MS) {
+        matchFail('매칭이 예상보다 오래 걸리고 있어요. 다시 시도해 주세요.')
+        return
+      }
+
+      let current
+      try {
+        current = await getMatchLog(logId)
+        consecutiveErrors = 0
+      } catch {
+        if (matchCancelledRef.current) return
+        consecutiveErrors += 1
+        if (consecutiveErrors >= MAX_CONSECUTIVE_POLL_ERRORS) {
+          matchFail(
+            '진행 상황을 확인하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.',
+          )
+          return
+        }
+        await waitForNextPoll(POLL_INTERVAL_MS)
+        continue
+      }
+
+      if (matchCancelledRef.current) return
+      if (current.run_status === 'completed') break
+      if (current.run_status === 'failed') {
+        matchFail('매칭에 실패했어요. 잠시 후 다시 시도해 주세요.')
+        return
+      }
+      await waitForNextPoll(POLL_INTERVAL_MS)
+    }
+
+    if (matchCancelledRef.current) return
+    setMatchedLogId(logId)
+    setPhase('matched')
+  }
+
+  // "공고 매칭 시작하기" 클릭 진입점. 지역·사업자유형은 정규화로 자동 채워진
+  // 값이라 1차 필터링에 쓰기 전에 맞는지 확인받는다(#142). 이미 확인을 마친
+  // 프로필(matching_confirmed_at)이면 모달 없이 바로 매칭을 시작한다.
+  async function handleMatchClick() {
+    if (businessPlanId == null || phase === 'matching' || confirmLoading) return
+    setMatchError(null)
+    setConfirmLoading(true)
+    try {
+      const profile = await getMyCompanyProfile()
+      if (matchCancelledRef.current) return
+      if (
+        profile?.matching_confirmed_at &&
+        profile.region_name &&
+        profile.business_type
+      ) {
+        void handleStartMatch()
+        return
+      }
+      setConfirmProfile(profile)
+      setConfirmOpen(true)
+    } catch {
+      if (!matchCancelledRef.current)
+        setMatchError('기업 정보를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.')
+    } finally {
+      if (!matchCancelledRef.current) setConfirmLoading(false)
+    }
+  }
+
+  // 모달 "맞아요" — 확인을 기록하고 매칭을 시작한다. 확인 기록이 일시적인
+  // 오류로 실패해도 매칭은 그대로 진행한다(다음 매칭 때 모달이 한 번 더 뜰 뿐).
+  async function handleConfirmMatch() {
+    setConfirmOpen(false)
+    try {
+      await confirmMatchingProfile()
+    } catch {
+      // 기록 실패는 조용히 넘어간다 — 매칭 진행에는 영향이 없다.
+    }
+    void handleStartMatch()
+  }
+
+  // 모달 "수정할게요" — 프로필 편집으로 이동한다. 분석 페이지는 businessPlanId를
+  // router state로 받으므로, 저장/건너뛰기 후 복귀할 때 그대로 되돌려받아야
+  // 업로드 페이지로 튕기지 않는다.
+  function handleEditProfile() {
+    navigate(PATHS.COMPANY_PROFILE, {
+      state: { from: PATHS.ANALYSIS, businessPlanId },
+    })
+  }
+
   async function handleStartMatch() {
     if (businessPlanId == null || phase === 'matching') return
     setPhase('matching')
     setMatchError(null)
-    const startedAt = Date.now()
+
     try {
+      // 같은 계획서로 이미 매칭이 도는 중이면 서버가 새 잡을 만들지 않고 그
+      // 진행 중 로그를 그대로 돌려준다(멱등) — 그 id를 폴링에 이어붙인다.
       const log = await createMatchLog(businessPlanId)
       console.log('공고 매칭 로그 (match_log):', log)
-      const results = await listMatchResults(log.id)
-      console.log('공고 매칭 결과 (match_results):', results)
-      const remain = MIN_MATCHING_VISIBLE_MS - (Date.now() - startedAt)
-      if (remain > 0) {
-        await new Promise((resolve) => setTimeout(resolve, remain))
-      }
-      setMatchedLogId(log.id)
-      setPhase('matched')
+      await pollMatchLog(log.id)
     } catch (err) {
-      // 매칭 실행 실패는 분석 실패와 달리 완료 화면으로 되돌려 다시 시도하게 한다.
-      setPhase('analyzed')
-      setMatchError(
+      matchFail(
         apiErrorDetail(err) ?? '매칭을 시작하지 못했어요. 잠시 후 다시 시도해 주세요.',
       )
     }
   }
+
+  // 새로고침·재접속으로 화면 state가 초기화되면 분석 완료(analyzed) 시점으로
+  // 되돌아온다. 그때 서버에 이 계획서로 진행 중인 매칭이 있으면(백엔드가 유저당
+  // 1건으로 제한) 그 로그를 폴링에 이어붙여 '매칭 중' 화면으로 복구한다 — 새
+  // 잡을 만들지 않으므로 임베딩·LLM 호출이 중복 실행되지 않는다.
+  useEffect(() => {
+    if (phase !== 'analyzed' || businessPlanId == null) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const active = await getActiveMatchLog(businessPlanId)
+        // cancelled: StrictMode 이중 실행/이탈 가드. 첫 실행의 cleanup이
+        // 세운 cancelled를 보고 빠져, 폴링 루프가 두 개 뜨지 않게 한다.
+        if (cancelled || matchCancelledRef.current || active == null) return
+        if (active.run_status === 'processing') {
+          setPhase('matching')
+          void pollMatchLog(active.id)
+        }
+      } catch {
+        // 복구용 조회 실패는 조용히 무시한다 — 사용자가 버튼으로 직접 매칭을
+        // 시작하면 되고, 복구는 어디까지나 편의 기능이다.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [phase, businessPlanId])
+
+  // 확인 모달의 설립연도(업력) 행. 업력도 1차 필터 축이지만 permissive라
+  // 확인 게이트(버튼 비활성)에는 넣지 않고 표시만 한다 — 예비창업자는
+  // 설립연도가 없는 게 정상이라 게이트에 넣으면 로직이 꼬인다.
+  const isPreFounder = confirmProfile?.business_type === '예비창업자'
+  const foundedMissing = !isPreFounder && !confirmProfile?.founded_date
+  const foundedLabel = isPreFounder
+    ? '예비창업자 — 해당 없음'
+    : confirmProfile?.founded_date
+      ? `${new Date(confirmProfile.founded_date).getFullYear()}년 (업력 ${fullYearsSince(confirmProfile.founded_date)}년)`
+      : '미입력'
 
   const analyzed = phase === 'analyzed'
   const failed = phase === 'failed'
@@ -384,14 +583,16 @@ export function AnalysisProgressPage() {
                   ? 'h-12 cursor-pointer rounded border border-border-strong bg-white px-7 text-[15px] font-semibold text-muted'
                   : 'mt-7 h-12 cursor-pointer rounded bg-primary px-7 text-[15px] font-bold text-white'
               }
-              onClick={handleStartMatch}
-              disabled={phase === 'matching'}
+              onClick={handleMatchClick}
+              disabled={phase === 'matching' || confirmLoading}
             >
               {phase === 'matching'
                 ? '공고 매칭 중…'
-                : phase === 'matched'
-                  ? '다시 매칭하기'
-                  : '공고 매칭 시작하기 →'}
+                : confirmLoading
+                  ? '기업 정보 확인 중…'
+                  : phase === 'matched'
+                    ? '다시 매칭하기'
+                    : '공고 매칭 시작하기 →'}
             </button>
 
             {phase === 'matched' && matchedLogId != null ? (
@@ -424,6 +625,94 @@ export function AnalysisProgressPage() {
           </div>
         ) : null}
       </div>
+
+      {confirmOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+          onClick={() => setConfirmOpen(false)}
+        >
+          <div
+            className="w-[440px] max-w-full rounded-lg bg-white p-8 shadow-[0_8px_30px_rgba(20,30,50,0.2)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="text-lg font-extrabold tracking-[-0.4px]">
+              이 정보로 공고를 찾을게요
+            </div>
+            <div className="mt-1.5 text-[13px] leading-normal text-muted">
+              사업계획서에서 자동으로 채운 기업 정보예요. 1차 공고 선별의 기준이
+              되니 맞는지 확인해 주세요.
+            </div>
+
+            <div className="mt-5 flex flex-col gap-2.5">
+              <div className="flex items-center justify-between rounded bg-surface-subtle px-4 py-3">
+                <span className="text-[13px] text-muted">사업장 지역</span>
+                <span
+                  className={
+                    confirmProfile?.region_name
+                      ? 'text-sm font-bold'
+                      : 'text-sm font-bold text-warning'
+                  }
+                >
+                  {confirmProfile?.region_name ?? '미입력'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between rounded bg-surface-subtle px-4 py-3">
+                <span className="text-[13px] text-muted">사업자 유형</span>
+                <span
+                  className={
+                    confirmProfile?.business_type
+                      ? 'text-sm font-bold'
+                      : 'text-sm font-bold text-warning'
+                  }
+                >
+                  {confirmProfile?.business_type ?? '미입력'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between rounded bg-surface-subtle px-4 py-3">
+                <span className="text-[13px] text-muted">설립연도 (업력)</span>
+                <span
+                  className={
+                    foundedMissing
+                      ? 'text-sm font-bold text-warning'
+                      : 'text-sm font-bold'
+                  }
+                >
+                  {foundedLabel}
+                </span>
+              </div>
+            </div>
+
+            {!confirmProfile?.region_name ||
+            !confirmProfile?.business_type ||
+            foundedMissing ? (
+              <div className="mt-3 text-xs leading-[1.6] text-warning">
+                사업계획서에서 찾지 못한 항목이 있어요. 정확한 매칭을 위해 기업
+                프로필에서 입력해 주세요.
+              </div>
+            ) : null}
+
+            <div className="mt-6 flex justify-end gap-2.5">
+              <button
+                type="button"
+                className="h-11 cursor-pointer rounded border border-border-strong bg-white px-5 text-sm font-semibold text-muted"
+                onClick={handleEditProfile}
+              >
+                아니에요, 수정할게요
+              </button>
+              <button
+                type="button"
+                className="h-11 cursor-pointer rounded bg-primary px-6 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={handleConfirmMatch}
+                disabled={
+                  !confirmProfile?.region_name || !confirmProfile?.business_type
+                }
+              >
+                네, 맞아요 — 매칭 시작
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

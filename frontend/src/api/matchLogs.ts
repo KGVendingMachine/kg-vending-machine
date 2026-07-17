@@ -42,6 +42,29 @@ export function getMatchLog(matchLogId: number): Promise<MatchLog> {
   return apiFetch<MatchLog>(`/api/match-logs/${matchLogId}`)
 }
 
+/**
+ * 진행 중 매칭 복구용 최소 응답(backend/app/schemas/match_log.py
+ * ActiveMatchLogResponse). 폴링을 이어붙이는 데 필요한 id·run_status만 담는다.
+ */
+export interface ActiveMatchLog {
+  id: number
+  run_status: JobStatus
+}
+
+/**
+ * 이 사업계획서로 지금 진행 중(processing)인 매칭 로그를 조회한다. 없으면 null.
+ * 새로고침·재접속으로 화면 state가 초기화돼도 진행 중이던 매칭 폴링을 이어붙여
+ * 복구하는 데 쓴다(서버는 유저당 진행 중 매칭을 1건으로 제한하며, 다른 계획서가
+ * 도는 중이면 이 계획서 기준으로는 null을 준다).
+ */
+export function getActiveMatchLog(
+  businessPlanId: number,
+): Promise<ActiveMatchLog | null> {
+  return apiFetch<ActiveMatchLog | null>(
+    `/api/match-logs/active?business_plan_id=${businessPlanId}`,
+  )
+}
+
 /** backend/app/schemas/match_log.py MatchLogDeleteResponse */
 export interface MatchLogDeleteResponse {
   match_log_id: number
@@ -73,7 +96,11 @@ export interface MatchResultJson {
     growth: number
     bonus: number
     secondary_filter: number
+    /** R&D/자금 공고는 성장성 비중을 낮추고 아이템 적합도·2차필터링에 더
+     * 싣는 등 가중치가 다르다 — 실제로 쓰인 값(0~1)을 그대로 담는다. */
+    weights?: Partial<Record<string, number>>
   }
+  score_sources?: Partial<Record<string, string>>
   /** 2차 필터링 근거(임베딩 유사도)가 실제로 있었는지. false면 secondary_filter는
    * 중립값(50)으로 채워진 것 — 공고에 첨부파일이 없거나 임베딩이 실패한 경우. */
   secondary_filter_available: boolean
@@ -117,8 +144,9 @@ export interface SecondaryFilteringReasonLog {
   /** "충족" / "미충족" / "정보부족" 중 하나. */
   status: string
   evidence: string | null
+  group?: string | null
   /** true면 제외요건("~에 해당하지 않음"으로 재구성된 문장) 판정이다. */
-  is_exclusion: boolean
+  is_exclusion?: boolean
 }
 
 /** 2차 필터링에서 공고 하나가 어떻게 처리됐는지 (GET .../secondary-filtering의 notices[]). */

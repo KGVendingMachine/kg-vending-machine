@@ -9,27 +9,26 @@ import { formatDeadline } from '../utils/date'
 
 export type ScoreLevel = 'high' | 'medium' | 'low'
 
-/** matching_service가 산출하는 6개 점수 구성 요소 (합산 가중치: 25/20/20/10/5/20%).
- * secondary_filter는 2차 필터링(공고 PDF·사업계획서 원문 임베딩 유사도) 점수 —
- * 근거가 없으면(첨부파일 없음 등) 중립값 50으로 채워진다(toScoreBreakdown 참고). */
+/** matching_service가 산출하는 화면용 점수 구성 요소.
+ * AI 판정근거(공고 원문)는 총점 가중치가 아니라 별도 근거로 표시한다. */
 export interface ScoreBreakdownItem {
-  key: 'eligibility' | 'item_fit' | 'business_fit' | 'growth' | 'bonus' | 'secondary_filter'
+  key: 'eligibility' | 'item_fit' | 'business_fit' | 'growth' | 'bonus'
   label: string
   weightLabel: string
   score: number
   max: number
+  source?: string | null
 }
 
 const SCORE_BREAKDOWN_META: Record<
   ScoreBreakdownItem['key'],
   { label: string; weightLabel: string }
 > = {
-  eligibility: { label: '자격 적합도', weightLabel: '가중 25%' },
-  item_fit: { label: '아이템 적합도', weightLabel: '가중 20%' },
-  business_fit: { label: '사업 정합성', weightLabel: '가중 20%' },
-  growth: { label: '성장성', weightLabel: '가중 10%' },
-  bonus: { label: '가점 요소', weightLabel: '가중 5%' },
-  secondary_filter: { label: '공고 원문 유사도', weightLabel: '가중 20%' },
+  eligibility: { label: '자격 적합도', weightLabel: '가중 30%' },
+  item_fit: { label: '아이템 적합도', weightLabel: '가중 25%' },
+  business_fit: { label: '사업 정합성', weightLabel: '가중 25%' },
+  growth: { label: '성장성', weightLabel: '가중 20%' },
+  bonus: { label: '가점 요소', weightLabel: '추가 +3점' },
 }
 
 /**
@@ -50,6 +49,8 @@ export interface MatchedNotice {
   sourceUrl: string | null
   applyUrl: string | null
   summary: string | null
+  supportTypes: string[]
+  supportContents: string[]
   score: number | null
   scoreLevel: ScoreLevel | null
   /** 추천 이유 중 첫 문장 (카드 목록에서 짧게 보여줄 때) */
@@ -71,6 +72,7 @@ export interface MatchedNotice {
   secondaryFilterExcluded: boolean
   /** secondaryFilterJudged가 true일 때만 값이 있다 — 요건 문장별 판정 근거. */
   secondaryFilterReasons: SecondaryFilteringReasonLog[]
+  secondaryFilterScore: number | null
   /** 별표 토글 시 담을 대상 match_result id. 매칭 컨텍스트가 없으면(북마크 목록) null. */
   matchResultId: number | null
   /** 담겨 있으면 그 북마크 id(해제 시 사용), 아니면 null. */
@@ -112,10 +114,7 @@ function toScoreLevel(recommendationLevel: string | null): ScoreLevel | null {
   }
 }
 
-function toScoreBreakdown(
-  result: MatchResult | undefined,
-  judged: boolean,
-): ScoreBreakdownItem[] | null {
+function toScoreBreakdown(result: MatchResult | undefined): ScoreBreakdownItem[] | null {
   if (!result) return null
   const scores: Record<ScoreBreakdownItem['key'], number | null> = {
     eligibility: result.eligibility_score,
@@ -125,21 +124,45 @@ function toScoreBreakdown(
     bonus: result.bonus_score,
     // secondary_filter는 top-level 컬럼이 없어 result_json에서만 읽는다
     // (api/matchLogs.ts의 MatchResultJson 주석 참고).
-    secondary_filter: result.result_json?.score_breakdown.secondary_filter ?? null,
   }
-  return (Object.keys(SCORE_BREAKDOWN_META) as ScoreBreakdownItem['key'][]).map((key) => ({
-    key,
-    ...SCORE_BREAKDOWN_META[key],
-    // secondary_filter만 유사도 검색 상위 후보로 뽑혀 LLM이 실제 판정한
-    // 경우와 임베딩 유사도만 쓴 경우를 라벨로 구분한다 — 나머지 항목은 항상
-    // 규칙 기반 점수라 고정 라벨을 그대로 쓴다.
-    label:
-      key === 'secondary_filter' && judged
-        ? 'AI 정밀 판정(공고 원문)'
-        : SCORE_BREAKDOWN_META[key].label,
-    score: scores[key] ?? 0,
-    max: 100,
-  }))
+  const sources = result.result_json?.score_sources ?? {}
+  // score_breakdown.weights는 backend weights 딕셔너리 키(secondary)를 쓰는데
+  // 화면 쪽 키는 secondary_filter라 여기서만 매핑한다.
+  const weights = result.result_json?.score_breakdown.weights ?? {}
+  const weightKeyByBreakdownKey: Record<ScoreBreakdownItem['key'], string> = {
+    eligibility: 'eligibility',
+    item_fit: 'item_fit',
+    business_fit: 'business_fit',
+    growth: 'growth',
+    bonus: 'bonus',
+  }
+  return (Object.keys(SCORE_BREAKDOWN_META) as ScoreBreakdownItem['key'][]).map((key) => {
+    const weight = weights[weightKeyByBreakdownKey[key]]
+    return {
+      key,
+      ...SCORE_BREAKDOWN_META[key],
+      // R&D/자금 공고는 실제로 쓰인 가중치가 기본값과 달라(성장성↓, 아이템
+      // 적합도·2차필터링↑) 있으면 그 값을, 없으면 고정 라벨을 보여준다.
+      weightLabel:
+        key === 'bonus'
+          ? SCORE_BREAKDOWN_META[key].weightLabel
+          : weight != null
+            ? `가중 ${Math.round(weight * 100)}%`
+            : SCORE_BREAKDOWN_META[key].weightLabel,
+      // secondary_filter만 유사도 검색 상위 후보로 뽑혀 LLM이 실제 판정한
+      // 경우와 임베딩 유사도만 쓴 경우를 라벨로 구분한다 — 나머지 항목은 항상
+      // 규칙 기반 점수라 고정 라벨을 그대로 쓴다.
+      label:
+        sources[key] === 'llm' && (key === 'business_fit' || key === 'growth')
+          ? `${SCORE_BREAKDOWN_META[key].label} (LLM 평가기준)`
+          : sources[key] === 'llm' && key === 'bonus'
+            ? `${SCORE_BREAKDOWN_META[key].label} (LLM 우대조건)`
+            : SCORE_BREAKDOWN_META[key].label,
+      source: sources[key] ?? null,
+      score: scores[key] ?? 0,
+      max: 100,
+    }
+  })
 }
 
 export function toMatchedNotice(
@@ -163,18 +186,21 @@ export function toMatchedNotice(
     sourceUrl: notice.source_url,
     applyUrl: notice.apply_url,
     summary: notice.summary_text,
+    supportTypes: notice.support_types,
+    supportContents: notice.support_contents,
     score: result?.total_score ?? null,
     scoreLevel: toScoreLevel(result?.recommendation_level ?? null),
     matchReasonShort: strengths[0] ?? null,
     strengths,
     weaknesses: splitSentences(result?.weakness ?? null),
     cautions: result?.result_json?.cautions ?? [],
-    scoreBreakdown: toScoreBreakdown(result, judged),
+    scoreBreakdown: toScoreBreakdown(result),
     eligibilityStatus: result?.eligibility_status ?? null,
     strategySuggestion: result?.strategy_suggestion ?? null,
     secondaryFilterJudged: judged,
-    secondaryFilterExcluded: secondaryFiltering?.excluded ?? false,
+    secondaryFilterExcluded: false,
     secondaryFilterReasons: judged ? (secondaryFiltering?.reasons ?? []) : [],
+    secondaryFilterScore: secondaryFiltering?.secondary_filter_score ?? null,
     matchResultId: result?.id ?? null,
     bookmarkId: result?.bookmark_id ?? null,
     status: notice.status,
@@ -207,6 +233,8 @@ export function bookmarkToMatchedNotice(bookmark: Bookmark): MatchedNotice {
     sourceUrl: notice.source_url,
     applyUrl: notice.apply_url,
     summary: null,
+    supportTypes: [],
+    supportContents: [],
     score: recommendation?.total_score ?? null,
     scoreLevel: toScoreLevel(recommendation?.recommendation_level ?? null),
     matchReasonShort: strengths[0] ?? null,
@@ -219,6 +247,7 @@ export function bookmarkToMatchedNotice(bookmark: Bookmark): MatchedNotice {
     secondaryFilterJudged: false,
     secondaryFilterExcluded: false,
     secondaryFilterReasons: [],
+    secondaryFilterScore: null,
     matchResultId: null,
     bookmarkId: bookmark.id,
     status: notice.status,

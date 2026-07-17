@@ -1,7 +1,17 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Identity, Numeric, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Identity,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -72,6 +82,53 @@ class MatchResult(Base):
         DateTime, server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+
+class SecondaryFilteringJudgment(Base):
+    """2차 필터링 LLM 판정 결과 캐시(2026-07-16, RAG 성능 개선 검토로 추가).
+
+    같은 (사업계획서, 공고) 조합이면 임베딩처럼 판정도 재사용해 LLM 호출을
+    줄인다. 다만 판정은 회사 프로필 값(_company_profile_text가 참조하는
+    필드들)에도 의존해서 임베딩처럼 무조건 영구 캐싱하면 안 된다 —
+    profile_fingerprint(그 필드들의 해시)를 키에 포함해, 사용자가 프로필을
+    바꾸면 자동으로 캐시 미스가 나게 한다. 공고 재수집으로 normalized_json이
+    바뀌는 경우까지는 무효화하지 않는다(드문 경우라 이번 범위에서는 TBD로
+    남김 — secondary_filtering_judge_service 참고).
+    """
+
+    __tablename__ = "secondary_filtering_judgment"
+    __table_args__ = (
+        UniqueConstraint(
+            "business_plan_id",
+            "notice_id",
+            "profile_fingerprint",
+            name="uq_secondary_filtering_judgment_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
+    business_plan_id: Mapped[int] = mapped_column(
+        ForeignKey("business_plan.id", ondelete="CASCADE"), nullable=False
+    )
+    notice_id: Mapped[int] = mapped_column(
+        ForeignKey("notice.id", ondelete="CASCADE"), nullable=False
+    )
+    profile_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    """_company_profile_text가 참조하는 프로필 필드들의 해시(SHA256 앞 16자).
+    프로필이 바뀌면 값이 달라져 캐시 미스가 난다."""
+    score: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    excluded: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    fit_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    """criteria_fit(평가기준) 그룹 판정 평균*100. 판정 대상 없으면 NULL(R&D 전용)."""
+    bonus_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    """bonus_fit(우대조건) 그룹 판정 평균*100. 의미는 fit_score와 동일."""
+    item_fit_score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
+    """item_fit(아이템 적합도) 그룹 판정 평균*100. 의미는 fit_score와 동일."""
+    judgments: Mapped[list] = mapped_column(JSONB, nullable=False)
+    """CriterionJudgment 목록(criterion/status/evidence/group)."""
+    judged_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
 

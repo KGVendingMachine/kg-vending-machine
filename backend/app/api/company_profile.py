@@ -13,7 +13,10 @@ from app.models.company import CompanyProfile
 from app.models.user import User
 from app.schemas.company import CompanyProfileResponse, CompanyProfileUpdate
 from app.services import company_service
-from app.services.company_service import CompanyProfileInconsistentError
+from app.services.company_service import (
+    CompanyProfileInconsistentError,
+    MatchingConfirmationIncompleteError,
+)
 
 router = APIRouter(prefix="/company-profile", tags=["company-profile"])
 
@@ -51,6 +54,31 @@ async def save_my_company_profile(
     try:
         return await company_service.save_my_profile(session, current_user.id, fields)
     except CompanyProfileInconsistentError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+
+@router.post(
+    "/me/matching-confirmation",
+    response_model=CompanyProfileResponse,
+    summary="매칭 전 프로필 확인 기록",
+    responses={
+        400: {"description": "지역·사업자유형이 비어 있어 확인할 수 없음"},
+        401: {"description": "인증되지 않음"},
+    },
+)
+async def confirm_my_matching_profile(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> CompanyProfile:
+    """매칭 전 확인 모달에서 지역·기업형태가 맞다고 확인했음을 기록한다.
+
+    이후 매칭 시작 시 확인 모달을 건너뛴다(matching_confirmed_at 기준).
+    """
+    try:
+        return await company_service.confirm_matching_profile(session, current_user.id)
+    except MatchingConfirmationIncompleteError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc

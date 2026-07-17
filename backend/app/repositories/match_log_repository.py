@@ -8,7 +8,7 @@ business_plan.title을 함께 돌려준다.
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import and_, delete, null, select
+from sqlalchemy import and_, delete, null, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.business_plan import BusinessPlan
@@ -43,6 +43,36 @@ async def create(
     session.add(log)
     await session.flush()
     return log
+
+
+async def mark_stale_processing_as_failed(session: AsyncSession) -> int:
+    """서버 기동 시 호출 — 이전 프로세스가 죽으면서(재배포·dev --reload 재시작 등)
+    completed_at도 못 남기고 processing에 멈춰버린 매칭을 failed로 정리한다.
+    새 프로세스는 이전 백그라운드 태스크를 이어받을 방법이 없어 항상 실패 처리다."""
+    result = await session.execute(
+        update(MatchLog)
+        .where(MatchLog.run_status == "processing")
+        .values(run_status="failed")
+    )
+    return result.rowcount or 0
+
+
+async def get_processing_by_user(
+    session: AsyncSession, user_id: int
+) -> MatchLog | None:
+    """유저가 이미 돌리고 있는(processing) 매칭 로그가 있으면 가장 최근 것을 반환한다.
+
+    같은 유저가 짧은 간격으로 여러 매칭을 동시에 트리거하면 프로세스 전체가
+    공유하는 세마포어·OpenAI 호출 한도를 두 배로 잡아먹어 하나가 비정상적으로
+    오래 걸리는 걸 실측(2026-07-16, match_log_id=180이 겹친 요청 때문에 14분
+    넘게 걸림) — 새로 만드는 대신 기존 걸 그대로 돌려줘 중복 실행을 막는다."""
+    result = await session.execute(
+        select(MatchLog)
+        .where(MatchLog.user_id == user_id, MatchLog.run_status == "processing")
+        .order_by(MatchLog.created_at.desc())
+        .limit(1)
+    )
+    return result.scalars().first()
 
 
 async def list_by_user(
