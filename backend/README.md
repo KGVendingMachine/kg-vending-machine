@@ -8,7 +8,6 @@
 
 ## 배포 링크
 
-- 백엔드: http://3.139.214.23:8000/docs
 - 프론트엔드: https://kg-vending-machine.vercel.app/
 
 ## 최초 세팅
