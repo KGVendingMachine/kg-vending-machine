@@ -1,0 +1,32 @@
+from datetime import datetime
+
+from sqlalchemy import DateTime, Identity, String, UniqueConstraint, func
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db.base import Base
+
+
+class User(Base):
+    __tablename__ = "user"
+    __table_args__ = (UniqueConstraint("kakao_id", name="uq_user_kakao_id"),)
+
+    id: Mapped[int] = mapped_column(Identity(always=True), primary_key=True)
+    kakao_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    """카카오 식별자 (카카오 회원번호, 한 계정당 유일)"""
+    email: Mapped[str | None] = mapped_column(String(255))
+    name: Mapped[str | None] = mapped_column(String(100))
+    nickname: Mapped[str | None] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(
+        String(20), server_default="ACTIVE", nullable=False
+    )
+    """ACTIVE/WITHDRAWN/BLOCKED"""
+    role: Mapped[str] = mapped_column(String(20), server_default="USER", nullable=False)
+    """USER/ADMIN"""
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime)
+    """최종로그인일시"""
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )

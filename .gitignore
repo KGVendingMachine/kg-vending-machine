@@ -147,6 +147,10 @@ activemq-data/
 # SageMath parsed files
 *.sage.py
 
+# 개인 로컬 개발용 Docker 설정 - 팀 공용 docker-compose.yml(추후 별도 작업
+# 예정, architecture.md 참고) 이름은 그대로 비워두고, 개인용만 별도 이름으로 무시한다.
+docker-compose.local.yml
+
 # Environments
 .env
 .envrc
@@ -156,6 +160,12 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# SSH / AWS key material — never commit
+*.pem
+*.ppk
+id_rsa*
+id_ed25519*
 
 # Spyder project settings
 .spyderproject
@@ -199,7 +209,7 @@ cython_debug/
 #   that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
 #   and can be added to the global gitignore or merged into this file. However, if you prefer, 
 #   you could uncomment the following to ignore the entire vscode folder
-# .vscode/
+.vscode/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
@@ -216,3 +226,20 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+xuswns
+xuswns/*
+
+# 로컬 테스트용 샘플 문서 (실제 공고 첨부파일 등, 저장소에 올리지 않음)
+backend/data/
+*.pem
+
+# 업로드된 사업계획서 파일 (로컬 디스크 저장, 저장소에 올리지 않음)
+backend/storage/
+
+#ide
+.idea

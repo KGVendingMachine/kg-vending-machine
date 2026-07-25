@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kg_vending
+          POSTGRES_PASSWORD: "1234"
+          POSTGRES_DB: kg_vending
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kg_vending -d kg_vending"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_USER: kg_vending
+      POSTGRES_PASSWORD: "1234"
+      POSTGRES_DB: kg_vending
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - run: uv sync --frozen
+
+      - run: uv run ruff check .
+
+      - run: uv run black --check .
+
+      - run: uv run alembic upgrade head
+
+      # 테스트가 `app.*`를 절대 임포트로 참조하므로 bare `pytest`가 아니라 `python -m pytest`로 실행해야
+      # 현재 디렉토리(backend/)가 sys.path에 잡혀서 `app` 패키지를 찾는다.
+      - run: uv run python -m pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run build

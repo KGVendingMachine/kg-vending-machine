@@ -1,0 +1,159 @@
+# 공고 매칭 파이프라인 (설계 초안)
+
+사업계획서를 업로드한 뒤 정부지원사업 공고와 매칭시키는 전체 흐름을 정리한다. 1~5단계는 최초 설계 초안이고, 실제 구현은 "구현 현황" 절을 따른다. 남은 미정 항목은 "TBD"로 표시했다.
+
+## 전체 흐름 요약
+
+```
+회원가입(카카오 OAuth2)
+  → 기업 프로필 입력 (선택)
+  → 사업계획서 업로드 (OCR)
+  → 공고 매칭 요청
+      → 1차 필터링 (공고 원본 JSON 기준 유사도 분석)
+      → 2차 필터링 (공고 PDF OCR → 벡터 DB → 유사도 검색)
+      → AI 매칭 스코어링 (LLM에 정규화된 JSON을 던져 적합도 산출)
+  → 결과 반환
+```
+
+프론트에는 [분석 진행 상태 화면](../frontend/src/pages/AnalysisProgressPage)의 "매칭 스코어링" 한 단계로만 보이지만, 백엔드 내부에서는 아래처럼 여러 단계로 나뉜다. **각 단계의 중간 산출물(후보 수, 필터링 사유, 유사도 점수 등)은 프론트에 노출되지 않더라도 반드시 로그로 남긴다** — 결과 정확도를 튜닝하려면 어느 단계에서 좋은 공고가 걸러졌는지 추적할 수 있어야 하기 때문이다.
+
+## 구현 현황 (2026-07-15 갱신)
+
+진입점은 여전히 `POST /match-logs` 하나뿐이고(`app/api/match_log.py`의
+`create_match_log` → `app/services/matching_service.py`의 `run_matching()`
+호출) 아래 단계들이 그 안에서 순차 실행된다. 2026-07-15 팀 합의로 1차
+필터링과 2차 필터링의 담당·경계가 아래처럼 명확해졌다(과거 절과 달리 각각
+별도 서비스/엔드포인트로 존재한다).
+
+- **1차 필터링 — 자격요건 하드필터** (`notice_eligibility_service.get_eligible_notices()`,
+  `GET /api/eligible-notices/me`, 설계는 [`first-filtering.md`](./first-filtering.md)) —
+  공고 API 원본 데이터(정규화 컬럼, PDF 미열람)만으로 지역·대상(기업형태
+  게이트)·업력·신청기간 4축을 검사해 명시적으로 탈락시킨다(permissive 원칙 —
+  제한 정보가 없으면 통과). `run_matching()`은 이 결과의 `notice_ids`로
+  `match_log_repository.list_normalized_notice_candidates()`를 좁혀서 호출한다.
+- **품질 필터링** (`_quality_errors`) — 1차를 통과한 후보 중 정규화 JSON에
+  제목·지원요약·지원유형·매칭키워드 등 필수 필드가 비어 있으면 건너뛴다.
+- **2차 필터링 — RAG 유사도 검색 + LLM Judge** (`secondary_filtering_service.run_secondary_filtering()`
+  + `secondary_filtering_judge_service`, 설계는
+  [`secondary-filtering-llm-judge-guide.md`](./secondary-filtering-llm-judge-guide.md)) —
+  품질 필터까지 통과한 후보에 한해 공고 PDF 청크를 Chroma에 임베딩하고
+  사업계획서 임베딩과 유사도 검색, 상위 K건만 LLM이 요건 문장 단위로
+  충족/미충족/정보부족을 판정해 가중 집계한다.
+- **소프트 자격요건 점수** (`_eligibility_score`) — 1차 하드필터를 통과한
+  후보에 한해 지역/기업규모/업력단계로 감점형 점수를 매겨 `total_score`에
+  반영한다(하드필터가 안 보는 `기업규모` 축까지 포함 — 하드필터와 역할이
+  겹치지 않는 보완 관계).
+- 위 결과를 `total_score` 내림차순 정렬 후 상위 `max_results`건만 반환한다.
+
+아래 1~5단계 설계 초안은 위 구현과 세부 명칭·순서가 다를 수 있다(예: 원래
+3단계로 계획했던 "원본 JSON 유사도 기반 1차 필터링"은 실제로는 하드필터
+방식으로 구현됐다) — 세부는 위 구현 현황과 각 링크된 문서를 우선한다.
+
+## 1단계 — 회원가입 · 프로필 입력
+
+- 카카오 OAuth2로 로그인/회원가입을 겸한다 (최초 로그인 시 자동 가입).
+- 기업 프로필 입력창은 **선택 사항**이다. 사용자가 비워두면:
+  - 이미 업로드된 사업계획서가 있다면 그 문서에서 정보를 추론해 채운다.
+  - 없다면 이후 사업계획서 업로드 시점에 추출된 값으로 보완한다.
+- 참고: 서식별 항목 매핑은 [`business-plan-normalization.md`](./business-plan-normalization.md) 참고.
+
+## 2단계 — 사업계획서 업로드 (OCR)
+
+- PDF/HWP/HWPX/이미지를 받아 OCR·텍스트 추출을 수행한다 (`app/ocr/extract.py` 담당 영역, DOCX/PPTX는 지원 대상에서 제외).
+- 추출 결과는 정규화 스키마(PSST 공통 핵심 요소)로 변환된다.
+
+## 3단계 — 1차 필터링 (원본 JSON 기준)
+
+- 대상: 수집된 전체 공고(notice) + 공고별 원본 API 응답 JSON(기업마당/K-Startup 등).
+- 방식: 공고 PDF를 열어보기 전, **구조화된 필드만으로** 유사도/적합성을 계산해 후보군을 빠르게 좁힌다.
+- 목적: 전체 공고를 다 OCR·벡터화하면 비용이 크므로, 명백히 무관한 공고를 먼저 제거한다.
+- **TBD — 어떤 필드를 기준으로 필터링할지 확정 필요.** 후보:
+  - 분야/업종 일치 여부 (`notice.category_id` 기준 — 2026-07-10 수집 파이프라인에 매핑 연결 완료. 매핑 전에 저장됐던 기존 공고도 `POST /internal/notices/backfill-category`로 백필함. 단, 자금 외 카테고리로 수집된 예전 K-Startup 데이터 일부(88건)는 애초에 category_mapping에 없는 원본 카테고리라 NULL로 남음 — 정상)
+  - 지역 요건
+  - 마감일(이미 지난 공고 제외)
+  - 공고 제목/요약 텍스트와 사업계획서 요약 간 임베딩 유사도(경량 모델)
+  - ~~지원대상 기업규모(소기업/중기업/중견기업)~~ → 4단계로 이동 (근거는 아래 참고)
+- 산출물: 2차 필터링 대상이 될 공고 ID 목록 (N건 → M건으로 축소).
+- (2026-07-07 실측 확인) 기업규모는 1차 필터링에서 제외함: 기업마당/K-Startup API 모두
+  "중소기업"/"일반기업" 같은 뭉뚱그린 태그만 제공하고 소/중/중견을 구분하는 필드가 없다.
+  실제 신청자격 상세(예: 신용평가등급 B 이상 등)는 첨부파일 안에만 있어 구조화 필드로는
+  정확히 판단할 수 없다 — 잘못 거르면 자격 되는 공고를 오탈락시킬 위험이 있어, 1차에서
+  거르는 대신 4단계(2차 필터링)에서 첨부파일 원문을 읽고 정확히 확인하는 것으로 옮긴다.
+
+## 4단계 — 2차 필터링 (공고 PDF → 벡터 DB → 유사도 검색)
+
+1차로 좁혀진 공고에 한해서만 원문 PDF/HWP를 열어 정밀 분석하고, 여기서 기업규모 등
+1차에서 판단 못한 정확한 신청자격도 함께 확인한다.
+
+```
+공고 첨부파일 가져오기 (기업마당/K-Startup)
+  → OCR·텍스트 추출 (app/ocr/extract.py)
+  → 벡터 DB에 임베딩 적재
+  → 사업계획서 임베딩과 유사도 검색
+  → 상위 K건 확정 (2차 필터링 결과)
+```
+
+- **첨부파일 가져오는 방법(2026-07-09 갱신, `app/crawler`·`app/ocr` 담당 영역)**:
+  - 기업마당: raw API 응답(`fileNm`/`flpthNm`, `printFileNm`/`printFlpthNm`)에 다운로드 URL이
+    이미 있어, **수집 시점(`notice_collection_service._process_bizinfo_item`)에 매번**
+    `notice_attachment`에 채운다 (`app/repositories/notice_repository.py` `save_attachment`).
+    첨부파일이 여러 개면 두 필드가 각각 `"@"`로 이어붙어 오므로 이름/URL을 순서대로
+    짝지어 분리해야 한다(합쳐서 저장하면 다운로드 불가능한 URL이 됨).
+  - K-Startup: 목록 API 응답에는 첨부파일 정보가 없음(전체 29,353건 확인). 상세페이지
+    (`bizpbanc-ongoing.do`) HTML에 서버 렌더링된 `/afile/fileDownload/{코드}` 링크가 있어,
+    `app/crawler/kstartup_attachment_client.py`의 `fetch_kstartup_attachments(pbanc_sn)`으로
+    단건 조회한다. 기업마당과 달리 이 조회 자체가 상세페이지를 여는 크롤링이라(공짜로
+    딸려오는 데이터가 아님), **수집 시점이 아니라 1차 필터링을 통과해 매칭 후보로
+    좁혀진 공고에 대해서만 2차 필터링 단계에서 호출한다**
+    (`notice_collection_service._save_kstartup_attachments`에 함수는 준비돼 있으나
+    수집 파이프라인에서는 호출하지 않음, 2026-07-09 결정 — 한때 수집 시점마다
+    호출하도록 바꿨다가, 자금 카테고리로 좁혀도 여전히 수백~수천 건이라 원래
+    설계(후보만 크롤링)로 되돌림).
+  - 텍스트 추출(OCR)은 여전히 1차 필터링을 통과한 매칭 후보 공고에 한해서만 수행한다 —
+    포맷 상관없이 `app/ocr/extract.py`의 `extract_text(file_path)` 하나로 처리
+    (HWP/HWPX/PDF/이미지, 문서 내 그림으로 삽입된 표까지 OCR 보완 포함). 사업계획서
+    OCR과 완전히 같은 함수를 재사용하므로, 공고문도 CLOVA OCR을 바로 부르지 않고
+    네이티브 텍스트(pdfplumber/HWP·HWPX 로더)를 먼저 시도한다.
+- **1차 필터링 통과 후보 여러 건을 한 번에 OCR 돌리는 법 (2026-07-11 추가, `app/api/notice_ocr.py` 담당 영역)**: 1차 필터링 결과가 보통 공고 하나가 아니라 여러 건이므로, 후보마다 `POST /internal/notices/{notice_id}/ocr`를 반복 호출하는 대신 아래 배치 흐름을 쓴다.
+  1. `POST /internal/notices/ocr/batch` — body에 `{"notice_ids": [1, 2, 3, ...]}` (**한 번의 호출당 최대 30건** — 전체 처리 가능 건수 제한이 아니라 요청 하나의 상한이다). 이미 진행 중인 공고는 (단건 트리거의 409와 달리) 새로 시작하지 않고 기존 job을 그대로 응답에 포함하므로, 배치 호출 자체가 실패하는 일은 없다. 1차 필터링 후보가 30건을 넘으면 API가 알아서 나눠 처리해주지 않으므로(31건 이상은 그냥 400으로 거부됨), **호출하는 쪽이 30건 단위로 쪼개 여러 번 호출해야 한다.**
+  2. 응답의 `items[].job_id` 목록을 `GET /internal/notices/ocr/batch/status?job_ids=...&job_ids=...`에 그대로 넘겨 한 번에 폴링한다(건마다 `GET /internal/notices/{notice_id}/ocr/{job_id}`를 따로 부르지 않아도 됨 — 존재하지 않는 job_id는 조용히 결과에서 빠지므로 신경 안 써도 됨). 전부 `COMPLETED`(또는 `FAILED`/`NO_ATTACHMENT`/`UNSUPPORTED_FORMAT`)가 될 때까지 반복한다.
+  3. 결과 텍스트(`notice_attachment.parsed_text`)를 실제로 읽을 때는 `notice_id`마다 따로 조회하지 말고 `app/repositories/notice_repository.py`의 `get_notice_attachments_by_ids(session, notice_ids)`로 한 번에 가져온다(N+1 쿼리 방지, `get_notice_regions_by_ids`와 같은 패턴). 공고 하나·첨부파일 하나만 원문을 눈으로 확인하고 싶을 때는(디버깅·수동 검증 등) `GET /internal/notices/{notice_id}/attachments/{attachment_id}/text`로 바로 조회할 수 있다 — job 상태 조회는 `char_count`만 알려주고 원문은 안 준다.
+- **공고 단건 재수집 (2026-07-12 추가)**: `POST /internal/notices/{notice_id}/recollect`로 이미 저장된 공고 하나만 원본 API에서 다시 가져와 갱신할 수 있다(마감일 연장·첨부파일 교체 등 변경공고 반영용). **기업마당만 지원** — K-Startup 목록 API는 `pbanc_sn` 필터를 줘도 조용히 무시하고 첫 페이지를 그대로 돌려줘(실제 호출로 확인) 단건 조회 자체가 불가능하다.
+- **수집 현황 통계 (2026-07-12 추가)**: `GET /internal/notices/stats`로 출처/카테고리/상태별 저장 건수와 OCR 대기 건수(OCR 대상 포맷 첨부파일은 있지만 하나도 처리되지 않은 공고 수)를 조회할 수 있다. 전부 이미 저장된 데이터에 대한 집계라 외부 API를 호출하지 않는다.
+- 왜 텍스트 추출·임베딩은 1차 필터링 후에만 하는가: PDF OCR + 임베딩은 비용이 크기 때문에, 명백히 부적합한 공고까지 전부 처리하지 않기 위함이다 (첨부파일 메타데이터 자체는 위처럼 수집 시점에 미리 채워두지만, 텍스트 추출까지 미리 하지는 않는다).
+- **첨부파일이 없는 매칭 후보 공고 처리 (2026-07-10 결정)**: 실제로 확인해보니 전체 공고의 상당수(약 76%)가 첨부파일이 없다 — 있는 게 예외가 아니라 없는 것도 흔한 정상 케이스다. 이 경우 원문 텍스트가 없어 정밀 매칭이 불가능하므로, 아래처럼 두 경로로 나눈다.
+  - **첨부파일 있음**: OCR 텍스트로 정밀 매칭·점수 산출.
+  - **첨부파일 없음** (2차 필터링 크롤링까지 마쳤는데도 없는 경우): 벡터 매칭/점수 산출을 시도하지 않는다. 대신 "AI가 세부 조건까지 확인하지 못함"을 명시하고, `notice.source_url`/`apply_url`(둘 다 없는 경우는 실측 0건 확인됨)로 사용자가 직접 원문을 확인하도록 안내한다. `notice.summary_text`만으로 억지로 매칭 점수를 매기면 상세 자격요건(업력·매출 조건 등, 보통 PDF 안에만 있음)을 놓치고 부정확한 점수를 줄 위험이 크기 때문에 택하지 않았다.
+  - 사용자가 보는 화면(매칭 결과)은 항상 1~2차 필터링을 다 거친 뒤의 공고이므로, "아직 첨부파일을 확인 안 한" 중간 상태가 화면에 노출될 일은 없다 — 이 구분은 5단계(AI 매칭 스코어링)의 산출물에서 위 두 경로 중 하나로 이미 정리된 상태로만 넘어간다.
+- **운영 규칙 — 기업마당을 항상 K-Startup보다 먼저 수집할 것**: 같은 공고가 두 출처에 중복 등록되면 "기업마당 우선 정책"으로 제목이 같은 K-Startup 공고를 삭제하는데(`_process_bizinfo_item`), 이 삭제는 K-Startup 쪽에 이미 저장된 첨부파일까지 cascade로 지운다. K-Startup을 먼저 수집하면 방금 크롤링한 첨부파일이 곧바로 삭제될 수 있으므로, 반드시 기업마당(`collect_all_bizinfo_notices`) → K-Startup(`collect_all_kstartup_notices`) 순서로 실행해야 한다. (기업마당이 먼저면 `_process_kstartup_item`의 중복 검사가 애초에 저장을 건너뛰어 문제가 발생하지 않음.)
+- **벡터 DB 캐싱 규칙 (2026-07-10 결정, 기존 TBD 해소)**: 공고 단위로 재사용 가능하도록 캐싱하되, **"성공(임베딩 존재)"만 캐싱하고 "실패(첨부파일 없음)"는 캐싱하지 않는다.**
+  - 벡터 DB에 이미 임베딩이 있으면 그대로 재사용 (첨부파일 내용은 사후에 안 바뀌므로 한 번 성공하면 영구적으로 신뢰).
+  - 없으면 이번 매칭 요청에서 **매번 다시 확인**한다 (K-Startup은 상세페이지 재크롤링). 확인 비용(메타데이터 조회)은 가벼워서 매번 해도 부담이 적고, 무거운 작업(OCR·임베딩)은 성공했을 때만 발생한다.
+  - 그래도 없으면 이번 요청에 한해 "첨부파일 없음" 경로로 처리하되, 이 결과 자체는 저장하지 않는다.
+  - 이 규칙 덕분에 "공고 등록 시점엔 첨부파일이 없었는데 며칠 뒤 원본 사이트에 추가된" 경우도 별도의 캐시 만료 로직 없이 자동으로 해결된다 — 실패를 애초에 캐싱하지 않으므로 다음 매칭 요청 때 자연스럽게 재시도된다.
+- **실제 공고 정규화 (2026-07-12 추가)**: `POST /internal/notices/{notice_id}/normalize`로 실제 DB에 저장된 공고 하나를 LLM으로 정규화할 수 있다(응답 형태는 `app/schemas/notice_normalization.py`의 `NormalizedNoticeSchema`, AI팀 소유). OCR 텍스트(`notice_attachment.parsed_text`)가 있으면 그걸 쓰고, 없으면(첨부파일이 아예 없는 공고가 약 76%) `summary_text`로 대체한다 — 그마저도 없으면 정규화를 포기한다. `app/api/notice_samples.py`(로컬 샘플 JSON 기준 테스트/검증용)와 같은 보완 규칙(`app/services/notice_normalization_helpers.py`에서 공유)을 쓰지만, 원문을 실제 공고 메타데이터+OCR 결과에서 가져오고 결과를 `Notice.normalized_json`에 영속화한다는 점이 다르다. `GET /internal/notices/{notice_id}/normalize/{job_id}`로 진행 상태를 폴링한다(OCR/사업계획서 정규화와 동일한 job 트리거 패턴). 1차 필터링 후보가 보통 여러 건이라 `POST /internal/notices/normalize/batch`(최대 30건) + `GET /internal/notices/normalize/batch/status`로 OCR 배치와 동일하게 한 번에 트리거·조회할 수 있다. job 상태 조회는 인메모리 기반이라 서버 재시작 후에는 못 쓰는데, 결과 자체는 DB에 영속화되므로 `GET /internal/notices/{notice_id}/normalization`으로 언제든 notice_id만으로 저장된 결과를 조회할 수 있다. `GET /internal/notices/stats`의 `by_normalization_status`로 not_started/completed/failed 건수도 확인 가능하다.
+
+## 5단계 — AI 매칭 스코어링
+
+- 2차 필터링을 통과한 공고 + 사업계획서 정규화 데이터를 하나의 JSON으로 구성한다.
+- 이 JSON을 LLM에 전달해 항목별 점수(분야 적합/자격 충족/사업 정합 등, [`ResultsPage`](../frontend/src/mock/notices.ts)의 `scoreBreakdown` 구조 참고)와 추천/주의 근거 문장을 산출한다.
+- 결과는 그대로 [공통 API 응답 형식](./response-format.md)에 담아 프론트로 반환한다.
+
+## 로깅 요구사항
+
+각 단계마다 최소 아래 정보를 구조화 로그로 남긴다 (지금 당장 프론트 노출 여부와 무관하게):
+
+| 단계 | 로그에 남길 정보 |
+| --- | --- |
+| 1차 필터링 | 입력 공고 수, 필터링 기준별 통과/제외 수, 최종 통과 공고 ID 목록 |
+| 2차 필터링 | OCR 대상 공고 수, 임베딩 실패 건수, 유사도 점수 상/하위 분포, 최종 확정 공고 ID |
+| AI 스코어링 | LLM에 전달한 프롬프트/JSON 요약, 산출된 점수와 근거, 실패 시 재시도 여부 |
+
+목적은 두 가지다: (1) 어느 단계에서 좋은 공고가 잘못 걸러지는지 추적해 필터링 기준을 개선하고, (2) 최종 매칭 결과가 이상할 때 원인을 역추적할 수 있게 하는 것.
+
+## 미정 항목 (TBD)
+
+- 1차 필터링에 사용할 정확한 필드/가중치
+- 벡터 DB 종류 및 공고별 임베딩 캐싱/갱신 정책
+- 2차 필터링에서 상위 K건을 몇 건으로 할지
+- AI 스코어링 실패(LLM 오류, 근거 부족 등) 시 폴백 동작

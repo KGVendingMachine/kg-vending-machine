@@ -1,0 +1,254 @@
+"""tests/test_company_profile_router.py
+
+본인 기업 프로필 저장/조회(부분 갱신) 검증. 다른 라우터 테스트와 동일하게
+라우터 함수를 직접 호출하고, db_session 픽스처로 트랜잭션을 격리한다.
+"""
+
+from datetime import date
+
+import pytest
+from fastapi import HTTPException
+from pydantic import ValidationError
+
+from app.api.company_profile import (
+    get_my_company_profile,
+    save_my_company_profile,
+)
+from app.models.user import User
+from app.schemas.company import CompanyProfileUpdate
+
+pytestmark = pytest.mark.anyio
+
+
+async def _make_user(db_session, kakao_id="company-test-kakao") -> User:
+    user = User(kakao_id=kakao_id, status="ACTIVE", role="USER")
+    db_session.add(user)
+    await db_session.flush()
+    return user
+
+
+async def test_get_returns_none_before_save(db_session):
+    user = await _make_user(db_session)
+    result = await get_my_company_profile(current_user=user, session=db_session)
+    assert result is None
+
+
+async def test_save_then_get_round_trip(db_session):
+    user = await _make_user(db_session)
+    payload = CompanyProfileUpdate(
+        representative_name="홍길동",
+        business_registration_number="000-00-00000",
+        industry_code="C",  # 제조업
+        annual_revenue=5_000_000_000,  # 50억 → 중소기업 상한(1,000억) 이하
+        employee_count=15,
+    )
+
+    saved = await save_my_company_profile(
+        payload=payload, current_user=user, session=db_session
+    )
+    assert saved.representative_name == "홍길동"
+    assert saved.employee_count == 15
+    assert saved.user_id == user.id
+    assert saved.is_primary is True
+
+    fetched = await get_my_company_profile(current_user=user, session=db_session)
+    assert fetched is not None
+    assert fetched.id == saved.id
+    # company_size는 입력이 아니라 업종·매출에서 파생된다.
+    assert fetched.company_size == "중소기업"
+
+
+async def test_partial_update_accumulates(db_session):
+    """뒤에 다른 필드만 보내도 앞서 저장한 값은 유지되고 같은 행에 누적된다."""
+    user = await _make_user(db_session)
+
+    first = await save_my_company_profile(
+        payload=CompanyProfileUpdate(representative_name="김대표"),
+        current_user=user,
+        session=db_session,
+    )
+    second = await save_my_company_profile(
+        payload=CompanyProfileUpdate(employee_count=7),
+        current_user=user,
+        session=db_session,
+    )
+
+    assert second.id == first.id  # 새 행이 아니라 같은 행 갱신
+    assert second.representative_name == "김대표"  # 이전 값 유지
+    assert second.employee_count == 7
+
+
+async def test_blank_strings_are_ignored(db_session):
+    """폼 select 기본값 등 빈 문자열은 미입력으로 처리돼 exclude_unset에서 제외."""
+    user = await _make_user(db_session)
+    payload = CompanyProfileUpdate(
+        representative_name="박대표",
+        business_type="",  # 빈 값 → None 처리
+    )
+    fields = payload.model_dump(exclude_unset=True)
+    assert fields["representative_name"] == "박대표"
+    assert fields["business_type"] is None
+
+    saved = await save_my_company_profile(
+        payload=payload, current_user=user, session=db_session
+    )
+    assert saved.representative_name == "박대표"
+    assert saved.business_type is None
+
+
+async def test_company_size_is_derived_not_input(db_session):
+    """company_size는 사용자 입력이 아니라 업종·매출에서 산출된다."""
+    user = await _make_user(db_session, kakao_id="company-size-derive")
+
+    # 매출을 모르면 판정 불가 → None
+    saved = await save_my_company_profile(
+        payload=CompanyProfileUpdate(industry_code="J"),
+        current_user=user,
+        session=db_session,
+    )
+    assert saved.company_size is None
+
+    # 정보통신(J, 상한 600억)에 700억 매출 → 중견기업
+    saved = await save_my_company_profile(
+        payload=CompanyProfileUpdate(annual_revenue=70_000_000_000),
+        current_user=user,
+        session=db_session,
+    )
+    assert saved.company_size == "중견기업"
+
+    # 매출을 400억으로 낮추면 다시 중소기업 (파생값이 매 저장마다 갱신됨)
+    saved = await save_my_company_profile(
+        payload=CompanyProfileUpdate(annual_revenue=40_000_000_000),
+        current_user=user,
+        session=db_session,
+    )
+    assert saved.company_size == "중소기업"
+
+
+async def test_save_matching_fields_with_conversion(db_session):
+    """매칭용 필드 저장: 설립연도→founded_date, 시/도 이름→region_code 변환 확인."""
+    user = await _make_user(db_session, kakao_id="company-matching-fields")
+    payload = CompanyProfileUpdate(
+        business_type="법인사업자",
+        company_stage="초기창업",
+        industry_code="J",
+        region_name="경북",
+        founded_year=2021,
+        annual_revenue=1_200_000_000,
+    )
+
+    saved = await save_my_company_profile(
+        payload=payload, current_user=user, session=db_session
+    )
+    assert saved.business_type == "법인사업자"
+    assert saved.company_stage == "초기창업"
+    assert saved.industry_code == "J"
+    assert saved.region_name == "경북"
+    assert saved.region_code == "47"  # 행정표준코드 시도 2자리
+    assert saved.founded_date == date(2021, 1, 1)
+    assert saved.annual_revenue == 1_200_000_000
+
+
+async def test_blank_matching_fields_clear_columns(db_session):
+    """빈 문자열로 보낸 select 필드는 None으로 저장되고 파생 컬럼도 함께 비워진다."""
+    user = await _make_user(db_session, kakao_id="company-blank-matching")
+    await save_my_company_profile(
+        payload=CompanyProfileUpdate(region_name="서울", business_type="개인사업자"),
+        current_user=user,
+        session=db_session,
+    )
+
+    saved = await save_my_company_profile(
+        payload=CompanyProfileUpdate(region_name="", business_type=""),
+        current_user=user,
+        session=db_session,
+    )
+    assert saved.business_type is None
+    assert saved.region_name is None
+    assert saved.region_code is None  # region_name이 비면 코드도 함께 비운다
+
+
+def test_update_rejects_unknown_enum_values():
+    """정해진 집합 밖의 값은 스키마 검증에서 거부된다."""
+    with pytest.raises(ValidationError):
+        CompanyProfileUpdate(business_type="프리랜서")
+    with pytest.raises(ValidationError):
+        CompanyProfileUpdate(company_stage="상장")
+    with pytest.raises(ValidationError):
+        CompanyProfileUpdate(industry_code="Z")
+    with pytest.raises(ValidationError):
+        CompanyProfileUpdate(region_name="독도")
+
+
+def test_update_rejects_future_founded_year():
+    with pytest.raises(ValidationError):
+        CompanyProfileUpdate(founded_year=date.today().year + 1)
+
+
+def test_update_rejects_inconsistent_type_and_stage_in_one_request():
+    """한 요청 안에서 예비창업자와 기업 단계가 함께 오면 거부."""
+    with pytest.raises(ValidationError):
+        CompanyProfileUpdate(business_type="예비창업자", company_stage="중소기업")
+
+
+async def test_save_rejects_stage_conflicting_with_existing_business_type(db_session):
+    """부분 갱신으로 company_stage만 보내도 기존에 저장된 business_type과 모순되면 거부."""
+    user = await _make_user(db_session, kakao_id="company-conflict-stage")
+    await save_my_company_profile(
+        payload=CompanyProfileUpdate(business_type="예비창업자"),
+        current_user=user,
+        session=db_session,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await save_my_company_profile(
+            payload=CompanyProfileUpdate(company_stage="중소기업"),
+            current_user=user,
+            session=db_session,
+        )
+    assert exc_info.value.status_code == 400
+
+
+async def test_transition_to_pre_founder_clears_registration_fields(db_session):
+    """business_type을 예비창업자로 바꾸면 사업자등록 이후에만 의미 있는 필드
+    (company_stage 포함)가 null로 정리된다(거부하지 않고 자동 정리)."""
+    user = await _make_user(db_session, kakao_id="company-pre-founder-transition")
+    await save_my_company_profile(
+        payload=CompanyProfileUpdate(
+            business_type="법인사업자",
+            company_stage="중소기업",
+            business_registration_number="000-00-00000",
+            founded_year=2020,
+            employee_count=30,
+            annual_revenue=5_000_000_000,
+        ),
+        current_user=user,
+        session=db_session,
+    )
+
+    saved = await save_my_company_profile(
+        payload=CompanyProfileUpdate(business_type="예비창업자"),
+        current_user=user,
+        session=db_session,
+    )
+    assert saved.business_type == "예비창업자"
+    assert saved.company_stage is None
+    assert saved.business_registration_number is None
+    assert saved.founded_date is None
+    assert saved.company_size is None
+    assert saved.employee_count is None
+    assert saved.annual_revenue is None
+
+
+async def test_profiles_are_isolated_per_user(db_session):
+    user_a = await _make_user(db_session, kakao_id="company-user-a")
+    user_b = await _make_user(db_session, kakao_id="company-user-b")
+
+    await save_my_company_profile(
+        payload=CompanyProfileUpdate(representative_name="A대표"),
+        current_user=user_a,
+        session=db_session,
+    )
+
+    b_profile = await get_my_company_profile(current_user=user_b, session=db_session)
+    assert b_profile is None  # B는 A 프로필을 보지 못한다

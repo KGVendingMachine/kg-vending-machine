@@ -1,0 +1,970 @@
+from datetime import date, datetime
+
+from sqlalchemy import Integer, cast, delete, func, or_, select, update
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
+
+from app.models.category import CategoryMapping, CategoryName, KgCategory
+from app.models.notice import (
+    Notice,
+    NoticeAttachment,
+    NoticeChunk,
+    NoticeRegion,
+    NoticeTargetType,
+)
+from app.models.notice_source import NoticeSource
+from app.models.organization import Organization
+from app.models.raw import BizinfoRaw, KstartupRaw
+
+
+async def get_or_create_source(
+    session: AsyncSession, source_name: str, base_url: str, collect_type: str
+) -> NoticeSource:
+    """공고 출처(기업마당/K-Startup)를 이름 기준으로 찾아 upsert한다.
+
+    조회 후 삽입(select-then-insert) 방식은 두 수집 작업이 동시에 실행되면
+    둘 다 "출처 없음"으로 판단해 같은 출처를 각각 생성하는 경쟁 상태가
+    있었다. notice_source.source_name의 유니크 제약을 이용한
+    INSERT ... ON CONFLICT로 원자적으로 처리한다.
+
+    DO NOTHING이 아니라 DO UPDATE를 쓰는 이유: DO NOTHING이면 이미 있는
+    출처의 base_url/collect_type이 바뀌어도 호출자가 넘긴 최신 값이
+    무시되고 예전 값이 그대로 남았다.
+
+    populate_existing=True가 필요한 이유: 이 세션에서 같은 source_id가
+    이미 한 번 로드된 적 있으면(예: 같은 세션 안에서 이 함수를 두 번
+    호출), SQLAlchemy identity map이 방금 DO UPDATE로 반영한 최신 값
+    대신 세션에 캐시된 예전 Python 객체를 그대로 돌려준다 — 위에서
+    DO UPDATE를 쓴 이유 자체가 무력화되는 셈이라 명시적으로 다시
+    읽어오게 한다.
+    """
+    stmt = (
+        pg_insert(NoticeSource)
+        .values(source_name=source_name, base_url=base_url, collect_type=collect_type)
+        .on_conflict_do_update(
+            index_elements=[NoticeSource.source_name],
+            set_={
+                "base_url": base_url,
+                "collect_type": collect_type,
+                "updated_at": func.now(),
+            },
+        )
+        .returning(NoticeSource.id)
+    )
+    result = await session.execute(stmt)
+    source_id = result.scalar_one()
+    return await session.get_one(NoticeSource, source_id, populate_existing=True)
+
+
+async def get_max_notice_external_id(
+    session: AsyncSession, source_id: int
+) -> int | None:
+    """해당 출처에 저장된 공고 중 가장 큰 external_id(정수 변환)를 반환한다.
+
+    K-Startup처럼 external_id가 순수 숫자 문자열(pbanc_sn)인 출처에서,
+    "마지막으로 저장된 지점"을 조기종료 커서로 재활용하는 용도. 기업마당은
+    external_id가 "PBLN_..." 접두사가 붙은 문자열이라 이 함수를 쓸 수 없다
+    (get_max_bizinfo_registration_time을 대신 쓴다).
+    """
+    result = await session.execute(
+        select(func.max(cast(Notice.external_id, Integer))).where(
+            Notice.source_id == source_id
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_max_bizinfo_registration_time(
+    session: AsyncSession, source_id: int
+) -> datetime | None:
+    """저장된 기업마당 공고 중 원본 응답의 creatPnttm(등록시각) 최댓값을 반환한다.
+
+    get_max_notice_external_id와 같은 이유로, notice_source.updated_at
+    (수집 "시작" 시각)을 그대로 커서로 쓰지 않는다 — 그러면 페이지 중간에
+    수집이 실패해도 이미 시작 시각이 커밋돼버려서, 다음 수집이 실패
+    지점 이후를 영원히 건너뛸 위험이 있다. 대신 "실제로 저장에 성공한
+    데이터" 기준으로 커서를 계산해 자기 보정되게 한다 — 이번 수집이
+    일부만 성공해도 그만큼만 커서가 전진한다.
+
+    creatPnttm 형식("YYYY-MM-DD HH:MM:SS")은 고정 자릿수라 문자열
+    비교 순서가 시간 순서와 같아, SQL에서 문자열 그대로 MAX를 구해도
+    정확하다.
+    """
+    result = await session.execute(
+        select(func.max(cast(BizinfoRaw.field, JSONB)["creatPnttm"].astext))
+        .join(Notice, Notice.id == BizinfoRaw.notice_id)
+        .where(Notice.source_id == source_id)
+    )
+    max_str = result.scalar_one_or_none()
+    if max_str is None:
+        return None
+    try:
+        return datetime.strptime(max_str, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+async def get_or_create_organization(session: AsyncSession, name: str) -> Organization:
+    """기관명으로 Organization을 찾고, 없으면 새로 만든다.
+
+    get_or_create_source와 동일한 이유로 조회 후 삽입 대신 원자적
+    upsert 패턴을 쓴다.
+    """
+    stmt = (
+        pg_insert(Organization)
+        .values(name=name)
+        .on_conflict_do_nothing(index_elements=[Organization.name])
+        .returning(Organization.id)
+    )
+    result = await session.execute(stmt)
+    org_id = result.scalar_one_or_none()
+
+    if org_id is None:
+        result = await session.execute(
+            select(Organization).where(Organization.name == name)
+        )
+        return result.scalar_one()
+
+    return await session.get_one(Organization, org_id)
+
+
+async def upsert_notice(
+    session: AsyncSession,
+    *,
+    source_id: int,
+    external_id: str,
+    title: str | None,
+    organization_id: int | None = None,
+    notice_group_key: str | None = None,
+    category_id: int | None = None,
+    application_start_date: date | None,
+    application_end_date: date | None,
+    status: str | None,
+    is_actionable: bool | None,
+    source_url: str | None,
+    apply_url: str | None,
+    summary_text: str | None,
+    target_business_years_max: int | None = None,
+    target_allows_prestartup: bool | None = None,
+) -> int:
+    """(source_id, external_id) 기준으로 공고를 upsert하고 notice.id를 반환한다.
+
+    동일 공고를 다시 수집해도 새 행이 생기지 않고 기존 행이 갱신되도록
+    notice(source_id, external_id) 유니크 제약을 이용한 ON CONFLICT를 쓴다.
+
+    notice.external_id 컬럼 자체는 NULL을 허용하지만(수동 등록 등 다른
+    경로를 위해), PostgreSQL UNIQUE 제약은 NULL끼리는 중복으로 보지 않아
+    이 함수로 external_id=NULL을 넣으면 중복 방지가 무력화된다. 이 함수는
+    수집 파이프라인 전용이라 항상 값이 있어야 하므로 여기서 막는다.
+    """
+    if not external_id:
+        raise ValueError("upsert_notice: external_id는 비어 있을 수 없습니다")
+
+    stmt = (
+        pg_insert(Notice)
+        .values(
+            source_id=source_id,
+            external_id=external_id,
+            title=title,
+            organization_id=organization_id,
+            notice_group_key=notice_group_key,
+            category_id=category_id,
+            application_start_date=application_start_date,
+            application_end_date=application_end_date,
+            status=status,
+            is_actionable=is_actionable,
+            source_url=source_url,
+            apply_url=apply_url,
+            summary_text=summary_text,
+            target_business_years_max=target_business_years_max,
+            target_allows_prestartup=target_allows_prestartup,
+        )
+        .on_conflict_do_update(
+            index_elements=[Notice.source_id, Notice.external_id],
+            set_={
+                "title": title,
+                "organization_id": organization_id,
+                "notice_group_key": notice_group_key,
+                "category_id": category_id,
+                "application_start_date": application_start_date,
+                "application_end_date": application_end_date,
+                "status": status,
+                "is_actionable": is_actionable,
+                "source_url": source_url,
+                "apply_url": apply_url,
+                "summary_text": summary_text,
+                "target_business_years_max": target_business_years_max,
+                "target_allows_prestartup": target_allows_prestartup,
+                "updated_at": func.now(),
+            },
+        )
+        .returning(Notice.id)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one()
+
+
+async def replace_notice_target_type(
+    session: AsyncSession, notice_id: int, target_types: list[str]
+) -> None:
+    """공고의 신청대상 유형들을 최신 값으로 교체한다.
+
+    ON CONFLICT DO NOTHING으로 추가만 하면, 공고를 재수집했을 때
+    신청대상이 바뀌거나 없어져도 예전 값이 계속 남아있는 문제가 있었다.
+    해당 공고의 기존 값을 지우고 이번에 수집한 값으로 다시 넣는다.
+
+    delete는 target_type이 비어 있어도(이번 응답에 값이 없는 경우) 항상
+    실행해야 한다. 호출자가 값이 있을 때만 이 함수를 호출하면, 응답에서
+    값이 사라진 경우 예전 값이 지워지지 않고 그대로 남기 때문이다.
+    """
+    await session.execute(
+        delete(NoticeTargetType).where(NoticeTargetType.notice_id == notice_id)
+    )
+    if target_types:
+        await session.execute(
+            pg_insert(NoticeTargetType),
+            [
+                {"notice_id": notice_id, "target_type": target_type}
+                for target_type in target_types
+            ],
+        )
+
+
+async def replace_notice_region(
+    session: AsyncSession,
+    notice_id: int,
+    regions: list[tuple[str, str]],
+) -> None:
+    """공고의 지원지역을 최신 값으로 교체한다. (delete를 항상 실행하는 이유는
+    replace_notice_target_type과 동일)
+    """
+    await session.execute(
+        delete(NoticeRegion).where(NoticeRegion.notice_id == notice_id)
+    )
+    if regions:
+        await session.execute(
+            pg_insert(NoticeRegion),
+            [
+                {
+                    "notice_id": notice_id,
+                    "region_code": region_code,
+                    "region_name": region_name,
+                }
+                for region_code, region_name in regions
+            ],
+        )
+
+
+async def find_notice_ids_by_source_and_title(
+    session: AsyncSession, source_name: str, title: str
+) -> list[int]:
+    """특정 출처(source_name)에서 제목이 정확히 일치하는 공고 id를 전부 찾는다
+    (신청기간은 안 본다).
+
+    호출자(notice_collection_service._find_cross_source_duplicate_notice_ids)가
+    "제목 일치 후보가 1건뿐이면 신청기간 없이도 안전하게 매칭, 여러 건이면
+    find_notice_ids_by_source_title_and_dates로 날짜까지 확인"하는 2단계
+    판정의 1단계로 쓴다. 이 함수 하나만으로 최종 판정하면 정기 반복 공고
+    문제(아래 함수 docstring 참고)가 재현되므로 여기서 바로 지우거나
+    건너뛰지 않는다.
+    """
+    result = await session.execute(
+        select(Notice.id)
+        .join(NoticeSource, Notice.source_id == NoticeSource.id)
+        .where(NoticeSource.source_name == source_name, Notice.title == title)
+    )
+    return list(result.scalars().all())
+
+
+async def find_notice_ids_by_source_title_and_dates(
+    session: AsyncSession,
+    source_name: str,
+    title: str,
+    start_date: date | None,
+    end_date: date | None,
+) -> list[int]:
+    """특정 출처(source_name)에서 제목과 신청기간(시작일·종료일)이 모두
+    일치하는 공고 id를 전부 찾는다.
+
+    기업마당과 K-Startup에 같은 사업이 각자 다른 external_id로 중복
+    등록되는 경우, 제목 기준으로 다른 출처의 공고를 찾아 정리/스킵하는데
+    쓴다. 소스별 유일 키(external_id)가 서로 달라 그것만으로는 중복을
+    판단할 수 없기 때문인데, **제목만으로도 부족하다** — 실제 DB로
+    확인해보니 정기 반복되는 모집 공고가 매 회차 제목을 그대로 재사용해,
+    신청기간이 전혀 겹치지 않는 회차 8개가 완전히 같은 제목으로 존재하는
+    경우가 있었다. 제목만 보고 중복 판정하면 서로 다른 회차의 기록을
+    같은 사업의 교차 등록으로 오인해 지우거나(실제로는 지우면 안 될
+    과거 회차 삭제) 새 회차 저장을 건너뛰는(실제로는 저장해야 할 새
+    회차 누락) 문제가 생긴다. 제목과 신청기간이 전부 같아야 "같은
+    회차가 두 출처에 교차 등록된 것"으로 본다.
+
+    start_date/end_date 중 하나라도 없으면(파싱 실패 등) 호출자가 이
+    함수를 부르지 않고 건너뛰는 것을 전제로 한다 — 날짜 없이 제목만
+    비교하면 위 문제가 그대로 재현되기 때문이다. 다만 제목 일치 후보가
+    애초에 1건뿐이면 애매할 게 없으므로 이 함수까지 안 오고
+    find_notice_ids_by_source_and_title 결과를 그대로 쓴다(실제 DB
+    확인: 기업마당 공고의 89%가 "상시모집" 등으로 신청기간이 없어서,
+    날짜를 무조건 요구하면 이 공고들은 중복 판정 자체가 통째로
+    안 되는 문제가 있었다 — notice_collection_service.
+    _find_cross_source_duplicate_notice_ids 참고).
+    """
+    result = await session.execute(
+        select(Notice.id)
+        .join(NoticeSource, Notice.source_id == NoticeSource.id)
+        .where(
+            NoticeSource.source_name == source_name,
+            Notice.title == title,
+            Notice.application_start_date == start_date,
+            Notice.application_end_date == end_date,
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def delete_notice(session: AsyncSession, notice_id: int) -> None:
+    """공고와 그에 딸린 신청대상/지역/원본 데이터를 삭제한다.
+
+    notice_target_type/notice_region/bizinfo_raw/kstartup_raw는 모두
+    notice에 대한 ON DELETE 규칙이 없어(기본 RESTRICT/NO ACTION),
+    notice보다 먼저 지워야 FK 오류가 나지 않는다. 이 공고가 어느
+    출처였는지 호출자가 알 필요 없도록 두 raw 테이블 모두에서 시도한다
+    (해당 없는 쪽은 그냥 0행 삭제로 끝난다).
+    """
+    await session.execute(
+        delete(NoticeTargetType).where(NoticeTargetType.notice_id == notice_id)
+    )
+    await session.execute(
+        delete(NoticeRegion).where(NoticeRegion.notice_id == notice_id)
+    )
+    await session.execute(delete(BizinfoRaw).where(BizinfoRaw.notice_id == notice_id))
+    await session.execute(delete(KstartupRaw).where(KstartupRaw.notice_id == notice_id))
+    await session.execute(
+        delete(NoticeAttachment).where(NoticeAttachment.notice_id == notice_id)
+    )
+    await session.execute(delete(Notice).where(Notice.id == notice_id))
+
+
+async def save_raw(
+    session: AsyncSession, raw_model_cls, key: str, field: str, notice_id: int
+) -> None:
+    """원본 API 응답(JSON 문자열)을 raw 테이블에 upsert한다."""
+    stmt = (
+        pg_insert(raw_model_cls)
+        .values(key=key, field=field, notice_id=notice_id)
+        .on_conflict_do_update(
+            index_elements=[raw_model_cls.key],
+            set_={"field": field, "notice_id": notice_id},
+        )
+    )
+    await session.execute(stmt)
+
+
+async def save_attachment(
+    session: AsyncSession,
+    notice_id: int,
+    file_name: str | None,
+    file_url: str,
+    file_type: str | None,
+) -> None:
+    """공고 첨부파일 메타데이터(URL/파일명)를 notice_attachment에 upsert한다.
+
+    DO NOTHING을 쓰면 재수집 시 원본 파일명이 바뀌어도 예전 값이 그대로
+    남는다 (get_or_create_source에서 이미 겪은 것과 같은 문제라
+    DO UPDATE로 처리). 단, parsed_text(OCR 결과)는 SET 대상에서 빼서,
+    이미 OCR을 돌려둔 첨부파일의 결과가 재수집 때 지워지지 않게 한다
+    (전체 공고를 다 OCR하면 비용이 커서, 매칭 후보로 좁혀진 공고만
+    그때 필요할 때 별도로 채우는 구조 — docs/matching-pipeline.md 4단계).
+    """
+    stmt = (
+        pg_insert(NoticeAttachment)
+        .values(
+            notice_id=notice_id,
+            file_name=file_name,
+            file_url=file_url,
+            file_type=file_type,
+        )
+        .on_conflict_do_update(
+            index_elements=[NoticeAttachment.notice_id, NoticeAttachment.file_url],
+            set_={"file_name": file_name, "file_type": file_type},
+        )
+    )
+    await session.execute(stmt)
+
+
+async def prune_stale_attachments(
+    session: AsyncSession, notice_id: int, current_urls: set[str]
+) -> None:
+    """이번에 다시 가져온 첨부파일 목록(current_urls)에 없는 예전 첨부파일을 지운다.
+
+    save_attachment는 upsert만 해서 URL이 바뀐(파일이 교체된) 경우 새
+    URL은 추가되지만 예전 URL은 그대로 남는다 — 재수집(recollect)의
+    "첨부파일 교체 반영" 문서화된 목적과 어긋난다. current_urls가
+    비어있으면(공고에 첨부파일이 아예 없어진 경우) 이 공고의 첨부파일을
+    전부 지운다.
+    """
+    stmt = delete(NoticeAttachment).where(NoticeAttachment.notice_id == notice_id)
+    if current_urls:
+        stmt = stmt.where(NoticeAttachment.file_url.notin_(current_urls))
+    await session.execute(stmt)
+
+
+async def set_attachment_parsed_text(
+    session: AsyncSession, attachment_id: int, parsed_text: str
+) -> bool:
+    """첨부파일 OCR 결과를 저장한다. save_attachment의 upsert는 재수집 시
+    parsed_text를 건드리지 않으므로, OCR 결과 저장은 이 함수로 따로 한다.
+
+    반환값(True/False)으로 실제로 반영된 행이 있었는지 알려준다 —
+    다운로드·OCR(수십~백여 초)이 도는 동안 "기업마당 우선 정책"으로 이
+    첨부파일의 공고 자체가 지워질 수 있어(notice_collection_service의
+    중복 정리 로직 참고), 그 경우 0행이 반영되고 호출자가 이를 구분해
+    처리해야 한다."""
+    result = await session.execute(
+        update(NoticeAttachment)
+        .where(NoticeAttachment.id == attachment_id)
+        .values(parsed_text=parsed_text)
+    )
+    return result.rowcount > 0
+
+
+async def get_kg_category_id(session: AsyncSession, name: CategoryName) -> int | None:
+    """kg_category.name(고정 8종, docs/notice-category-mapping.md)으로
+    id를 찾는다.
+
+    category_mapping을 거치는 get_category_mapping과 달리, 원본 카테고리
+    필드가 아예 없는 출처(과학기술정보통신부 API 등 — 소스 자체가
+    단일 분야라 항목별 분류가 필요 없음)에서 카테고리를 고정값으로
+    지정할 때 쓴다.
+    """
+    result = await session.execute(select(KgCategory.id).where(KgCategory.name == name))
+    return result.scalar_one_or_none()
+
+
+async def get_category_mapping(session: AsyncSession) -> dict[str, int]:
+    """원본 카테고리 키(예: "BIZINFO:금융") → kg_category.id 딕셔너리를 반환한다.
+
+    (docs/notice-category-mapping.md, alembic 0756e6c105fe 시드 데이터 참고)
+    """
+    result = await session.execute(
+        select(CategoryMapping.raw_category, CategoryMapping.category_id)
+    )
+    return dict(result.all())
+
+
+async def set_notice_category(
+    session: AsyncSession, notice_id: int, category_id: int
+) -> None:
+    """공고의 통합 카테고리를 지정한다."""
+    await session.execute(
+        update(Notice).where(Notice.id == notice_id).values(category_id=category_id)
+    )
+
+
+async def get_notice_business_years(
+    session: AsyncSession, notice_id: int
+) -> tuple[int | None, bool | None]:
+    """공고의 업력 구조화 값 (target_business_years_max, target_allows_prestartup)을
+    반환한다. 업력 백필에서 재파싱 결과가 기존과 다른지 비교하는 용도."""
+    result = await session.execute(
+        select(Notice.target_business_years_max, Notice.target_allows_prestartup).where(
+            Notice.id == notice_id
+        )
+    )
+    row = result.first()
+    return (None, None) if row is None else (row[0], row[1])
+
+
+async def set_notice_business_years(
+    session: AsyncSession,
+    notice_id: int,
+    max_years: int | None,
+    allows_prestartup: bool | None,
+) -> None:
+    """공고의 업력 구조화 컬럼만 갱신한다(다른 컬럼은 건드리지 않음).
+
+    K-Startup biz_enyy 재파싱 백필 전용. upsert_notice는 다른 수집 필드를
+    함께 덮어써서 원문 재조회 없이 업력만 보정하려는 백필에는 맞지 않는다.
+    """
+    await session.execute(
+        update(Notice)
+        .where(Notice.id == notice_id)
+        .values(
+            target_business_years_max=max_years,
+            target_allows_prestartup=allows_prestartup,
+        )
+    )
+
+
+async def get_notices_for_status_refresh(
+    session: AsyncSession,
+) -> list[tuple[int, date | None, date | None, str | None]]:
+    """마감 처리되지 않은 공고의 (id, 신청시작일, 신청종료일, 현재 상태) 목록을 반환한다.
+
+    "마감"은 종단 상태로 보고 대상에서 제외한다 — 한 번 마감으로
+    확정되면 신청기간이 다시 열리는 경우는 없다고 본다.
+    """
+    result = await session.execute(
+        select(
+            Notice.id,
+            Notice.application_start_date,
+            Notice.application_end_date,
+            Notice.status,
+        ).where(Notice.status.is_distinct_from("마감"))
+    )
+    return list(result.all())
+
+
+async def update_notice_status(
+    session: AsyncSession, notice_id: int, status: str, is_actionable: bool
+) -> None:
+    """공고의 모집 상태를 갱신한다 (마감일 경과 등으로 재계산된 값 반영)."""
+    await session.execute(
+        update(Notice)
+        .where(Notice.id == notice_id)
+        .values(status=status, is_actionable=is_actionable)
+    )
+
+
+async def update_notice_normalization(
+    session: AsyncSession,
+    notice_id: int,
+    *,
+    normalized_json: dict | None,
+    normalization_status: str,
+    normalization_error: str | None,
+    normalized_at: datetime,
+) -> bool:
+    """공고 정규화 결과를 저장한다.
+
+    _JOBS(인메모리)는 이번 요청의 진행 상태(pending/running)만 추적하고,
+    이 컬럼들은 "이 공고가 정규화됐는지"를 나중에 job_id 없이도 그대로
+    쿼리할 수 있게 공고 행 자체에 남긴다 — AI팀이 예: "normalization_status
+    = 'completed'인 공고만" 조회하는 용도. 실패도 남겨서(성공만 남기는
+    business_plan과 달리) "시도했다가 실패함"과 "아직 시도 안 함(NULL)"을
+    구분할 수 있게 한다. normalized_at은 DB server_default(func.now())
+    대신 호출자가 넘긴 값을 쓴다 — 응답에 그대로 실어 보낼 수 있도록.
+    """
+    result = await session.execute(
+        update(Notice)
+        .where(Notice.id == notice_id)
+        .values(
+            normalized_json=normalized_json,
+            normalization_status=normalization_status,
+            normalization_error=normalization_error,
+            normalized_at=normalized_at,
+        )
+    )
+    return result.rowcount > 0
+
+
+async def get_notices_missing_category(
+    session: AsyncSession, raw_model_cls
+) -> list[tuple[int, str]]:
+    """category_id가 비어있는 공고의 (notice_id, 원본 raw JSON) 목록을 반환한다.
+
+    raw_model_cls는 BizinfoRaw 또는 KstartupRaw — 출처별로 원본 카테고리
+    필드명이 달라 호출자가 어느 raw 테이블을 볼지 골라서 넘긴다. raw
+    테이블과 조인하므로 결과는 자연히 해당 출처의 공고로 한정된다.
+    """
+    result = await session.execute(
+        select(Notice.id, raw_model_cls.field)
+        .join(raw_model_cls, raw_model_cls.notice_id == Notice.id)
+        .where(Notice.category_id.is_(None))
+    )
+    return list(result.all())
+
+
+async def get_bizinfo_notices_with_raw(session: AsyncSession) -> list[tuple[int, str]]:
+    """기업마당 공고 전체의 (notice_id, 원본 raw JSON) 목록을 반환한다.
+
+    _parse_bizinfo_regions 로직이 바뀌었을 때(예: 전국 판정 추가) 이미
+    저장된 공고를 원본 hashtags 기준으로 재계산해 백필하는 용도.
+    """
+    result = await session.execute(
+        select(Notice.id, BizinfoRaw.field).join(
+            BizinfoRaw, BizinfoRaw.notice_id == Notice.id
+        )
+    )
+    return list(result.all())
+
+
+async def get_kstartup_notices_with_raw(session: AsyncSession) -> list[tuple[int, str]]:
+    """K-Startup 공고 전체의 (notice_id, 원본 raw JSON) 목록을 반환한다.
+
+    get_bizinfo_notices_with_raw와 같은 이유(REGION_CODE_BY_NAME 정정 시
+    저장된 공고를 원본 supt_regin 기준으로 재계산해 백필하는 용도).
+    """
+    result = await session.execute(
+        select(Notice.id, KstartupRaw.field).join(
+            KstartupRaw, KstartupRaw.notice_id == Notice.id
+        )
+    )
+    return list(result.all())
+
+
+async def list_notices(
+    session: AsyncSession,
+    *,
+    source_name: str | None = None,
+    category_name: str | None = None,
+    region_code: str | None = None,
+    exclude_closed: bool = False,
+    limit: int = 20,
+    offset: int = 0,
+) -> tuple[list[tuple[Notice, str, str | None]], int]:
+    """조건에 맞는 공고 목록((Notice, 출처명, 카테고리명) 튜플)과 전체 건수를 반환한다.
+
+    notice_region은 공고당 여러 행이라, LIMIT 걸기 전에 JOIN하면 지역이
+    여러 개인 공고가 페이지네이션 개수를 왜곡한다(행이 늘어나 LIMIT 안에
+    다른 공고가 덜 들어옴). region_code 필터는 유니크 제약(notice_id,
+    region_code) 덕에 공고당 최대 1행만 매치되니 걸어도 안전하지만,
+    지역 목록 자체는 여기서 같이 안 뽑고 호출자가 notice_id로 따로
+    조회해야 한다.
+    """
+    query = (
+        select(Notice, NoticeSource.source_name, KgCategory.name)
+        .join(NoticeSource, NoticeSource.id == Notice.source_id)
+        .outerjoin(KgCategory, KgCategory.id == Notice.category_id)
+    )
+    if region_code:
+        query = query.join(
+            NoticeRegion,
+            (NoticeRegion.notice_id == Notice.id)
+            & (NoticeRegion.region_code == region_code),
+        )
+    if source_name:
+        query = query.where(NoticeSource.source_name == source_name)
+    if category_name:
+        query = query.where(KgCategory.name == category_name)
+    if exclude_closed:
+        query = query.where(Notice.status.is_distinct_from("마감"))
+
+    total = await session.scalar(
+        select(func.count()).select_from(query.with_only_columns(Notice.id).subquery())
+    )
+
+    result = await session.execute(
+        query.order_by(Notice.id.desc()).limit(limit).offset(offset)
+    )
+    return list(result.all()), total or 0
+
+
+async def get_notice_regions_by_ids(
+    session: AsyncSession, notice_ids: list[int]
+) -> dict[int, list[str]]:
+    """notice_id -> 지역명 목록 딕셔너리. list_notices 결과에 붙여쓰는 용도."""
+    if not notice_ids:
+        return {}
+    result = await session.execute(
+        select(NoticeRegion.notice_id, NoticeRegion.region_name).where(
+            NoticeRegion.notice_id.in_(notice_ids)
+        )
+    )
+    regions: dict[int, list[str]] = {}
+    for notice_id, region_name in result.all():
+        regions.setdefault(notice_id, []).append(region_name)
+    return regions
+
+
+async def get_notice_detail(
+    session: AsyncSession, notice_id: int
+) -> tuple[Notice, str, str | None] | None:
+    """공고 하나를 (Notice, 출처명, 카테고리명) 튜플로 반환한다. 없으면 None."""
+    result = await session.execute(
+        select(Notice, NoticeSource.source_name, KgCategory.name)
+        .join(NoticeSource, NoticeSource.id == Notice.source_id)
+        .outerjoin(KgCategory, KgCategory.id == Notice.category_id)
+        .where(Notice.id == notice_id)
+    )
+    return result.first()
+
+
+async def get_notice_target_types(session: AsyncSession, notice_id: int) -> list[str]:
+    result = await session.execute(
+        select(NoticeTargetType.target_type).where(
+            NoticeTargetType.notice_id == notice_id
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def get_notice_target_types_by_ids(
+    session: AsyncSession, notice_ids: list[int]
+) -> dict[int, list[str]]:
+    """여러 공고의 신청대상(target_type)을 notice_id -> 목록으로 묶어 반환한다.
+
+    신청주체 필터(services/applicant_type_filter) 등 후보 공고를 한 번에
+    거르는 쪽이 notice_id마다 get_notice_target_types를 따로 부르면 후보
+    건수만큼 쿼리가 나간다(N+1). get_notice_regions_by_ids와 같은 패턴으로
+    한 번에 가져온다."""
+    if not notice_ids:
+        return {}
+    result = await session.execute(
+        select(NoticeTargetType.notice_id, NoticeTargetType.target_type).where(
+            NoticeTargetType.notice_id.in_(notice_ids)
+        )
+    )
+    target_types_by_notice: dict[int, list[str]] = {}
+    for notice_id, target_type in result.all():
+        target_types_by_notice.setdefault(notice_id, []).append(target_type)
+    return target_types_by_notice
+
+
+async def get_notice_regions(session: AsyncSession, notice_id: int) -> list[str]:
+    result = await session.execute(
+        select(NoticeRegion.region_name).where(NoticeRegion.notice_id == notice_id)
+    )
+    return list(result.scalars().all())
+
+
+async def get_notice_region_codes(session: AsyncSession, notice_id: int) -> set[str]:
+    """공고에 저장된 region_code 집합을 반환한다.
+
+    get_notice_regions(이름 목록)와 별개로, 지역 코드 정정 백필에서
+    "재계산한 결과가 기존과 실제로 다른지"를 정확히 비교하는 용도.
+    """
+    result = await session.execute(
+        select(NoticeRegion.region_code).where(NoticeRegion.notice_id == notice_id)
+    )
+    return set(result.scalars().all())
+
+
+async def get_notice_attachments(
+    session: AsyncSession, notice_id: int
+) -> list[NoticeAttachment]:
+    result = await session.execute(
+        select(NoticeAttachment).where(NoticeAttachment.notice_id == notice_id)
+    )
+    return list(result.scalars().all())
+
+
+async def get_notice_attachments_by_ids(
+    session: AsyncSession, notice_ids: list[int]
+) -> dict[int, list[NoticeAttachment]]:
+    """여러 공고의 첨부파일(parsed_text 포함)을 notice_id -> 목록으로 묶어 반환한다.
+
+    OCR 배치 트리거(POST /internal/notices/ocr/batch)로 여러 공고를 한 번에
+    돌린 뒤, 그 결과(parsed_text)를 가져다 쓰는 쪽(예: 2차 필터링 임베딩
+    적재)이 notice_id마다 get_notice_attachments를 따로 호출하면 배치
+    건수만큼 쿼리가 나간다(N+1). get_notice_regions_by_ids와 같은 패턴으로
+    한 번에 가져온다. parsed_text가 필요 없으면
+    get_notice_attachments_for_display를 쓴다."""
+    if not notice_ids:
+        return {}
+    result = await session.execute(
+        select(NoticeAttachment).where(NoticeAttachment.notice_id.in_(notice_ids))
+    )
+    attachments_by_notice: dict[int, list[NoticeAttachment]] = {}
+    for attachment in result.scalars().all():
+        attachments_by_notice.setdefault(attachment.notice_id, []).append(attachment)
+    return attachments_by_notice
+
+
+async def get_notice_attachments_for_display(
+    session: AsyncSession, notice_id: int
+) -> list[NoticeAttachment]:
+    """공고 상세 조회처럼 parsed_text(OCR 원문)가 필요 없는 화면용으로
+    첨부파일 목록을 가져온다.
+
+    parsed_text는 첨부파일당 최대 수백 KB까지 나가는데(실측), 상세 조회
+    API 응답(NoticeAttachmentInfo)에는 파일명/URL/파일유형만 나가고
+    parsed_text는 아예 쓰이지 않는다. get_notice_attachments를 그대로
+    쓰면 응답에 쓰지도 않을 이 큰 컬럼을 매번 DB에서 읽어오게 되므로,
+    load_only로 실제 쓰는 컬럼만 가져온다. OCR 작업(notice_ocr.py)처럼
+    parsed_text 자체가 필요한 곳은 여전히 get_notice_attachments를 써야
+    한다."""
+    result = await session.execute(
+        select(NoticeAttachment)
+        .where(NoticeAttachment.notice_id == notice_id)
+        .options(
+            load_only(
+                NoticeAttachment.id,
+                NoticeAttachment.notice_id,
+                NoticeAttachment.file_name,
+                NoticeAttachment.file_url,
+                NoticeAttachment.file_type,
+            )
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def get_notice_attachment(
+    session: AsyncSession, notice_id: int, attachment_id: int
+) -> NoticeAttachment | None:
+    """공고 하나에 속한 첨부파일 하나를 parsed_text(OCR 원문)까지 포함해 가져온다.
+
+    notice_id도 같이 확인해서, 다른 공고의 attachment_id를 넣어 조회하는
+    것을 막는다(경로상 notice_id/attachment_id가 각각 별개 자원처럼
+    보이지만 실제로는 attachment가 notice에 종속된 자원이라서).
+    """
+    result = await session.execute(
+        select(NoticeAttachment).where(
+            NoticeAttachment.id == attachment_id,
+            NoticeAttachment.notice_id == notice_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_notice_ids_pending_normalization(
+    session: AsyncSession, limit: int
+) -> list[int]:
+    """completed가 아닌 공고 id를 새 공고(NULL) 우선으로 가져온다 (스케줄러 배치용).
+
+    실패/스킵도 재시도 대상에 포함한다 — 원문이 나중에 채워지면 성공할 수 있어서다.
+    """
+    result = await session.execute(
+        select(Notice.id)
+        .where(
+            or_(
+                Notice.normalization_status.is_(None),
+                Notice.normalization_status.in_(("failed", "skipped")),
+            )
+        )
+        .order_by(
+            Notice.normalization_status.is_(None).desc(),
+            Notice.application_end_date.asc().nulls_last(),
+            Notice.id.desc(),
+        )
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def get_notice_ids_completed_normalization(
+    session: AsyncSession, limit: int
+) -> list[int]:
+    """정규화 완료(completed)된 공고 id를 마감 임박순으로 가져온다 (임베딩
+    백로그 배치용 — 매칭 시점에 온디맨드로 임베딩하는 대신 미리 벡터 DB에
+    적재해두면, 실제 매칭 요청에서 해당 공고를 후보로 만날 때 임베딩을
+    새로 만들 필요가 없다).
+
+    is_actionable=False(마감·중단된 공고)는 어차피 매칭 후보가 될 일이 없어
+    제외한다 — 임베딩 비용만 쓰고 안 쓰일 공고를 걸러내는 목적.
+    """
+    result = await session.execute(
+        select(Notice.id)
+        .where(
+            Notice.normalization_status == "completed",
+            Notice.is_actionable.is_not(False),
+        )
+        .order_by(Notice.application_end_date.asc().nulls_last(), Notice.id.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def get_notice_ids_pending_attachment_ocr(
+    session: AsyncSession, limit: int, exclude_source_names: set[str]
+) -> list[int]:
+    """OCR 대상 포맷 첨부파일은 있는데 parsed_text가 없는 공고 id를 가져온다 (사전 OCR 배치용).
+
+    exclude_source_names로 특정 출처(예: 과학기술정보통신부)를 대상에서 뺄 수 있다.
+    """
+    result = await session.execute(
+        select(Notice.id)
+        .join(NoticeSource, NoticeSource.id == Notice.source_id)
+        .join(NoticeAttachment, NoticeAttachment.notice_id == Notice.id)
+        .where(
+            NoticeAttachment.file_type.in_(("PDF", "HWP", "HWPX")),
+            NoticeSource.source_name.notin_(exclude_source_names),
+        )
+        .group_by(Notice.id)
+        .having(func.count(NoticeAttachment.parsed_text) == 0)
+        .order_by(Notice.application_end_date.asc().nulls_last(), Notice.id.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+async def replace_notice_chunks(
+    session: AsyncSession, notice_id: int, chunks: list[tuple[str, str]]
+) -> list[NoticeChunk]:
+    """공고의 2차 필터링용 청크(chunk_type, chunk_text)를 최신 값으로 교체한다.
+
+    replace_notice_region과 같은 이유로 delete 후 insert한다 — 재임베딩 시(OCR
+    텍스트가 재수집으로 바뀐 경우 등) 예전 청크가 남아있으면 Chroma에 저장된
+    벡터와 Postgres 청크 행의 세대가 서로 어긋난다. ON CONFLICT가 아니라 ORM
+    insert를 쓰는 이유는 flush 후 각 행의 id(Chroma 포인트 id로 그대로 쓸 값)를
+    호출자에게 돌려주기 위함이다.
+    """
+    await session.execute(delete(NoticeChunk).where(NoticeChunk.notice_id == notice_id))
+    if not chunks:
+        return []
+    rows = [
+        NoticeChunk(notice_id=notice_id, chunk_type=chunk_type, chunk_text=chunk_text)
+        for chunk_type, chunk_text in chunks
+    ]
+    session.add_all(rows)
+    await session.flush()
+    return rows
+
+
+async def get_notice_chunks_by_notice_id(
+    session: AsyncSession, notice_id: int
+) -> list[NoticeChunk]:
+    result = await session.execute(
+        select(NoticeChunk).where(NoticeChunk.notice_id == notice_id)
+    )
+    return list(result.scalars().all())
+
+
+async def get_collection_stats(session: AsyncSession) -> dict:
+    """수집 현황을 출처/카테고리/상태별 건수 + OCR 대기 건수로 집계한다.
+
+    전부 이미 저장된 데이터에 대한 단순 집계라 외부 API를 호출하지 않는다.
+    """
+    by_source_rows = await session.execute(
+        select(NoticeSource.source_name, func.count(Notice.id))
+        .join(Notice, Notice.source_id == NoticeSource.id)
+        .group_by(NoticeSource.source_name)
+    )
+    by_category_rows = await session.execute(
+        select(KgCategory.name, func.count(Notice.id))
+        .outerjoin(Notice, Notice.category_id == KgCategory.id)
+        .group_by(KgCategory.name)
+    )
+    by_status_rows = await session.execute(
+        select(Notice.status, func.count(Notice.id)).group_by(Notice.status)
+    )
+    # OCR 대상 포맷(PDF/HWP/HWPX) 첨부파일이 있는데 그중 parsed_text가
+    # 하나도 채워지지 않은 공고 수 — notice_ocr.py의 _OCR_TARGET_FILE_TYPES와
+    # 동일한 포맷 기준.
+    ocr_pending_subquery = (
+        select(NoticeAttachment.notice_id)
+        .where(NoticeAttachment.file_type.in_(("PDF", "HWP", "HWPX")))
+        .group_by(NoticeAttachment.notice_id)
+        .having(func.count(NoticeAttachment.parsed_text) == 0)
+    )
+    ocr_pending_count = await session.scalar(
+        select(func.count()).select_from(ocr_pending_subquery.subquery())
+    )
+    # normalization_status는 NULL(아직 시도 안 함)/completed/failed 셋 중
+    # 하나다 — NULL을 "not_started"로 묶어서 세 값 다 한 번에 보여준다.
+    # SELECT와 GROUP BY에 coalesce(...)를 각각 새로 쓰면 리터럴("not_started")이
+    # 매번 별도 바인드 파라미터로 나가 Postgres가 같은 표현식으로 인식하지
+    # 못해 GroupingError가 난다(실제로 겪음) — label을 한 번만 만들어 양쪽에서
+    # 같은 표현식을 참조하게 한다.
+    normalization_status_label = func.coalesce(
+        Notice.normalization_status, "not_started"
+    ).label("normalization_status")
+    by_normalization_status_rows = await session.execute(
+        select(normalization_status_label, func.count(Notice.id)).group_by(
+            normalization_status_label
+        )
+    )
+
+    return {
+        "by_source": {name: count for name, count in by_source_rows.all()},
+        "by_category": {
+            (name or "미분류"): count for name, count in by_category_rows.all()
+        },
+        "by_status": {status: count for status, count in by_status_rows.all()},
+        "ocr_pending_count": ocr_pending_count or 0,
+        "by_normalization_status": {
+            status: count for status, count in by_normalization_status_rows.all()
+        },
+    }
